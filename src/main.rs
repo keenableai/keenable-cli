@@ -158,6 +158,14 @@ enum Commands {
         api_key: Option<String>,
     },
 
+    /// Stdio-to-HTTP bridge for MCP (used by Claude Desktop)
+    #[command(name = "mcp-stdio", hide = true)]
+    McpStdio {
+        /// API key (overrides stored key)
+        #[arg(long = "api-key")]
+        api_key: Option<String>,
+    },
+
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
@@ -249,6 +257,9 @@ async fn main() {
             api_key,
         } => {
             commands::search::feedback(&query, &scores, text.as_deref(), pretty, api_key.as_deref()).await;
+        }
+        Commands::McpStdio { api_key } => {
+            commands::mcp_stdio::run(api_key.as_deref()).await;
         }
         Commands::Daemon => {
             daemon::run_daemon().await;

@@ -40,7 +40,7 @@ fn is_homebrew_install() -> bool {
 
 pub fn install_hint() -> String {
     if is_homebrew_install() {
-        "brew upgrade keenable-cli".to_string()
+        "brew update && brew upgrade keenable-cli".to_string()
     } else if cfg!(windows) {
         "powershell -c \"irm https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.ps1 | iex\"".to_string()
     } else {

@@ -74,8 +74,12 @@ fn configure_ide(ide: &IDEDef, api_key: &str) {
         Some(ref entry) => {
             let existing_key = extract_entry_api_key(entry);
             let desired_key = Some(api_key.to_string());
+            let uses_npx = entry["command"].as_str() == Some("npx");
             if existing_key != desired_key && existing_key.is_some() {
                 ui::sub_warning("Updating API key in Keenable MCP entry");
+            }
+            if uses_npx {
+                ui::sub_warning("Replacing npx mcp-remote with built-in stdio bridge (no Node.js needed)");
             }
             config[ide.servers_key]["keenable"] = desired;
             config_changed = true;
@@ -324,6 +328,7 @@ fn show_status(detected: &[&IDEDef], not_detected: &[&IDEDef], api_key: &str) {
         let status = get_ide_status(ide, api_key);
 
         let has_issues = status.wrong_api_key
+            || status.uses_legacy_npx
             || !status.duplicate_entries.is_empty()
             || !status.conflicting_mcps.is_empty()
             || (ide.has_standard_tools && !status.standard_tools_disabled);
@@ -365,6 +370,9 @@ fn show_status(detected: &[&IDEDef], not_detected: &[&IDEDef], api_key: &str) {
 }
 
 fn show_status_issues(_ide: &IDEDef, status: &IdeStatus) {
+    if status.uses_legacy_npx {
+        ui::sub_warning("Uses npx mcp-remote (requires Node.js). Re-run setup to switch to built-in bridge");
+    }
     if status.wrong_api_key {
         ui::sub_warning("Different API key configured");
     }
