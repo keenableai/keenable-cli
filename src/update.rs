@@ -30,11 +30,21 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
-pub fn install_hint() -> &'static str {
-    if cfg!(windows) {
-        "powershell -c \"irm https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.ps1 | iex\""
+fn is_homebrew_install() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let path = exe.to_string_lossy();
+    path.contains("/Cellar/") || path.contains("/homebrew/") || path.contains("/linuxbrew/")
+}
+
+pub fn install_hint() -> String {
+    if is_homebrew_install() {
+        "brew upgrade keenable-cli".to_string()
+    } else if cfg!(windows) {
+        "powershell -c \"irm https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.ps1 | iex\"".to_string()
     } else {
-        "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.sh | sh"
+        "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.sh | sh".to_string()
     }
 }
 
