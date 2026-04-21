@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Keenable</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600&family=EB+Garamond:wght@400;600&display=swap" />
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }
+        html { overflow-x: hidden; }
+        body {
+            min-height: 100vh;
+            font: 400 16px/28px "EB Garamond", serif;
+            color: #282a3a;
+            background: #f8f7f4;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            display: flex;
+            align-items: center;
+            padding: 1.5rem 3rem;
+            background: #f8f7f4;
+            z-index: 100;
+        }
+        .logo { height: 18px; }
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 0 2rem;
+            text-align: center;
+        }
+        .icon {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 2rem;
+        }
+        .icon circle {
+            fill: none;
+            stroke: #e54d2e;
+            stroke-width: 2;
+        }
+        .icon line {
+            stroke: #e54d2e;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+        }
+        h1 {
+            font: 600 2.5rem/1.2 "Crimson Pro", serif;
+            color: #282a3a;
+            margin-bottom: 0.75rem;
+        }
+        p {
+            font: 400 1.1rem/1.6 "EB Garamond", serif;
+            color: #62636c;
+        }
+        @media (max-width: 768px) {
+            .header { padding: 1rem 1.5rem; }
+            h1 { font-size: 2rem; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <svg class="logo" viewBox="112 74 455 83" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="#282a3a" d="M539.13 155q-7.57 0-13.82-3.91a29 29 0 0 1-9.93-10.47 29.5 29.5 0 0 1-3.68-14.6q0-6.06 2.14-11.3a30 30 0 0 1 5.87-9.25 28 28 0 0 1 8.78-6.28 25.5 25.5 0 0 1 10.64-2.26q6.2 0 11.36 2.54a26 26 0 0 1 8.89 6.94 29 29 0 0 1 5.54 10.36 33 33 0 0 1 1.37 12.61h-44.77a20 20 0 0 0 3.07 8.38 18 18 0 0 0 6.15 5.78 17.1 17.1 0 0 0 17.34-.33 19.4 19.4 0 0 0 6.47-7.05l9.38 2.2a29 29 0 0 1-9.93 12.01 25.4 25.4 0 0 1-14.87 4.63m-17.88-32.9h35.77q-.44-4.62-2.97-8.42a19.5 19.5 0 0 0-6.41-6.17 16.4 16.4 0 0 0-8.5-2.31q-4.62 0-8.46 2.25a19 19 0 0 0-6.36 6.12 20 20 0 0 0-3.07 8.54m-30.48 31.54V76h9.45v77.65zm-39.74-56.53q8.03 0 14.55 3.9 6.6 3.9 10.49 10.49 3.9 6.53 3.9 14.55 0 5.99-2.26 11.26a29.4 29.4 0 0 1-15.48 15.43 28 28 0 0 1-11.2 2.25q-6.37 0-11.1-2.97a23 23 0 0 1-7.46-7.85v9.4h-9.22V76h9.22v31.94a22.4 22.4 0 0 1 7.47-7.8 20 20 0 0 1 11.1-3.02m-.1 48.88q5.42 0 9.87-2.7 4.45-2.69 7.09-7.19a19.7 19.7 0 0 0 2.63-10.05q0-5.6-2.69-10.1a20 20 0 0 0-7.14-7.2 18.5 18.5 0 0 0-9.77-2.69q-5.39 0-9.39 2.7a18 18 0 0 0-6.15 7.24 23 23 0 0 0-2.14 10.05q0 5.55 2.14 10.1 2.2 4.5 6.2 7.2a16.6 16.6 0 0 0 9.34 2.63m-50.42-47.52h9.23v55.1h-9.23l-.38-9.31a21 21 0 0 1-7.15 7.77q-4.5 2.97-10.77 2.97-6.04 0-11.32-2.26a31 31 0 0 1-9.35-6.34 30 30 0 0 1-6.26-9.36 29 29 0 0 1-2.25-11.4 28.4 28.4 0 0 1 8.3-20.28 28.6 28.6 0 0 1 20.22-8.43q6.49 0 11.38 3.09a24 24 0 0 1 7.91 7.88zm-18.47 47.55q5.44 0 9.4-2.65a17.5 17.5 0 0 0 6.16-7.27q2.2-4.56 2.2-10.08 0-5.61-2.2-10.14a17.5 17.5 0 0 0-6.21-7.21 16 16 0 0 0-9.35-2.7q-5.43 0-9.89 2.7a20 20 0 0 0-9.67 17.35q0 5.56 2.7 10.14a21 21 0 0 0 7.14 7.22 18.7 18.7 0 0 0 9.72 2.64m-36.44-26.69v34.32h-9.24v-32.28q0-4.2-2.04-7.61a15 15 0 0 0-5.44-5.4 14.5 14.5 0 0 0-7.59-2.05q-4.12 0-7.59 2.04a15 15 0 0 0-5.44 5.4 14.6 14.6 0 0 0-2.04 7.62v32.28h-9.24V98.48h9.24v6.9a21 21 0 0 1 7.37-6.13 21 21 0 0 1 9.68-2.32q6.16 0 11.22 3.04a22 22 0 0 1 8.08 8.05 21.7 21.7 0 0 1 3.03 11.31m-195.88 34.32-25.58-29.58 25.47-25.4h12.34l-28.88 28.04.22-6.05 29.33 32.99zm-35.72 0V76h10.25v77.65z"/>
+            <circle cx="205.83" cy="123.27" r="8.1" fill="#282a3a"/>
+            <path fill="#005cff" d="M196 97.1q7.57 0 13.77 3.9a28.5 28.5 0 0 1 9.93 10.47 29 29 0 0 1 3.73 14.59 31 31 0 0 1-.45 5.3h-9.43q.66-2.54.67-5.3 0-5.38-2.47-9.88-2.42-4.5-6.53-7.18a16.5 16.5 0 0 0-9.21-2.69q-5.16 0-9.27 2.74a19.3 19.3 0 0 0-6.53 7.19q-2.4 4.5-2.41 9.82 0 5.48 2.47 9.98a19.3 19.3 0 0 0 6.63 7.07 17 17 0 0 0 9.1 2.58q5.16 0 9.28-2.69a19 19 0 0 0 4.6-4.22l6.16 6.94-.67.74a27 27 0 0 1-8.72 6.2A25 25 0 0 1 196 154.9q-7.58 0-13.82-3.9a29 29 0 0 1-9.93-10.42 29.3 29.3 0 0 1-3.68-14.53q0-6.04 2.14-11.25a29 29 0 0 1 5.87-9.21 28 28 0 0 1 8.78-6.25A26 26 0 0 1 196 97.1"/>
+            <circle cx="266.71" cy="123.27" r="8.1" fill="#282a3a"/>
+            <path fill="#005cff" d="M256.88 97.1q7.58 0 13.77 3.9a28.5 28.5 0 0 1 9.93 10.47 29 29 0 0 1 3.73 14.59 31 31 0 0 1-.45 5.3h-9.43q.66-2.54.66-5.3 0-5.38-2.46-9.88-2.42-4.5-6.53-7.18a16.5 16.5 0 0 0-9.22-2.69q-5.15 0-9.26 2.74a19.3 19.3 0 0 0-6.53 7.19q-2.41 4.5-2.41 9.82 0 5.48 2.46 9.98a19.3 19.3 0 0 0 6.64 7.07 17 17 0 0 0 9.1 2.58q5.16 0 9.27-2.69a19 19 0 0 0 4.6-4.22l6.17 6.94-.68.74a27 27 0 0 1-8.72 6.2 25 25 0 0 1-10.64 2.25q-7.56 0-13.82-3.9a29 29 0 0 1-9.92-10.42 29.3 29.3 0 0 1-3.68-14.53q0-6.04 2.14-11.25a29 29 0 0 1 5.87-9.21 28 28 0 0 1 8.77-6.25 26 26 0 0 1 10.64-2.25"/>
+        </svg>
+    </header>
+    <main class="content">
+        <svg class="icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="32" cy="32" r="30" />
+            <line x1="24" y1="24" x2="40" y2="40" />
+            <line x1="40" y1="24" x2="24" y2="40" />
+        </svg>
+        <h1>Something went wrong</h1>
+        <p>Authentication failed. Please try again with <code style="font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.95rem; background: #eff0f3; padding: 0.15rem 0.4rem; border-radius: 4px;">keenable login</code></p>
+    </main>
+</body>
+</html>
