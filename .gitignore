@@ -1,5 +1,8 @@
 # Rust
 target/
 
+# Local scripts
+scripts/
+
 # Claude Code
 .claude/
