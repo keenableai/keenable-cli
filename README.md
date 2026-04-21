@@ -7,7 +7,7 @@ CLI for [Keenable](https://keenable.ai) — authenticate, manage API keys, confi
 **Homebrew (macOS + Linux):**
 
 ```bash
-brew install keenableai/tap/keenable
+brew install keenableai/tap/keenable-cli
 ```
 
 **Shell (macOS + Linux):**
@@ -88,7 +88,7 @@ keenable keys-create --label "my-key"   # Create a new API key
 The CLI checks for updates automatically (once per day). To update manually:
 
 ```bash
-brew upgrade keenable                   # Homebrew
+brew upgrade keenable-cli               # Homebrew
 # or re-run the installer script
 ```
 
