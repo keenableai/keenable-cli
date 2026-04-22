@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
     name = "keenable",
     about = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web",
     version,
-    after_help = "Get started:\n  keenable login                  Authenticate with your Keenable account\n  keenable configure-mcp          See which clients are configured\n  keenable configure-mcp --all    Configure Keenable MCP in all detected clients\n  keenable search \"query\"         Search the web (YAML output for agents)\n  keenable search \"query\" -p      Same, but pretty-printed for humans"
+    after_help = "Get started:\n  keenable login                       Authenticate with your Keenable account\n  keenable login --api-key sk_abc123   Save API key directly (no browser)\n  keenable configure-mcp               See which clients are configured\n  keenable configure-mcp --all         Configure Keenable MCP in all detected clients\n  keenable search \"query\"              Search the web (YAML output for agents)\n  keenable search \"query\" -p           Same, but pretty-printed for humans"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -23,20 +23,16 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
-    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nAfter login, run: keenable configure-mcp --all\n\nFor pre-existing API keys (CI, scripts), use keenable configure instead.")]
-    Login,
+    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, skips browser login and saves the key directly.\nUseful for CI, servers, or agent machines.\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                         Interactive browser login\n  keenable login --api-key sk_abc123     Save API key directly (no browser)\n  keenable login --api-key $KEENABLE_API_KEY")]
+    Login {
+        /// API key to save directly (skips browser login)
+        #[arg(long = "api-key")]
+        api_key: Option<String>,
+    },
 
     /// Remove stored credentials and API key
     #[command(after_help = "Clears stored tokens and API key from ~/.keenable/")]
     Logout,
-
-    /// Configure CLI with an API key (for agentic/headless use)
-    #[command(after_help = "Use this on CI, servers, or agent machines where browser login isn't possible.\nSaves the API key locally so search and fetch commands work.\n\nNote: MCP IDE configuration requires keenable login instead.\n\nExamples:\n  keenable configure --api-key sk_abc123\n  keenable configure --api-key $KEENABLE_API_KEY")]
-    Configure {
-        /// API key to save
-        #[arg(long = "api-key")]
-        api_key: String,
-    },
 
     /// Configure Keenable MCP in your AI clients
     #[command(name = "configure-mcp", after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --vscode   Configure specific clients")]
@@ -217,14 +213,11 @@ async fn main() {
     });
 
     match cli.command {
-        Commands::Login => {
-            commands::login::login().await;
+        Commands::Login { api_key } => {
+            commands::login::login(api_key.as_deref()).await;
         }
         Commands::Logout => {
             commands::login::logout();
-        }
-        Commands::Configure { api_key } => {
-            commands::configure::configure(&api_key);
         }
         Commands::ConfigureMcp {
             all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,

@@ -280,7 +280,7 @@ pub async fn configure_mcp(selected_flags: Vec<String>) {
             ui::sub_info(&format!(
                 "Run {} or {}",
                 "keenable login".cyan(),
-                "keenable configure --api-key <KEY>".cyan()
+                "keenable login --api-key <KEY>".cyan()
             ));
             eprintln!();
             std::process::exit(1);

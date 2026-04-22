@@ -113,10 +113,19 @@ async fn poll_for_token(
     }
 }
 
-pub async fn login() {
+pub async fn login(api_key: Option<&str>) {
     use crate::ui;
 
     ui::header("keenable login");
+
+    // Fast path: --api-key provided, skip browser login
+    if let Some(key) = api_key {
+        config::set_api_key(key);
+        ui::success("API key saved");
+        ui::hint("You can now use: keenable search \"query\"");
+        eprintln!();
+        return;
+    }
 
     // Step 1: Request device code
     let label = format!("{}-cli", machine_name());

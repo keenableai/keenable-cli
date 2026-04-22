@@ -20,11 +20,9 @@ src/
   update.rs            # GitHub Releases version check (cached, non-blocking)
   daemon.rs            # Background daemon for connection reuse
   commands/
-    login.rs           # OAuth 2.1 PKCE flow
-    logout (in login.rs)
-    configure.rs       # Save API key for headless/agentic use
+    login.rs           # Device code login + --api-key direct save; also logout
     ide.rs             # Shared IDE definitions and config helpers
-    setup.rs           # Client detection, MCP configuration, interactive setup
+    configure_mcp.rs   # Client detection, MCP configuration, interactive setup
     reset.rs           # Remove Keenable MCP and restore defaults
     keys.rs            # API key create (requires login)
     search.rs          # search, fetch, feedback commands
@@ -35,10 +33,10 @@ assets/
 
 ## Conventions
 
-### Two Setup Modes
+### Login Modes
 
-- **`keenable login`** — for personal machines. OAuth login, auto-provisions API key, enables MCP configuration via `setup`.
-- **`keenable configure --api-key <KEY>`** — for CI, servers, agent machines. Saves API key only. No browser needed. MCP IDE configuration not supported (requires login).
+- **`keenable login`** — interactive device-code flow. Opens browser, provisions API key, enables MCP configuration via `configure-mcp`.
+- **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed.
 
 ### Output Format
 
@@ -52,7 +50,7 @@ keenable search "query" -p                     # Pretty output (for humans)
 keenable search "query" --api-key sk_abc123    # Use specific API key
 ```
 
-Management commands (`login`, `logout`, `configure`, `setup`, `keys-create`) always output human-readable text.
+Management commands (`login`, `logout`, `configure-mcp`, `keys-create`) always output human-readable text.
 
 ### Daemon
 
@@ -63,7 +61,7 @@ Commands auto-start the daemon on first call. It auto-exits after 5 minutes of i
 
 All human-facing output uses the shared `ui` module for consistent styling. The 👀 emoji is the CLI's brand mark.
 
-**Top-level steps** (used by `login`, `logout`, `configure`, etc.):
+**Top-level steps** (used by `login`, `logout`, `configure-mcp`, etc.):
 
 ```
 👀  keenable login                       ← ui::header()
@@ -72,10 +70,10 @@ All human-facing output uses the shared `ui` module for consistent styling. The 
    ✓  Opened browser                      ← ui::step_done()
    ✓  Logged in as user@example.com       ← ui::success()    — green
 
-   Next: keenable setup --all              ← ui::hint()       — dimmed
+   Next: keenable configure-mcp --all       ← ui::hint()       — dimmed
 ```
 
-**Sub-steps** (used by `setup` for per-client configuration):
+**Sub-steps** (used by `configure-mcp` for per-client configuration):
 
 All sub-items are prefixed with `-` and word-wrapped so continuation lines align with the text start (at column 12).
 
@@ -121,20 +119,20 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 
 Every command and subcommand **must** have an `after_help` with:
 - Usage examples showing common invocations
-- Hints about related commands or next steps (e.g., "After login, run: keenable setup --all")
+- Hints about related commands or next steps (e.g., "After login, run: keenable configure-mcp --all")
 - For tool commands, show both default (YAML) and `-p` examples
 
 When adding or modifying a command, always update its help text to stay current.
 
-### Setup Command (`src/commands/setup.rs`)
+### Configure MCP Command (`src/commands/configure_mcp.rs`)
 
-`keenable setup` detects AI clients and shows their configuration status. Client-specific flags trigger configuration.
+`keenable configure-mcp` detects AI clients and shows their configuration status. Client-specific flags trigger configuration.
 
 **Output layout:**
 Both modes share a common structure: a "Keenable CLI" section (API key check) followed by a "Your Clients" section.
 
 ```
-👀  keenable setup
+👀  keenable configure-mcp
 
    Keenable CLI
    ✓  API key is valid              ← ui::success() — green
@@ -148,8 +146,8 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 ```
 
 **Two modes:**
-- **Status mode** (`keenable setup`) — shows "Keenable CLI" API key status + "Your Clients" with per-client status (✓ done / ⚠ issues / ✗ not configured) and sub-items for issues and recommendations.
-- **Configure mode** (`keenable setup --cursor`, `--all`, etc.) — same pre-flight, then configures selected clients with interactive confirmation.
+- **Status mode** (`keenable configure-mcp`) — shows "Keenable CLI" API key status + "Your Clients" with per-client status (✓ done / ⚠ issues / ✗ not configured) and sub-items for issues and recommendations.
+- **Configure mode** (`keenable configure-mcp --cursor`, `--all`, etc.) — same pre-flight, then configures selected clients with interactive confirmation.
 
 **Pre-flight (Keenable CLI section):**
 1. API key exists → `ui::error()` + `ui::sub_info()` with fix hint if missing
@@ -165,7 +163,7 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 **Status mode per-client display:**
 - **✓ green**: fully configured, no issues. May show dimmed `sub_hint` recommendations.
 - **⚠ yellow**: configured but has issues (wrong API key, duplicate entries, conflicting MCPs, standard tools not disabled). Issues shown as `sub_warning` sub-items.
-- **✗ red**: not configured. Shows dimmed hint with setup command.
+- **✗ red**: not configured. Shows dimmed hint with configure-mcp command.
 
 **Client-specific recommendations** (shown as `sub_hint` under configured clients):
 - **Claude Desktop**: "Disable built-in web search manually (+ button near the chat text field)"
@@ -180,11 +178,11 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 **Interactive confirmation:**
 Before modifying configs, shows a prompt with three options: "Proceed", "Proceed and don't ask again", "Cancel". The "don't ask again" preference is stored in `~/.keenable/config.json` as `skip_setup_confirmation: true`.
 
-**Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `Setup` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_client_recommendations()` in `setup.rs`.
+**Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `ConfigureMcp` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_client_recommendations()` in `configure_mcp.rs`.
 
 ### Reset Command (`src/commands/reset.rs`)
 
-`keenable reset` is the inverse of `setup` — removes Keenable MCP entries and restores default settings.
+`keenable reset` is the inverse of `configure-mcp` — removes Keenable MCP entries and restores default settings.
 
 **Two modes:**
 - **Status mode** (`keenable reset`) — shows "Your Clients" section listing clients that have Keenable configured, with per-client reset hints.
@@ -197,7 +195,7 @@ Before modifying configs, shows a prompt with three options: "Proceed", "Proceed
 
 ### Shared IDE Module (`src/commands/ide.rs`)
 
-Contains IDE definitions (`IDEDef`, `all_ides()`), config read/write helpers, and MCP entry utilities shared by both `setup` and `reset`.
+Contains IDE definitions (`IDEDef`, `all_ides()`), config read/write helpers, and MCP entry utilities shared by both `configure-mcp` and `reset`.
 
 ### Adding New Commands
 

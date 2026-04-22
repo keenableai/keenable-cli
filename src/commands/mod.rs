@@ -1,4 +1,3 @@
-pub mod configure;
 pub mod ide;
 pub mod login;
 pub mod mcp_stdio;
