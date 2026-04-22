@@ -234,12 +234,7 @@ fn confirm_setup(ide_names: &[&str]) -> bool {
 
 async fn validate_api_key(api_key: &str) -> bool {
     let client = api_key_client(api_key);
-    match client
-        .get(api_url("/v1/search"))
-        .query(&[("query", "test"), ("count", "1")])
-        .send()
-        .await
-    {
+    match client.get(api_url("/v1/auth/user")).send().await {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
     }
