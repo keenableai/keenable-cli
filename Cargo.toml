@@ -1,6 +1,6 @@
 [package]
 name = "keenable-cli"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web"
 authors = ["grigorevp <grigoryev.pete@gmail.com>"]
