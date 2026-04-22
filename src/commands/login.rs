@@ -14,7 +14,7 @@ use crate::constants::*;
 
 fn generate_pkce() -> (String, String) {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen::<u8>()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen::<u8>()).collect();
     let verifier = URL_SAFE_NO_PAD.encode(&bytes);
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
@@ -207,7 +207,7 @@ pub async fn login() {
     // Step 3: Build auth URL and open browser
     let state: String = {
         let mut rng = rand::thread_rng();
-        let bytes: Vec<u8> = (0..16).map(|_| rng.gen::<u8>()).collect();
+        let bytes: Vec<u8> = (0..16).map(|_| rng.r#gen::<u8>()).collect();
         URL_SAFE_NO_PAD.encode(&bytes)
     };
 
