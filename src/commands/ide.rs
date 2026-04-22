@@ -25,6 +25,9 @@ pub const KEENABLE_URLS: &[&str] = &["api.keenable.ai", "api-test.keenable.ai"];
 /// Claude Code built-in tools that overlap with Keenable.
 pub const CLAUDE_CODE_STANDARD_TOOLS: &[&str] = &["WebSearch", "WebFetch"];
 
+/// OpenCode built-in tools that overlap with Keenable.
+pub const OPENCODE_STANDARD_TOOLS: &[&str] = &["websearch"];
+
 // ── IDE definitions ─────────────────────────────────────────────────
 
 /// How the MCP entry should be serialised in the IDE config file.
@@ -116,6 +119,17 @@ pub fn all_ides() -> Vec<IDEDef> {
             servers_key: "mcp_servers",
             entry_style: McpEntryStyle::Toml,
             has_standard_tools: false,
+        },
+        IDEDef {
+            name: "OpenCode",
+            flag: "opencode",
+            config_path: home.join(".config/opencode/opencode.json"),
+            servers_key: "mcp",
+            entry_style: McpEntryStyle::Http {
+                url_key: "url",
+                transport_type: Some("remote"),
+            },
+            has_standard_tools: true,
         },
     ]
 }
@@ -281,18 +295,27 @@ pub fn get_ide_status(ide: &IDEDef, api_key: &str) -> IdeStatus {
         .map_or(false, |cmd| cmd == "npx");
 
     let standard_tools_disabled = if ide.has_standard_tools {
-        let deny_list = config
-            .pointer("/permissions/deny")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect::<Vec<_>>()
+        if ide.flag == "opencode" {
+            OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
+                config
+                    .pointer(&format!("/permission/{}", tool))
+                    .and_then(|v| v.as_str())
+                    == Some("deny")
             })
-            .unwrap_or_default();
-        CLAUDE_CODE_STANDARD_TOOLS
-            .iter()
-            .all(|tool| deny_list.iter().any(|d| d == *tool))
+        } else {
+            let deny_list = config
+                .pointer("/permissions/deny")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            CLAUDE_CODE_STANDARD_TOOLS
+                .iter()
+                .all(|tool| deny_list.iter().any(|d| d == *tool))
+        }
     } else {
         true
     };

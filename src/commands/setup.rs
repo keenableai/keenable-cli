@@ -95,9 +95,13 @@ fn configure_ide(ide: &IDEDef, api_key: &str) {
         }
     }
 
-    // Step 3: Disable standard tools (Claude Code only)
+    // Step 3: Disable standard tools (Claude Code, OpenCode)
     if ide.has_standard_tools {
-        disable_standard_tools(&mut config, &mut config_changed);
+        if ide.flag == "opencode" {
+            disable_opencode_standard_tools(&mut config, &mut config_changed);
+        } else {
+            disable_standard_tools(&mut config, &mut config_changed);
+        }
     }
 
     if config_changed {
@@ -140,6 +144,44 @@ fn disable_standard_tools(config: &mut serde_json::Value, changed: &mut bool) {
         ui::sub_success(&format!(
             "Disabled standard tools: {}",
             missing_names.join(", ")
+        ));
+    }
+}
+
+fn disable_opencode_standard_tools(config: &mut serde_json::Value, changed: &mut bool) {
+    let already_denied: Vec<&&str> = OPENCODE_STANDARD_TOOLS
+        .iter()
+        .filter(|tool| {
+            config
+                .pointer(&format!("/permission/{}", tool))
+                .and_then(|v| v.as_str())
+                == Some("deny")
+        })
+        .collect();
+
+    if already_denied.len() == OPENCODE_STANDARD_TOOLS.len() {
+        ui::sub_done(&format!(
+            "Standard tools already disabled: {}",
+            OPENCODE_STANDARD_TOOLS.join(", ")
+        ));
+    } else {
+        let mut missing = Vec::new();
+        if config.pointer("/permission").is_none() {
+            config["permission"] = json!({});
+        }
+        for tool in OPENCODE_STANDARD_TOOLS {
+            let current = config
+                .pointer(&format!("/permission/{}", tool))
+                .and_then(|v| v.as_str());
+            if current != Some("deny") {
+                config["permission"][*tool] = json!("deny");
+                missing.push(*tool);
+            }
+        }
+        *changed = true;
+        ui::sub_success(&format!(
+            "Disabled standard tools: {}",
+            missing.join(", ")
         ));
     }
 }
@@ -389,6 +431,16 @@ fn show_status_issues(_ide: &IDEDef, status: &IdeStatus) {
         ));
     }
     if _ide.has_standard_tools && !status.standard_tools_disabled {
-        ui::sub_warning("Standard tools (WebSearch, WebFetch) not disabled");
+        if _ide.flag == "opencode" {
+            ui::sub_warning(&format!(
+                "Standard tools ({}) not disabled",
+                OPENCODE_STANDARD_TOOLS.join(", ")
+            ));
+        } else {
+            ui::sub_warning(&format!(
+                "Standard tools ({}) not disabled",
+                CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+            ));
+        }
     }
 }

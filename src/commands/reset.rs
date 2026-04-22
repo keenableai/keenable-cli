@@ -54,9 +54,13 @@ fn reset_ide(ide: &IDEDef) {
         ));
     }
 
-    // Step 3: Re-enable standard tools (Claude Code only)
+    // Step 3: Re-enable standard tools (Claude Code, OpenCode)
     if ide.has_standard_tools {
-        restore_standard_tools(&mut config, &mut config_changed);
+        if ide.flag == "opencode" {
+            restore_opencode_standard_tools(&mut config, &mut config_changed);
+        } else {
+            restore_standard_tools(&mut config, &mut config_changed);
+        }
     }
 
     // Step 4: Clean up Codex Apps cached tools (Codex only)
@@ -172,6 +176,35 @@ fn restore_standard_tools(config: &mut serde_json::Value, changed: &mut bool) {
         ui::sub_success(&format!(
             "Re-enabled standard tools: {}",
             CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+        ));
+    } else {
+        ui::sub_done("Standard tools were not disabled");
+    }
+}
+
+fn restore_opencode_standard_tools(config: &mut serde_json::Value, changed: &mut bool) {
+    let had_tools = OPENCODE_STANDARD_TOOLS.iter().any(|tool| {
+        config
+            .pointer(&format!("/permission/{}", tool))
+            .and_then(|v| v.as_str())
+            == Some("deny")
+    });
+
+    if had_tools {
+        for tool in OPENCODE_STANDARD_TOOLS {
+            if let Some(perms) = config.get_mut("permission").and_then(|v| v.as_object_mut()) {
+                perms.remove(*tool);
+                if perms.is_empty() {
+                    if let Some(obj) = config.as_object_mut() {
+                        obj.remove("permission");
+                    }
+                }
+            }
+        }
+        *changed = true;
+        ui::sub_success(&format!(
+            "Re-enabled standard tools: {}",
+            OPENCODE_STANDARD_TOOLS.join(", ")
         ));
     } else {
         ui::sub_done("Standard tools were not disabled");

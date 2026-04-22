@@ -39,7 +39,7 @@ enum Commands {
     },
 
     /// Configure Keenable MCP in your AI clients
-    #[command(after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex\n\nExamples:\n  keenable setup                  Show status of all detected clients\n  keenable setup --cursor         Configure Cursor only\n  keenable setup --all            Configure all detected clients\n  keenable setup --claude-code --vscode   Configure specific clients")]
+    #[command(after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable setup                  Show status of all detected clients\n  keenable setup --cursor         Configure Cursor only\n  keenable setup --all            Configure all detected clients\n  keenable setup --claude-code --vscode   Configure specific clients")]
     Setup {
         /// Configure all detected clients
         #[arg(long)]
@@ -68,10 +68,14 @@ enum Commands {
         /// Configure Codex
         #[arg(long)]
         codex: bool,
+
+        /// Configure OpenCode
+        #[arg(long)]
+        opencode: bool,
     },
 
     /// Remove Keenable MCP from your AI clients and restore defaults
-    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients")]
+    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients")]
     Reset {
         /// Reset all configured clients
         #[arg(long)]
@@ -100,6 +104,10 @@ enum Commands {
         /// Reset Codex
         #[arg(long)]
         codex: bool,
+
+        /// Reset OpenCode
+        #[arg(long)]
+        opencode: bool,
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
@@ -195,6 +203,7 @@ fn collect_client_flags(
     vscode: bool,
     windsurf: bool,
     codex: bool,
+    opencode: bool,
 ) -> Vec<String> {
     let pairs: &[(bool, &str)] = &[
         (all, "all"),
@@ -204,6 +213,7 @@ fn collect_client_flags(
         (vscode, "vscode"),
         (windsurf, "windsurf"),
         (codex, "codex"),
+        (opencode, "opencode"),
     ];
     pairs
         .iter()
@@ -232,15 +242,15 @@ async fn main() {
             commands::configure::configure(&api_key);
         }
         Commands::Setup {
-            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex,
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex);
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
             commands::setup::setup(flags).await;
         }
         Commands::Reset {
-            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex,
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex);
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
             commands::reset::reset(flags);
         }
         Commands::Search { query, count, pretty, api_key } => {
