@@ -94,17 +94,6 @@ pub fn all_ides() -> Vec<IDEDef> {
             has_standard_tools: false,
         },
         IDEDef {
-            name: "VS Code",
-            flag: "vscode",
-            config_path: home.join(".vscode/mcp.json"),
-            servers_key: "servers",
-            entry_style: McpEntryStyle::Http {
-                url_key: "url",
-                transport_type: Some("http"),
-            },
-            has_standard_tools: false,
-        },
-        IDEDef {
             name: "Windsurf",
             flag: "windsurf",
             config_path: home.join(".codeium/windsurf/mcp_config.json"),
