@@ -70,6 +70,78 @@ enum Commands {
         opencode: bool,
     },
 
+    /// Configure Keenable WebQL MCP in your AI clients
+    #[command(name = "configure-webql", after_help = "Without flags, shows which clients are detected and configured for WebQL.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-webql                  Show status of all detected clients\n  keenable configure-webql --cursor         Configure Cursor only\n  keenable configure-webql --all            Configure all detected clients")]
+    ConfigureWebql {
+        /// Configure all detected clients
+        #[arg(long)]
+        all: bool,
+
+        /// Configure Claude Code
+        #[arg(long)]
+        claude_code: bool,
+
+        /// Configure Claude Desktop
+        #[arg(long)]
+        claude_desktop: bool,
+
+        /// Configure Cursor
+        #[arg(long)]
+        cursor: bool,
+
+        /// Configure VS Code
+        #[arg(long)]
+        vscode: bool,
+
+        /// Configure Windsurf
+        #[arg(long)]
+        windsurf: bool,
+
+        /// Configure Codex
+        #[arg(long)]
+        codex: bool,
+
+        /// Configure OpenCode
+        #[arg(long)]
+        opencode: bool,
+    },
+
+    /// Remove Keenable WebQL MCP from your AI clients
+    #[command(name = "reset-webql", after_help = "Without flags, shows which clients have WebQL configured.\nWith client flags, removes WebQL MCP entries.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset-webql                  Show which clients can be reset\n  keenable reset-webql --cursor         Reset Cursor only\n  keenable reset-webql --all            Reset all configured clients")]
+    ResetWebql {
+        /// Reset all configured clients
+        #[arg(long)]
+        all: bool,
+
+        /// Reset Claude Code
+        #[arg(long)]
+        claude_code: bool,
+
+        /// Reset Claude Desktop
+        #[arg(long)]
+        claude_desktop: bool,
+
+        /// Reset Cursor
+        #[arg(long)]
+        cursor: bool,
+
+        /// Reset VS Code
+        #[arg(long)]
+        vscode: bool,
+
+        /// Reset Windsurf
+        #[arg(long)]
+        windsurf: bool,
+
+        /// Reset Codex
+        #[arg(long)]
+        codex: bool,
+
+        /// Reset OpenCode
+        #[arg(long)]
+        opencode: bool,
+    },
+
     /// Remove Keenable MCP from your AI clients and restore defaults
     #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients")]
     Reset {
@@ -168,6 +240,10 @@ enum Commands {
         /// API key (overrides stored key)
         #[arg(long = "api-key")]
         api_key: Option<String>,
+
+        /// Full MCP URL to proxy (used for WebQL where token is in URL)
+        #[arg(long = "url")]
+        url: Option<String>,
     },
 
     /// Run the background daemon (internal, auto-started)
@@ -225,6 +301,18 @@ async fn main() {
             let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
             commands::configure_mcp::configure_mcp(flags).await;
         }
+        Commands::ConfigureWebql {
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
+        } => {
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
+            commands::configure_webql::configure_webql(flags).await;
+        }
+        Commands::ResetWebql {
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
+        } => {
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
+            commands::reset_webql::reset_webql(flags);
+        }
         Commands::Reset {
             all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
         } => {
@@ -246,8 +334,8 @@ async fn main() {
         } => {
             commands::search::feedback(&query, &scores, text.as_deref(), pretty, api_key.as_deref()).await;
         }
-        Commands::McpStdio { api_key } => {
-            commands::mcp_stdio::run(api_key.as_deref()).await;
+        Commands::McpStdio { api_key, url } => {
+            commands::mcp_stdio::run(api_key.as_deref(), url.as_deref()).await;
         }
         Commands::Daemon => {
             daemon::run_daemon().await;

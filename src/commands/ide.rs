@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::constants::API_BASE_URL;
+use crate::constants::{API_BASE_URL, WEBQL_BASE_URL};
 
 // ── Known conflicting search MCP server names ───────────────────────
 
@@ -21,6 +21,9 @@ pub const CONFLICTING_NAMES: &[&str] = &[
 
 /// URLs that indicate a Keenable-related MCP entry (prod or test).
 pub const KEENABLE_URLS: &[&str] = &["api.keenable.ai", "api-test.keenable.ai"];
+
+/// URLs that indicate a WebQL MCP entry (prod or test).
+pub const WEBQL_URLS: &[&str] = &["webql.keenable.ai", "webql-test.keenable.ai"];
 
 /// Claude Code built-in tools that overlap with Keenable.
 pub const CLAUDE_CODE_STANDARD_TOOLS: &[&str] = &["WebSearch", "WebFetch"];
@@ -141,15 +144,6 @@ pub fn is_detected(ide: &IDEDef) -> bool {
         .map_or(false, |p| p.exists())
 }
 
-/// Check if Keenable MCP is present in an IDE's config (any entry pointing at keenable.ai).
-pub fn has_keenable_entry(ide: &IDEDef) -> bool {
-    let config = read_config(&ide.config_path);
-    config
-        .pointer(&format!("/{}/keenable", ide.servers_key))
-        .is_some()
-}
-
-
 // ── Config helpers ──────────────────────────────────────────────────
 
 fn is_toml(path: &PathBuf) -> bool {
@@ -257,101 +251,49 @@ pub fn is_conflicting_name(name: &str) -> bool {
     CONFLICTING_NAMES.iter().any(|c| lower.contains(c))
 }
 
-/// Detailed status of a client's Keenable configuration.
-pub struct IdeStatus {
-    /// Is Keenable MCP entry present?
-    pub has_entry: bool,
-    /// Does the entry have a different API key?
-    pub wrong_api_key: bool,
-    /// Uses legacy npx mcp-remote instead of built-in stdio bridge?
-    pub uses_legacy_npx: bool,
-    /// Are standard tools disabled (only relevant for has_standard_tools)?
-    pub standard_tools_disabled: bool,
-    /// Duplicate Keenable entries under other names.
-    pub duplicate_entries: Vec<String>,
-    /// Conflicting search MCP servers.
-    pub conflicting_mcps: Vec<String>,
+/// Check if a URL points to WebQL (prod or test).
+pub fn is_webql_url(url: &str) -> bool {
+    WEBQL_URLS.iter().any(|k| url.contains(k))
 }
 
-pub fn get_ide_status(ide: &IDEDef, api_key: &str) -> IdeStatus {
-    let config = read_config(&ide.config_path);
-    let existing = config
-        .pointer(&format!("/{}/keenable", ide.servers_key))
-        .cloned();
-
-    let has_entry = existing.is_some();
-
-    let wrong_api_key = if let Some(ref entry) = existing {
-        let existing_key = extract_entry_api_key(entry);
-        let desired_key = Some(api_key.to_string());
-        existing_key.is_some() && existing_key != desired_key
-    } else {
-        false
-    };
-
-    let uses_legacy_npx = existing
-        .as_ref()
-        .and_then(|e| e["command"].as_str())
-        .map_or(false, |cmd| cmd == "npx");
-
-    let standard_tools_disabled = if ide.has_standard_tools {
-        if ide.flag == "opencode" {
-            OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
-                config
-                    .pointer(&format!("/permission/{}", tool))
-                    .and_then(|v| v.as_str())
-                    == Some("deny")
-            })
-        } else {
-            let deny_list = config
-                .pointer("/permissions/deny")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            CLAUDE_CODE_STANDARD_TOOLS
-                .iter()
-                .all(|tool| deny_list.iter().any(|d| d == *tool))
-        }
-    } else {
-        true
-    };
-
-    let servers = config
-        .get(ide.servers_key)
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut duplicate_entries = Vec::new();
-    let mut conflicting_mcps = Vec::new();
-
-    for (name, entry) in &servers {
-        if name == "keenable" {
-            continue;
-        }
-        if let Some(url) = extract_url(entry) {
-            if is_keenable_url(&url) {
-                duplicate_entries.push(name.clone());
-                continue;
+/// Build the `keenable-webql` MCP entry for a given IDE.
+/// Auth is via `?token=` query parameter in the URL (no headers needed).
+pub fn build_webql_entry(ide: &IDEDef, api_key: &str) -> Value {
+    let mcp_url = format!("{}/mcp?token={}", WEBQL_BASE_URL, api_key);
+    match &ide.entry_style {
+        McpEntryStyle::Http {
+            url_key,
+            transport_type,
+        } => {
+            let mut entry = json!({ *url_key: mcp_url });
+            if let Some(transport) = transport_type {
+                entry["type"] = json!(*transport);
             }
+            entry
         }
-        if is_conflicting_name(name) {
-            conflicting_mcps.push(name.clone());
+        McpEntryStyle::Stdio => {
+            json!({
+                "command": "keenable",
+                "args": [
+                    "mcp-stdio",
+                    "--url",
+                    mcp_url
+                ]
+            })
+        }
+        McpEntryStyle::Toml => {
+            json!({ "url": mcp_url })
         }
     }
+}
 
-    IdeStatus {
-        has_entry,
-        wrong_api_key,
-        uses_legacy_npx,
-        standard_tools_disabled,
-        duplicate_entries,
-        conflicting_mcps,
-    }
+/// Extract the API key (token) from a WebQL MCP entry's URL.
+pub fn extract_webql_token(entry: &Value) -> Option<String> {
+    let url = extract_url(entry)?;
+    // Parse ?token=... from URL
+    url.split("token=")
+        .nth(1)
+        .map(|t| t.split('&').next().unwrap_or(t).to_string())
 }
 
 /// Extract the API key from a Keenable MCP entry's headers or mcp-remote args.
