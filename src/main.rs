@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
     name = "keenable",
     about = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web",
     version,
-    after_help = "Get started:\n  keenable login              Authenticate with your Keenable account\n  keenable setup              See which clients are configured\n  keenable setup --all        Configure Keenable MCP in all detected clients\n  keenable search \"query\"     Search the web (YAML output for agents)\n  keenable search \"query\" -p  Same, but pretty-printed for humans"
+    after_help = "Get started:\n  keenable login                  Authenticate with your Keenable account\n  keenable configure-mcp          See which clients are configured\n  keenable configure-mcp --all    Configure Keenable MCP in all detected clients\n  keenable search \"query\"         Search the web (YAML output for agents)\n  keenable search \"query\" -p      Same, but pretty-printed for humans"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -23,7 +23,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
-    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nAfter login, run: keenable setup --all\n\nFor pre-existing API keys (CI, scripts), use keenable configure instead.")]
+    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nAfter login, run: keenable configure-mcp --all\n\nFor pre-existing API keys (CI, scripts), use keenable configure instead.")]
     Login,
 
     /// Remove stored credentials and API key
@@ -39,8 +39,8 @@ enum Commands {
     },
 
     /// Configure Keenable MCP in your AI clients
-    #[command(after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable setup                  Show status of all detected clients\n  keenable setup --cursor         Configure Cursor only\n  keenable setup --all            Configure all detected clients\n  keenable setup --claude-code --vscode   Configure specific clients")]
-    Setup {
+    #[command(name = "configure-mcp", after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --vscode   Configure specific clients")]
+    ConfigureMcp {
         /// Configure all detected clients
         #[arg(long)]
         all: bool,
@@ -226,11 +226,11 @@ async fn main() {
         Commands::Configure { api_key } => {
             commands::configure::configure(&api_key);
         }
-        Commands::Setup {
+        Commands::ConfigureMcp {
             all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
         } => {
             let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
-            commands::setup::setup(flags).await;
+            commands::configure_mcp::configure_mcp(flags).await;
         }
         Commands::Reset {
             all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,

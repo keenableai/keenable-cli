@@ -4,4 +4,4 @@ pub mod login;
 pub mod mcp_stdio;
 pub mod reset;
 pub mod search;
-pub mod setup;
+pub mod configure_mcp;

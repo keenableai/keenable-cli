@@ -1,4 +1,4 @@
-//! Shared IDE definitions and config helpers used by `setup` and `reset`.
+//! Shared IDE definitions and config helpers used by `configure-mcp` and `reset`.
 
 use serde_json::{json, Value};
 use std::fs;

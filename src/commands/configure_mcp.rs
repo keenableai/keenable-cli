@@ -224,7 +224,7 @@ fn confirm_setup(ide_names: &[&str]) -> bool {
         }
         _ => {
             eprintln!();
-            ui::info("Setup cancelled.");
+            ui::info("Configuration cancelled.");
             false
         }
     }
@@ -254,8 +254,8 @@ fn show_client_recommendations(ide: &IDEDef) {
 
 // ── Main setup flow ─────────────────────────────────────────────────
 
-pub async fn setup(selected_flags: Vec<String>) {
-    ui::header("keenable setup");
+pub async fn configure_mcp(selected_flags: Vec<String>) {
+    ui::header("keenable configure-mcp");
 
     // ── Pre-flight: validate API key before showing anything ──────
     let api_key_result = match config::get_api_key() {
@@ -326,7 +326,7 @@ pub async fn setup(selected_flags: Vec<String>) {
 
         if targets.is_empty() {
             ui::error("No matching clients found to configure");
-            ui::hint("Run `keenable setup` to see available clients");
+            ui::hint("Run `keenable configure-mcp` to see available clients");
             eprintln!();
             std::process::exit(1);
         }
@@ -345,7 +345,7 @@ pub async fn setup(selected_flags: Vec<String>) {
         }
 
         eprintln!();
-        ui::success("Setup complete");
+        ui::success("Configuration complete");
     }
 
     eprintln!();
@@ -374,7 +374,7 @@ fn show_status(detected: &[&IDEDef], not_detected: &[&IDEDef], api_key: &str) {
             // Not configured
             any_unconfigured = true;
             eprintln!("   {} {}", "✗".red(), ide.name);
-            eprintln!("      {}", format!("- Run keenable setup --{}", ide.flag).dimmed());
+            eprintln!("      {}", format!("- Run keenable configure-mcp --{}", ide.flag).dimmed());
         } else if has_issues {
             // Configured with issues
             any_unconfigured = true;
@@ -401,14 +401,14 @@ fn show_status(detected: &[&IDEDef], not_detected: &[&IDEDef], api_key: &str) {
     if any_unconfigured {
         ui::hint(&format!(
             "Run {} to configure all detected clients at once",
-            "keenable setup --all".cyan()
+            "keenable configure-mcp --all".cyan()
         ));
     }
 }
 
 fn show_status_issues(_ide: &IDEDef, status: &IdeStatus) {
     if status.uses_legacy_npx {
-        ui::sub_warning("Uses npx mcp-remote (requires Node.js). Re-run setup to switch to built-in bridge");
+        ui::sub_warning("Uses npx mcp-remote (requires Node.js). Re-run configure-mcp to switch to built-in bridge");
     }
     if status.wrong_api_key {
         ui::sub_warning("Different API key configured");

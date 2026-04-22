@@ -153,7 +153,7 @@ pub async fn login() {
     config::set_api_key(&api_key);
     ui::success("Logged in");
 
-    ui::hint(&format!("Next: {}", "keenable setup".cyan()));
+    ui::hint(&format!("Next: {}", "keenable configure-mcp".cyan()));
     eprintln!();
 }
 
