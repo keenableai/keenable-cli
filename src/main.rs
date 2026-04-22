@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
     name = "keenable",
     about = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web",
     version,
-    after_help = "Get started:\n  keenable login              Authenticate with your Keenable account\n  keenable setup              See which clients are configured\n  keenable setup --all        Configure Keenable MCP in all detected clients\n  keenable search \"query\"     Search the web (YAML output for agents)\n  keenable search \"query\" -p  Same, but pretty-printed for humans"
+    after_help = "Get started:\n  keenable login                       Authenticate with your Keenable account\n  keenable login --api-key sk_abc123   Save API key directly (no browser)\n  keenable configure-mcp               See which clients are configured\n  keenable configure-mcp --all         Configure Keenable MCP in all detected clients\n  keenable search \"query\"              Search the web (YAML output for agents)\n  keenable search \"query\" -p           Same, but pretty-printed for humans"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -22,25 +22,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Authenticate with Keenable via OAuth (for personal machines)
-    #[command(after_help = "Use this on your personal machine to:\n  • Authenticate with your Keenable account\n  • Auto-provision an API key\n  • Enable MCP configuration via keenable setup\n\nAfter login, run: keenable setup --all\n\nFor headless/agentic use (CI, servers), use keenable configure instead.")]
-    Login,
+    /// Authenticate with Keenable and provision an API key
+    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, skips browser login and saves the key directly.\nUseful for CI, servers, or agent machines.\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                         Interactive browser login\n  keenable login --api-key sk_abc123     Save API key directly (no browser)\n  keenable login --api-key $KEENABLE_API_KEY")]
+    Login {
+        /// API key to save directly (skips browser login)
+        #[arg(long = "api-key")]
+        api_key: Option<String>,
+    },
 
     /// Remove stored credentials and API key
     #[command(after_help = "Clears stored tokens and API key from ~/.keenable/")]
     Logout,
 
-    /// Configure CLI with an API key (for agentic/headless use)
-    #[command(after_help = "Use this on CI, servers, or agent machines where browser login isn't possible.\nSaves the API key locally so search and fetch commands work.\n\nNote: MCP IDE configuration requires keenable login instead.\n\nExamples:\n  keenable configure --api-key sk_abc123\n  keenable configure --api-key $KEENABLE_API_KEY")]
-    Configure {
-        /// API key to save
-        #[arg(long = "api-key")]
-        api_key: String,
-    },
-
     /// Configure Keenable MCP in your AI clients
-    #[command(after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex\n\nExamples:\n  keenable setup                  Show status of all detected clients\n  keenable setup --cursor         Configure Cursor only\n  keenable setup --all            Configure all detected clients\n  keenable setup --claude-code --vscode   Configure specific clients")]
-    Setup {
+    #[command(name = "configure-mcp", after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --vscode   Configure specific clients")]
+    ConfigureMcp {
         /// Configure all detected clients
         #[arg(long)]
         all: bool,
@@ -68,10 +64,86 @@ enum Commands {
         /// Configure Codex
         #[arg(long)]
         codex: bool,
+
+        /// Configure OpenCode
+        #[arg(long)]
+        opencode: bool,
+    },
+
+    /// Configure Keenable WebQL MCP in your AI clients
+    #[command(name = "configure-webql", after_help = "Without flags, shows which clients are detected and configured for WebQL.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-webql                  Show status of all detected clients\n  keenable configure-webql --cursor         Configure Cursor only\n  keenable configure-webql --all            Configure all detected clients")]
+    ConfigureWebql {
+        /// Configure all detected clients
+        #[arg(long)]
+        all: bool,
+
+        /// Configure Claude Code
+        #[arg(long)]
+        claude_code: bool,
+
+        /// Configure Claude Desktop
+        #[arg(long)]
+        claude_desktop: bool,
+
+        /// Configure Cursor
+        #[arg(long)]
+        cursor: bool,
+
+        /// Configure VS Code
+        #[arg(long)]
+        vscode: bool,
+
+        /// Configure Windsurf
+        #[arg(long)]
+        windsurf: bool,
+
+        /// Configure Codex
+        #[arg(long)]
+        codex: bool,
+
+        /// Configure OpenCode
+        #[arg(long)]
+        opencode: bool,
+    },
+
+    /// Remove Keenable WebQL MCP from your AI clients
+    #[command(name = "reset-webql", after_help = "Without flags, shows which clients have WebQL configured.\nWith client flags, removes WebQL MCP entries.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset-webql                  Show which clients can be reset\n  keenable reset-webql --cursor         Reset Cursor only\n  keenable reset-webql --all            Reset all configured clients")]
+    ResetWebql {
+        /// Reset all configured clients
+        #[arg(long)]
+        all: bool,
+
+        /// Reset Claude Code
+        #[arg(long)]
+        claude_code: bool,
+
+        /// Reset Claude Desktop
+        #[arg(long)]
+        claude_desktop: bool,
+
+        /// Reset Cursor
+        #[arg(long)]
+        cursor: bool,
+
+        /// Reset VS Code
+        #[arg(long)]
+        vscode: bool,
+
+        /// Reset Windsurf
+        #[arg(long)]
+        windsurf: bool,
+
+        /// Reset Codex
+        #[arg(long)]
+        codex: bool,
+
+        /// Reset OpenCode
+        #[arg(long)]
+        opencode: bool,
     },
 
     /// Remove Keenable MCP from your AI clients and restore defaults
-    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients")]
+    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor, --vscode,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients")]
     Reset {
         /// Reset all configured clients
         #[arg(long)]
@@ -100,6 +172,10 @@ enum Commands {
         /// Reset Codex
         #[arg(long)]
         codex: bool,
+
+        /// Reset OpenCode
+        #[arg(long)]
+        opencode: bool,
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
@@ -164,27 +240,16 @@ enum Commands {
         /// API key (overrides stored key)
         #[arg(long = "api-key")]
         api_key: Option<String>,
+
+        /// Full MCP URL to proxy (used for WebQL where token is in URL)
+        #[arg(long = "url")]
+        url: Option<String>,
     },
 
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
 
-    /// Create a new API key (requires login)
-    #[command(name = "keys-create", alias = "keys", after_help = "The key is shown once and saved to ~/.keenable/config.json by default.\nUse --no-save to display without saving.\n\nExamples:\n  keenable keys-create\n  keenable keys-create -l \"my-key\" --no-save")]
-    KeysCreate {
-        /// Label for the key
-        #[arg(short = 'l', long = "label", default_value = "cli")]
-        label: String,
-
-        /// Save the key to local config
-        #[arg(long = "save", default_value = "true", action = clap::ArgAction::SetTrue)]
-        save: bool,
-
-        /// Do not save the key to local config
-        #[arg(long = "no-save", conflicts_with = "save")]
-        no_save: bool,
-    },
 }
 
 fn collect_client_flags(
@@ -195,6 +260,7 @@ fn collect_client_flags(
     vscode: bool,
     windsurf: bool,
     codex: bool,
+    opencode: bool,
 ) -> Vec<String> {
     let pairs: &[(bool, &str)] = &[
         (all, "all"),
@@ -204,6 +270,7 @@ fn collect_client_flags(
         (vscode, "vscode"),
         (windsurf, "windsurf"),
         (codex, "codex"),
+        (opencode, "opencode"),
     ];
     pairs
         .iter()
@@ -222,25 +289,34 @@ async fn main() {
     });
 
     match cli.command {
-        Commands::Login => {
-            commands::login::login().await;
+        Commands::Login { api_key } => {
+            commands::login::login(api_key.as_deref()).await;
         }
         Commands::Logout => {
             commands::login::logout();
         }
-        Commands::Configure { api_key } => {
-            commands::configure::configure(&api_key);
-        }
-        Commands::Setup {
-            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex,
+        Commands::ConfigureMcp {
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex);
-            commands::setup::setup(flags).await;
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
+            commands::configure_mcp::configure_mcp(flags).await;
+        }
+        Commands::ConfigureWebql {
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
+        } => {
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
+            commands::configure_webql::configure_webql(flags).await;
+        }
+        Commands::ResetWebql {
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
+        } => {
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
+            commands::reset_webql::reset_webql(flags);
         }
         Commands::Reset {
-            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex,
+            all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex);
+            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, vscode, windsurf, codex, opencode);
             commands::reset::reset(flags);
         }
         Commands::Search { query, count, pretty, api_key } => {
@@ -258,18 +334,11 @@ async fn main() {
         } => {
             commands::search::feedback(&query, &scores, text.as_deref(), pretty, api_key.as_deref()).await;
         }
-        Commands::McpStdio { api_key } => {
-            commands::mcp_stdio::run(api_key.as_deref()).await;
+        Commands::McpStdio { api_key, url } => {
+            commands::mcp_stdio::run(api_key.as_deref(), url.as_deref()).await;
         }
         Commands::Daemon => {
             daemon::run_daemon().await;
-        }
-        Commands::KeysCreate {
-            label,
-            save: _,
-            no_save,
-        } => {
-            commands::keys::create(&label, !no_save).await;
         }
     }
 

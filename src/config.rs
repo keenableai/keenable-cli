@@ -56,28 +56,6 @@ pub fn set_api_key(key: &str) {
     set_config_value("api_key", Value::String(key.to_string()));
 }
 
-pub fn get_org_id() -> Option<String> {
-    get_config()["org_id"].as_str().map(|s| s.to_string())
-}
-
-pub fn set_org_id(org_id: &str) {
-    set_config_value("org_id", Value::String(org_id.to_string()));
-}
-
-pub fn get_credentials() -> Value {
-    read_json(&credentials_file())
-}
-
-pub fn set_credentials(data: &Value) {
-    write_json(&credentials_file(), data);
-}
-
-pub fn get_access_token() -> Option<String> {
-    get_credentials()["access_token"]
-        .as_str()
-        .map(|s| s.to_string())
-}
-
 pub fn clear_credentials() {
     let path = credentials_file();
     if path.exists() {

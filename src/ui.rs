@@ -105,6 +105,24 @@ pub fn step_done(msg: &str) {
     );
 }
 
+/// Print an in-progress step (shows a spinner-like marker).
+/// Saves cursor position so `step_done_replace` can overwrite it.
+pub fn step(msg: &str) {
+    save_cursor();
+    print_wrapped(
+        format!("   {} ", "…".dimmed()),
+        TOP_CONT_WIDTH,
+        msg,
+        |s| s.dimmed(),
+    );
+}
+
+/// Replace the last `step()` output with a completed step (dimmed + strikethrough).
+pub fn step_done_replace(msg: &str) {
+    restore_and_clear();
+    step_done(msg);
+}
+
 /// Print the final success line (green, bold).
 pub fn success(msg: &str) {
     print_wrapped(

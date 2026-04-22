@@ -13,19 +13,6 @@ pub fn api_key_client(api_key: &str) -> Client {
         .unwrap()
 }
 
-pub fn bearer_client(token: &str) -> Client {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        "Authorization",
-        format!("Bearer {}", token).parse().unwrap(),
-    );
-    Client::builder()
-        .default_headers(headers)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap()
-}
-
 pub fn api_url(path: &str) -> String {
     format!("{}{}", API_BASE_URL, path)
 }

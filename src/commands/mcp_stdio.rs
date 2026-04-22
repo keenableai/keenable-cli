@@ -13,19 +13,24 @@ use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::config;
 use crate::constants::API_BASE_URL;
 
-pub async fn run(api_key_override: Option<&str>) {
-    let api_key = match api_key_override {
-        Some(k) => k.to_string(),
-        None => match config::get_api_key() {
-            Some(k) => k,
-            None => {
-                eprintln!("No API key found. Run `keenable login` or pass --api-key.");
-                process::exit(1);
-            }
-        },
+pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
+    // When --url is provided, use it directly (token is embedded in URL).
+    // Otherwise, build URL from API_BASE_URL and require an API key for headers.
+    let (mcp_url, api_key) = if let Some(url) = url_override {
+        (url.to_string(), None)
+    } else {
+        let key = match api_key_override {
+            Some(k) => k.to_string(),
+            None => match config::get_api_key() {
+                Some(k) => k,
+                None => {
+                    eprintln!("No API key found. Run `keenable login` or pass --api-key.");
+                    process::exit(1);
+                }
+            },
+        };
+        (format!("{}/mcp", API_BASE_URL), Some(key))
     };
-
-    let mcp_url = format!("{}/mcp", API_BASE_URL);
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -72,14 +77,14 @@ pub async fn run(api_key_override: Option<&str>) {
             }
         };
 
-        let resp = client
+        let mut req = client
             .post(&mcp_url)
-            .header("X-API-Key", &api_key)
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .json(&request)
-            .send()
-            .await;
+            .header("Accept", "application/json, text/event-stream");
+        if let Some(ref key) = api_key {
+            req = req.header("X-API-Key", key);
+        }
+        let resp = req.json(&request).send().await;
 
         match resp {
             Ok(response) => {
