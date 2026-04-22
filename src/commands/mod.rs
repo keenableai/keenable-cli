@@ -1,6 +1,5 @@
 pub mod configure;
 pub mod ide;
-pub mod keys;
 pub mod login;
 pub mod mcp_stdio;
 pub mod reset;

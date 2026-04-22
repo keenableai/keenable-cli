@@ -22,8 +22,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Authenticate with Keenable via OAuth (for personal machines)
-    #[command(after_help = "Use this on your personal machine to:\n  • Authenticate with your Keenable account\n  • Auto-provision an API key\n  • Enable MCP configuration via keenable setup\n\nAfter login, run: keenable setup --all\n\nFor headless/agentic use (CI, servers), use keenable configure instead.")]
+    /// Authenticate with Keenable and provision an API key
+    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nAfter login, run: keenable setup --all\n\nFor pre-existing API keys (CI, scripts), use keenable configure instead.")]
     Login,
 
     /// Remove stored credentials and API key
@@ -178,21 +178,6 @@ enum Commands {
     #[command(hide = true)]
     Daemon,
 
-    /// Create a new API key (requires login)
-    #[command(name = "keys-create", alias = "keys", after_help = "The key is shown once and saved to ~/.keenable/config.json by default.\nUse --no-save to display without saving.\n\nExamples:\n  keenable keys-create\n  keenable keys-create -l \"my-key\" --no-save")]
-    KeysCreate {
-        /// Label for the key
-        #[arg(short = 'l', long = "label", default_value = "cli")]
-        label: String,
-
-        /// Save the key to local config
-        #[arg(long = "save", default_value = "true", action = clap::ArgAction::SetTrue)]
-        save: bool,
-
-        /// Do not save the key to local config
-        #[arg(long = "no-save", conflicts_with = "save")]
-        no_save: bool,
-    },
 }
 
 fn collect_client_flags(
@@ -273,13 +258,6 @@ async fn main() {
         }
         Commands::Daemon => {
             daemon::run_daemon().await;
-        }
-        Commands::KeysCreate {
-            label,
-            save: _,
-            no_save,
-        } => {
-            commands::keys::create(&label, !no_save).await;
         }
     }
 
