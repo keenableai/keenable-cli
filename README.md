@@ -35,7 +35,7 @@ cargo install --git https://github.com/keenableai/keenable-cli
 keenable login
 
 # Configure MCP for your AI clients (Claude Code, Cursor, etc.)
-keenable setup --all
+keenable configure-mcp --all
 
 # Search the web
 keenable search "rust async patterns" -p
@@ -46,21 +46,29 @@ keenable search "rust async patterns" -p
 ### Authentication
 
 ```bash
-keenable login                          # OAuth login (opens browser)
+keenable login                          # Device-code login (opens browser)
+keenable login --api-key <KEY>          # Save API key directly (CI, servers)
 keenable logout                         # Clear stored credentials
-keenable configure --api-key <KEY>      # Headless setup (CI, servers)
 ```
 
 ### MCP setup
 
 ```bash
-keenable setup                          # Show client status
-keenable setup --all                    # Configure all detected clients
-keenable setup --cursor                 # Configure a specific client
+keenable configure-mcp                  # Show client status
+keenable configure-mcp --all            # Configure all detected clients
+keenable configure-mcp --cursor         # Configure a specific client
 keenable reset --all                    # Remove Keenable from all clients
 ```
 
-Supported clients: Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Codex.
+Supported clients: Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Codex, OpenCode.
+
+### WebQL MCP setup
+
+```bash
+keenable configure-webql                # Show client status
+keenable configure-webql --all          # Configure all detected clients
+keenable reset-webql --all              # Remove WebQL from all clients
+```
 
 ### Search
 
@@ -77,15 +85,9 @@ keenable fetch https://example.com      # Fetch page content
 keenable fetch url1 url2 -p             # Fetch multiple URLs, pretty output
 ```
 
-### API keys
-
-```bash
-keenable keys-create --label "my-key"   # Create a new API key
-```
-
 ## Updating
 
-The CLI checks for updates automatically (once per day). To update manually:
+The CLI checks for updates automatically (once per hour). To update manually:
 
 ```bash
 brew upgrade keenable-cli               # Homebrew
