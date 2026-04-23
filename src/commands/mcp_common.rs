@@ -80,7 +80,7 @@ pub fn webql_product() -> McpProduct {
         configure_cmd: "configure-webql",
         reset_cmd: "reset-webql",
         build_entry: build_webql_entry,
-        extract_key: extract_webql_token,
+        extract_key: extract_webql_key,
         is_product_url: is_webql_url,
         check_conflicts: false,
         manage_standard_tools: false,
@@ -96,6 +96,7 @@ pub struct ProductStatus {
     pub has_entry: bool,
     pub wrong_api_key: bool,
     pub uses_legacy_npx: bool,
+    pub uses_token_auth: bool,
     pub standard_tools_disabled: bool,
     pub duplicate_entries: Vec<String>,
     pub conflicting_mcps: Vec<String>,
@@ -125,6 +126,10 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
     } else {
         false
     };
+
+    let uses_token_auth = existing
+        .as_ref()
+        .map_or(false, |e| uses_webql_token_auth(e));
 
     let standard_tools_disabled = if product.manage_standard_tools && ide.has_standard_tools {
         if ide.flag == "opencode" {
@@ -214,6 +219,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
         has_entry,
         wrong_api_key,
         uses_legacy_npx,
+        uses_token_auth,
         standard_tools_disabled,
         duplicate_entries,
         conflicting_mcps,
@@ -378,6 +384,9 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: &str) {
             }
             if product.check_legacy_npx && entry["command"].as_str() == Some("npx") {
                 ui::sub_warning("Replacing npx mcp-remote with built-in stdio bridge (no Node.js needed)");
+            }
+            if uses_webql_token_auth(entry) {
+                ui::sub_warning("Migrating from token-in-URL to header-based auth");
             }
             config[ide.servers_key][product.entry_name] = desired;
             config_changed = true;
@@ -582,6 +591,7 @@ fn show_configure_status(
 
         let has_issues = status.wrong_api_key
             || status.uses_legacy_npx
+            || status.uses_token_auth
             || !status.duplicate_entries.is_empty()
             || !status.conflicting_mcps.is_empty()
             || (product.manage_standard_tools
@@ -628,6 +638,12 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
     if status.uses_legacy_npx {
         ui::sub_warning(&format!(
             "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to built-in bridge",
+            product.configure_cmd
+        ));
+    }
+    if status.uses_token_auth {
+        ui::sub_warning(&format!(
+            "Uses legacy token-in-URL auth. Re-run {} to switch to header-based auth",
             product.configure_cmd
         ));
     }
