@@ -225,7 +225,7 @@ enum Commands {
         #[arg(long = "api-key")]
         api_key: Option<String>,
 
-        /// Full MCP URL to proxy (used for WebQL where token is in URL)
+        /// Full MCP URL to proxy (used for WebQL)
         #[arg(long = "url")]
         url: Option<String>,
     },

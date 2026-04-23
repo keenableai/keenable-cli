@@ -14,22 +14,25 @@ use crate::config;
 use crate::constants::API_BASE_URL;
 
 pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
-    // When --url is provided, use it directly (token is embedded in URL).
-    // Otherwise, build URL from API_BASE_URL and require an API key for headers.
-    let (mcp_url, api_key) = if let Some(url) = url_override {
-        (url.to_string(), None)
+    let key = match api_key_override {
+        Some(k) => Some(k.to_string()),
+        None => config::get_api_key(),
+    };
+
+    let mcp_url = match url_override {
+        Some(url) => url.to_string(),
+        None => format!("{}/mcp", API_BASE_URL),
+    };
+
+    // API key is required for header-based auth (both Keenable and WebQL).
+    // Legacy WebQL entries with ?token= in URL still work without a separate key.
+    let api_key = if key.is_some() {
+        key
+    } else if !mcp_url.contains("token=") {
+        eprintln!("No API key found. Run `keenable login` or pass --api-key.");
+        process::exit(1);
     } else {
-        let key = match api_key_override {
-            Some(k) => k.to_string(),
-            None => match config::get_api_key() {
-                Some(k) => k,
-                None => {
-                    eprintln!("No API key found. Run `keenable login` or pass --api-key.");
-                    process::exit(1);
-                }
-            },
-        };
-        (format!("{}/mcp", API_BASE_URL), Some(key))
+        None
     };
 
     let client = Client::builder()

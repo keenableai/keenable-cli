@@ -221,8 +221,17 @@ pub fn extract_url(entry: &Value) -> Option<String> {
                 return Some(url.to_string());
             }
         }
-        // New keenable mcp-stdio format — infer URL from the command itself
+        // New keenable mcp-stdio format
         if cmd == "keenable" && first_arg == "mcp-stdio" {
+            // Check for explicit --url arg (used by WebQL)
+            for (i, arg) in args.iter().enumerate() {
+                if arg.as_str() == Some("--url") {
+                    if let Some(url) = args.get(i + 1).and_then(|v| v.as_str()) {
+                        return Some(url.to_string());
+                    }
+                }
+            }
+            // Default: infer URL from API_BASE_URL
             return Some(format!("{}/mcp", API_BASE_URL));
         }
     }
@@ -246,15 +255,20 @@ pub fn is_webql_url(url: &str) -> bool {
 }
 
 /// Build the `keenable-webql` MCP entry for a given IDE.
-/// Auth is via `?token=` query parameter in the URL (no headers needed).
+/// Auth is via `X-API-Key` header (same as Keenable MCP).
 pub fn build_webql_entry(ide: &IDEDef, api_key: &str) -> Value {
-    let mcp_url = format!("{}/mcp?token={}", WEBQL_BASE_URL, api_key);
+    let mcp_url = format!("{}/mcp", WEBQL_BASE_URL);
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
             transport_type,
         } => {
-            let mut entry = json!({ *url_key: mcp_url });
+            let mut entry = json!({
+                *url_key: mcp_url,
+                "headers": {
+                    "X-API-Key": api_key
+                }
+            });
             if let Some(transport) = transport_type {
                 entry["type"] = json!(*transport);
             }
@@ -266,23 +280,41 @@ pub fn build_webql_entry(ide: &IDEDef, api_key: &str) -> Value {
                 "args": [
                     "mcp-stdio",
                     "--url",
-                    mcp_url
+                    &mcp_url,
+                    "--api-key",
+                    api_key
                 ]
             })
         }
         McpEntryStyle::Toml => {
-            json!({ "url": mcp_url })
+            json!({
+                "url": mcp_url,
+                "http_headers": {
+                    "X-API-Key": api_key
+                }
+            })
         }
     }
 }
 
-/// Extract the API key (token) from a WebQL MCP entry's URL.
-pub fn extract_webql_token(entry: &Value) -> Option<String> {
+/// Extract the API key from a WebQL MCP entry.
+/// Checks header-based auth first, then falls back to legacy `?token=` in URL.
+pub fn extract_webql_key(entry: &Value) -> Option<String> {
+    // New format: X-API-Key header (same as Keenable MCP)
+    if let Some(key) = extract_entry_api_key(entry) {
+        return Some(key);
+    }
+    // Legacy format: ?token= query parameter in URL
     let url = extract_url(entry)?;
-    // Parse ?token=... from URL
     url.split("token=")
         .nth(1)
         .map(|t| t.split('&').next().unwrap_or(t).to_string())
+}
+
+/// Check if a WebQL MCP entry uses the legacy `?token=` URL auth.
+pub fn uses_webql_token_auth(entry: &Value) -> bool {
+    let url = extract_url(entry).unwrap_or_default();
+    url.contains("token=")
 }
 
 /// Extract the API key from a Keenable MCP entry's headers or mcp-remote args.
