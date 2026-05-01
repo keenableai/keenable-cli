@@ -98,6 +98,8 @@ pub struct ProductStatus {
     pub uses_legacy_npx: bool,
     pub uses_token_auth: bool,
     pub standard_tools_disabled: bool,
+    /// Denies exist in ~/.claude.json but not in ~/.claude/settings.json.
+    pub has_legacy_deny_only: bool,
     pub duplicate_entries: Vec<String>,
     pub conflicting_mcps: Vec<String>,
 }
@@ -131,25 +133,17 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
         .as_ref()
         .map_or(false, |e| uses_webql_token_auth(e));
 
-    let standard_tools_disabled = if product.manage_standard_tools && ide.has_standard_tools {
+    let (standard_tools_disabled, has_legacy_deny_only) = if product.manage_standard_tools && ide.has_standard_tools {
         if ide.flag == "opencode" {
-            OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
+            let disabled = OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
                 config
                     .pointer(&format!("/permission/{}", tool))
                     .and_then(|v| v.as_str())
                     == Some("deny")
-            })
+            });
+            (disabled, false)
         } else {
-            let deny_list = config
-                .pointer("/permissions/deny")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            // Check deny in settings.json too (the correct location)
+            // Only check ~/.claude/settings.json for deny (the file Claude Code reads)
             let settings_deny_list = claude_code_settings_path()
                 .map(|p| {
                     let settings = read_config(&p);
@@ -166,10 +160,25 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
                 .unwrap_or_default();
             let all_denied = CLAUDE_CODE_STANDARD_TOOLS
                 .iter()
-                .all(|tool| {
-                    deny_list.iter().any(|d| d == *tool)
-                        || settings_deny_list.iter().any(|d| d == *tool)
-                });
+                .all(|tool| settings_deny_list.iter().any(|d| d == *tool));
+
+            // Detect legacy-only deny: present in .claude.json but not settings.json
+            let legacy_deny_list = config
+                .pointer("/permissions/deny")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let has_legacy_only = !all_denied
+                && CLAUDE_CODE_STANDARD_TOOLS
+                    .iter()
+                    .any(|tool| {
+                        legacy_deny_list.iter().any(|d| d == *tool)
+                            && !settings_deny_list.iter().any(|d| d == *tool)
+                    });
 
             // Also check that tools are not in allow lists (either file)
             let allow_list = config
@@ -203,10 +212,10 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
                 })
                 .unwrap_or(true);
 
-            all_denied && none_allowed_in_config && none_allowed_in_settings
+            (all_denied && none_allowed_in_config && none_allowed_in_settings, has_legacy_only)
         }
     } else {
-        true // not applicable = no issue
+        (true, false) // not applicable = no issue
     };
 
     let servers = config
@@ -239,6 +248,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
         uses_legacy_npx,
         uses_token_auth,
         standard_tools_disabled,
+        has_legacy_deny_only,
         duplicate_entries,
         conflicting_mcps,
     }
@@ -614,7 +624,8 @@ fn show_configure_status(
             || !status.conflicting_mcps.is_empty()
             || (product.manage_standard_tools
                 && ide.has_standard_tools
-                && !status.standard_tools_disabled);
+                && !status.standard_tools_disabled)
+            || status.has_legacy_deny_only;
 
         if !status.has_entry {
             any_unconfigured = true;
@@ -687,6 +698,12 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
             CLAUDE_CODE_STANDARD_TOOLS.join(", ")
         };
         ui::sub_warning(&format!("Standard tools ({}) not disabled", tools));
+    }
+    if status.has_legacy_deny_only {
+        ui::sub_warning(&format!(
+            "Legacy deny found in .claude.json (ignored by Claude Code). Re-run {} to migrate",
+            product.configure_cmd
+        ));
     }
 }
 
