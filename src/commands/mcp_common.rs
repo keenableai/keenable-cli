@@ -98,6 +98,8 @@ pub struct ProductStatus {
     pub uses_legacy_npx: bool,
     pub uses_token_auth: bool,
     pub standard_tools_disabled: bool,
+    /// Denies exist in ~/.claude.json but not in ~/.claude/settings.json.
+    pub has_legacy_deny_only: bool,
     pub duplicate_entries: Vec<String>,
     pub conflicting_mcps: Vec<String>,
 }
@@ -131,16 +133,37 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
         .as_ref()
         .map_or(false, |e| uses_webql_token_auth(e));
 
-    let standard_tools_disabled = if product.manage_standard_tools && ide.has_standard_tools {
+    let (standard_tools_disabled, has_legacy_deny_only) = if product.manage_standard_tools && ide.has_standard_tools {
         if ide.flag == "opencode" {
-            OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
+            let disabled = OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
                 config
                     .pointer(&format!("/permission/{}", tool))
                     .and_then(|v| v.as_str())
                     == Some("deny")
-            })
+            });
+            (disabled, false)
         } else {
-            let deny_list = config
+            // Only check ~/.claude/settings.json for deny (the file Claude Code reads)
+            let settings_deny_list = claude_code_settings_path()
+                .map(|p| {
+                    let settings = read_config(&p);
+                    settings
+                        .pointer("/permissions/deny")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            let all_denied = CLAUDE_CODE_STANDARD_TOOLS
+                .iter()
+                .all(|tool| settings_deny_list.iter().any(|d| d == *tool));
+
+            // Detect legacy-only deny: present in .claude.json but not settings.json
+            let legacy_deny_list = config
                 .pointer("/permissions/deny")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
@@ -149,9 +172,13 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let all_denied = CLAUDE_CODE_STANDARD_TOOLS
-                .iter()
-                .all(|tool| deny_list.iter().any(|d| d == *tool));
+            let has_legacy_only = !all_denied
+                && CLAUDE_CODE_STANDARD_TOOLS
+                    .iter()
+                    .any(|tool| {
+                        legacy_deny_list.iter().any(|d| d == *tool)
+                            && !settings_deny_list.iter().any(|d| d == *tool)
+                    });
 
             // Also check that tools are not in allow lists (either file)
             let allow_list = config
@@ -185,10 +212,10 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
                 })
                 .unwrap_or(true);
 
-            all_denied && none_allowed_in_config && none_allowed_in_settings
+            (all_denied && none_allowed_in_config && none_allowed_in_settings, has_legacy_only)
         }
     } else {
-        true // not applicable = no issue
+        (true, false) // not applicable = no issue
     };
 
     let servers = config
@@ -221,6 +248,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
         uses_legacy_npx,
         uses_token_auth,
         standard_tools_disabled,
+        has_legacy_deny_only,
         duplicate_entries,
         conflicting_mcps,
     }
@@ -412,7 +440,13 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: &str) {
     }
 
     if config_changed {
-        write_config(&ide.config_path, &config);
+        if let Err(e) = write_config(&ide.config_path, &config) {
+            ui::sub_error(&format!(
+                "Failed to write {}: {}",
+                ide.config_path.display(),
+                e
+            ));
+        }
     }
 }
 
@@ -565,7 +599,13 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) {
     }
 
     if config_changed {
-        write_config(&ide.config_path, &config);
+        if let Err(e) = write_config(&ide.config_path, &config) {
+            ui::sub_error(&format!(
+                "Failed to write {}: {}",
+                ide.config_path.display(),
+                e
+            ));
+        }
     }
 }
 
@@ -596,7 +636,8 @@ fn show_configure_status(
             || !status.conflicting_mcps.is_empty()
             || (product.manage_standard_tools
                 && ide.has_standard_tools
-                && !status.standard_tools_disabled);
+                && !status.standard_tools_disabled)
+            || status.has_legacy_deny_only;
 
         if !status.has_entry {
             any_unconfigured = true;
@@ -669,6 +710,12 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
             CLAUDE_CODE_STANDARD_TOOLS.join(", ")
         };
         ui::sub_warning(&format!("Standard tools ({}) not disabled", tools));
+    }
+    if status.has_legacy_deny_only {
+        ui::sub_warning(&format!(
+            "Legacy deny found in .claude.json (ignored by Claude Code). Re-run {} to migrate",
+            product.configure_cmd
+        ));
     }
 }
 
@@ -858,18 +905,39 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
     // Remove from allow list in .claude.json
     remove_from_allow_list(config, changed);
 
-    // Also remove from allow list in ~/.claude/settings.json
+    // Also add deny + remove from allow list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path() {
         let mut settings = read_config(&settings_path);
         let mut settings_changed = false;
-        remove_from_allow_list(&mut settings, &mut settings_changed);
+        let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
+        let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
         if settings_changed {
-            write_config(&settings_path, &settings);
+            match write_config(&settings_path, &settings) {
+                Ok(()) => {
+                    if let Some(msg) = deny_msg {
+                        ui::sub_success(&msg);
+                    }
+                    if let Some(msg) = allow_msg {
+                        ui::sub_success(&msg);
+                    }
+                }
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}. Standard tools may still be enabled",
+                        settings_path.display(),
+                        e
+                    ));
+                }
+            }
         }
     }
+
+    // Scan project-level .claude/settings.local.json files and remove from allow lists
+    remove_from_project_allow_lists();
 }
 
 /// Remove standard tools from a `permissions.allow` list.
+/// Returns a description of what was removed, if anything.
 fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
     let allow_list = config
         .pointer("/permissions/allow")
@@ -909,6 +977,166 @@ fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
             "Removed {} from allow list",
             found.join(", ")
         ));
+    }
+}
+
+/// Add standard tools to the `permissions.deny` list in a settings file.
+/// Returns a success message if changes were made (caller prints after write).
+fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<String> {
+    let deny_list = config
+        .pointer("/permissions/deny")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let missing: Vec<&&str> = CLAUDE_CODE_STANDARD_TOOLS
+        .iter()
+        .filter(|tool| !deny_list.iter().any(|d| d == **tool))
+        .collect();
+
+    if !missing.is_empty() {
+        let msg = format!(
+            "Added {} to settings.json deny list",
+            missing.iter().map(|s| **s).collect::<Vec<_>>().join(", ")
+        );
+        let mut new_deny = deny_list;
+        for tool in &missing {
+            new_deny.push(tool.to_string());
+        }
+        if config.pointer("/permissions").is_none() {
+            config["permissions"] = json!({});
+        }
+        config["permissions"]["deny"] = json!(new_deny);
+        *changed = true;
+        Some(msg)
+    } else {
+        None
+    }
+}
+
+/// Scan project-level `.claude/settings.local.json` files and remove standard
+/// tools from their allow lists. Walks common project directories to find these
+/// files.
+fn remove_from_project_allow_lists() {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+
+    // Walk common dev directories looking for .claude/settings.local.json
+    let search_dirs = ["dev", "projects", "src", "repos", "work", "code"];
+    let mut settings_files: Vec<PathBuf> = Vec::new();
+
+    for dir in &search_dirs {
+        let search_root = home.join(dir);
+        if search_root.is_dir() {
+            find_claude_settings(&search_root, &mut settings_files, 0, 3);
+        }
+    }
+
+    // Also check home directory itself (for projects directly under ~)
+    find_claude_settings(&home, &mut settings_files, 0, 1);
+
+    for path in settings_files {
+        let mut config = read_config(&path);
+        let mut changed = false;
+        let _ = remove_from_allow_list_quiet(&mut config, &mut changed);
+        if changed {
+            let display_path = path.strip_prefix(&home)
+                .map(|p| format!("~/{}", p.display()))
+                .unwrap_or_else(|_| path.display().to_string());
+            match write_config(&path, &config) {
+                Ok(()) => {
+                    ui::sub_success(&format!(
+                        "Removed {} from allow list in {}",
+                        CLAUDE_CODE_STANDARD_TOOLS.join(", "),
+                        display_path
+                    ));
+                }
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}",
+                        display_path,
+                        e
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Recursively find `.claude/settings.local.json` files.
+fn find_claude_settings(dir: &std::path::Path, results: &mut Vec<PathBuf>, depth: usize, max_depth: usize) {
+    if depth > max_depth {
+        return;
+    }
+    let candidate = dir.join(".claude/settings.local.json");
+    if candidate.is_file() {
+        results.push(candidate);
+    }
+    if depth < max_depth {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Skip hidden dirs (except .claude which we handle above),
+                    // node_modules, and other noise
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with('.') || name_str == "node_modules" || name_str == "target" || name_str == "vendor" {
+                        continue;
+                    }
+                    find_claude_settings(&path, results, depth + 1, max_depth);
+                }
+            }
+        }
+    }
+}
+
+/// Like `remove_from_allow_list` but without printing — returns a message
+/// string if changes were made (caller prints after confirming write).
+fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) -> Option<String> {
+    let allow_list = config
+        .pointer("/permissions/allow")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let found: Vec<&str> = CLAUDE_CODE_STANDARD_TOOLS
+        .iter()
+        .filter(|tool| allow_list.iter().any(|a| a == **tool))
+        .copied()
+        .collect();
+
+    if !found.is_empty() {
+        let filtered: Vec<String> = allow_list
+            .into_iter()
+            .filter(|a| !CLAUDE_CODE_STANDARD_TOOLS.contains(&a.as_str()))
+            .collect();
+        if filtered.is_empty() {
+            if let Some(perms) = config.get_mut("permissions").and_then(|v| v.as_object_mut()) {
+                perms.remove("allow");
+                if perms.is_empty() {
+                    if let Some(obj) = config.as_object_mut() {
+                        obj.remove("permissions");
+                    }
+                }
+            }
+        } else {
+            config["permissions"]["allow"] = json!(filtered);
+        }
+        *changed = true;
+        Some(format!("Removed {} from allow list", found.join(", ")))
+    } else {
+        None
     }
 }
 
@@ -1001,7 +1229,21 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
         let mut settings_changed = false;
         remove_from_deny_list(&mut settings, &mut settings_changed);
         if settings_changed {
-            write_config(&settings_path, &settings);
+            match write_config(&settings_path, &settings) {
+                Ok(()) => {
+                    ui::sub_success(&format!(
+                        "Removed {} from settings.json deny list",
+                        CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+                    ));
+                }
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}",
+                        settings_path.display(),
+                        e
+                    ));
+                }
+            }
         }
     }
 }
@@ -1040,10 +1282,6 @@ fn remove_from_deny_list(config: &mut Value, changed: &mut bool) {
             config["permissions"]["deny"] = json!(filtered);
         }
         *changed = true;
-        ui::sub_success(&format!(
-            "Removed {} from settings.json deny list",
-            CLAUDE_CODE_STANDARD_TOOLS.join(", ")
-        ));
     }
 }
 
