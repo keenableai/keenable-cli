@@ -195,6 +195,16 @@ pub fn sub_success(msg: &str) {
     );
 }
 
+/// Print a sub-step error (red, extra indent).
+pub fn sub_error(msg: &str) {
+    print_wrapped(
+        format!("      - {} ", "✗".red().bold()),
+        SUB_CONT_WIDTH,
+        msg,
+        |s| s.red(),
+    );
+}
+
 /// Print a sub-step warning (yellow, extra indent).
 pub fn sub_warning(msg: &str) {
     print_wrapped(

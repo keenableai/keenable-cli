@@ -440,7 +440,13 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: &str) {
     }
 
     if config_changed {
-        write_config(&ide.config_path, &config);
+        if let Err(e) = write_config(&ide.config_path, &config) {
+            ui::sub_error(&format!(
+                "Failed to write {}: {}",
+                ide.config_path.display(),
+                e
+            ));
+        }
     }
 }
 
@@ -593,7 +599,13 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) {
     }
 
     if config_changed {
-        write_config(&ide.config_path, &config);
+        if let Err(e) = write_config(&ide.config_path, &config) {
+            ui::sub_error(&format!(
+                "Failed to write {}: {}",
+                ide.config_path.display(),
+                e
+            ));
+        }
     }
 }
 
@@ -897,10 +909,26 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
     if let Some(settings_path) = claude_code_settings_path() {
         let mut settings = read_config(&settings_path);
         let mut settings_changed = false;
-        add_deny_to_settings(&mut settings, &mut settings_changed);
-        remove_from_allow_list(&mut settings, &mut settings_changed);
+        let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
+        let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
         if settings_changed {
-            write_config(&settings_path, &settings);
+            match write_config(&settings_path, &settings) {
+                Ok(()) => {
+                    if let Some(msg) = deny_msg {
+                        ui::sub_success(&msg);
+                    }
+                    if let Some(msg) = allow_msg {
+                        ui::sub_success(&msg);
+                    }
+                }
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}. Standard tools may still be enabled",
+                        settings_path.display(),
+                        e
+                    ));
+                }
+            }
         }
     }
 
@@ -909,6 +937,7 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
 }
 
 /// Remove standard tools from a `permissions.allow` list.
+/// Returns a description of what was removed, if anything.
 fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
     let allow_list = config
         .pointer("/permissions/allow")
@@ -952,7 +981,8 @@ fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
 }
 
 /// Add standard tools to the `permissions.deny` list in a settings file.
-fn add_deny_to_settings(config: &mut Value, changed: &mut bool) {
+/// Returns a success message if changes were made (caller prints after write).
+fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<String> {
     let deny_list = config
         .pointer("/permissions/deny")
         .and_then(|v| v.as_array())
@@ -969,6 +999,10 @@ fn add_deny_to_settings(config: &mut Value, changed: &mut bool) {
         .collect();
 
     if !missing.is_empty() {
+        let msg = format!(
+            "Added {} to settings.json deny list",
+            missing.iter().map(|s| **s).collect::<Vec<_>>().join(", ")
+        );
         let mut new_deny = deny_list;
         for tool in &missing {
             new_deny.push(tool.to_string());
@@ -978,10 +1012,9 @@ fn add_deny_to_settings(config: &mut Value, changed: &mut bool) {
         }
         config["permissions"]["deny"] = json!(new_deny);
         *changed = true;
-        ui::sub_success(&format!(
-            "Added {} to settings.json deny list",
-            missing.iter().map(|s| **s).collect::<Vec<_>>().join(", ")
-        ));
+        Some(msg)
+    } else {
+        None
     }
 }
 
@@ -1011,17 +1044,27 @@ fn remove_from_project_allow_lists() {
     for path in settings_files {
         let mut config = read_config(&path);
         let mut changed = false;
-        remove_from_allow_list_quiet(&mut config, &mut changed);
+        let _ = remove_from_allow_list_quiet(&mut config, &mut changed);
         if changed {
-            write_config(&path, &config);
             let display_path = path.strip_prefix(&home)
                 .map(|p| format!("~/{}", p.display()))
                 .unwrap_or_else(|_| path.display().to_string());
-            ui::sub_success(&format!(
-                "Removed {} from allow list in {}",
-                CLAUDE_CODE_STANDARD_TOOLS.join(", "),
-                display_path
-            ));
+            match write_config(&path, &config) {
+                Ok(()) => {
+                    ui::sub_success(&format!(
+                        "Removed {} from allow list in {}",
+                        CLAUDE_CODE_STANDARD_TOOLS.join(", "),
+                        display_path
+                    ));
+                }
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}",
+                        display_path,
+                        e
+                    ));
+                }
+            }
         }
     }
 }
@@ -1054,9 +1097,9 @@ fn find_claude_settings(dir: &std::path::Path, results: &mut Vec<PathBuf>, depth
     }
 }
 
-/// Like `remove_from_allow_list` but without printing success messages
-/// (used for bulk project scanning where we print our own message).
-fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) {
+/// Like `remove_from_allow_list` but without printing — returns a message
+/// string if changes were made (caller prints after confirming write).
+fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) -> Option<String> {
     let allow_list = config
         .pointer("/permissions/allow")
         .and_then(|v| v.as_array())
@@ -1067,11 +1110,13 @@ fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) {
         })
         .unwrap_or_default();
 
-    let has_tools = CLAUDE_CODE_STANDARD_TOOLS
+    let found: Vec<&str> = CLAUDE_CODE_STANDARD_TOOLS
         .iter()
-        .any(|tool| allow_list.iter().any(|a| a == *tool));
+        .filter(|tool| allow_list.iter().any(|a| a == **tool))
+        .copied()
+        .collect();
 
-    if has_tools {
+    if !found.is_empty() {
         let filtered: Vec<String> = allow_list
             .into_iter()
             .filter(|a| !CLAUDE_CODE_STANDARD_TOOLS.contains(&a.as_str()))
@@ -1089,6 +1134,9 @@ fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) {
             config["permissions"]["allow"] = json!(filtered);
         }
         *changed = true;
+        Some(format!("Removed {} from allow list", found.join(", ")))
+    } else {
+        None
     }
 }
 
@@ -1181,7 +1229,21 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
         let mut settings_changed = false;
         remove_from_deny_list(&mut settings, &mut settings_changed);
         if settings_changed {
-            write_config(&settings_path, &settings);
+            match write_config(&settings_path, &settings) {
+                Ok(()) => {
+                    ui::sub_success(&format!(
+                        "Removed {} from settings.json deny list",
+                        CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+                    ));
+                }
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}",
+                        settings_path.display(),
+                        e
+                    ));
+                }
+            }
         }
     }
 }
@@ -1220,10 +1282,6 @@ fn remove_from_deny_list(config: &mut Value, changed: &mut bool) {
             config["permissions"]["deny"] = json!(filtered);
         }
         *changed = true;
-        ui::sub_success(&format!(
-            "Removed {} from settings.json deny list",
-            CLAUDE_CODE_STANDARD_TOOLS.join(", ")
-        ));
     }
 }
 

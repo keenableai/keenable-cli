@@ -153,15 +153,15 @@ pub fn read_config(path: &PathBuf) -> Value {
     }
 }
 
-pub fn write_config(path: &PathBuf, config: &Value) {
+pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).ok();
+        fs::create_dir_all(dir)?;
     }
     if is_toml(path) {
         let toml_val: toml::Value = serde_json::from_value(config.clone()).unwrap_or(toml::Value::Table(Default::default()));
-        fs::write(path, toml::to_string_pretty(&toml_val).unwrap_or_default()).ok();
+        fs::write(path, toml::to_string_pretty(&toml_val).unwrap_or_default())
     } else {
-        fs::write(path, serde_json::to_string_pretty(config).unwrap_or_default()).ok();
+        fs::write(path, serde_json::to_string_pretty(config).unwrap_or_default())
     }
 }
 
