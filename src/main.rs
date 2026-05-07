@@ -163,14 +163,10 @@ enum Commands {
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Examples:\n  keenable search \"rust async\"                      YAML output (for agents)\n  keenable search \"rust async\" -p                   Pretty output (for humans)\n  keenable search \"rust async\" -n 5                 Limit to 5 results\n  keenable search \"rust async\" --api-key sk_abc123  Use a specific API key")]
+    #[command(after_help = "Examples:\n  keenable search \"rust async\"                      YAML output (for agents)\n  keenable search \"rust async\" -p                   Pretty output (for humans)\n  keenable search \"rust async\" --api-key sk_abc123  Use a specific API key")]
     Search {
         /// Search query
         query: String,
-
-        /// Number of results
-        #[arg(short = 'n', long = "count", default_value = "10")]
-        count: u32,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -301,8 +297,8 @@ async fn main() {
             let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
             commands::reset::reset(flags);
         }
-        Commands::Search { query, count, pretty, api_key } => {
-            commands::search::search(&query, count, pretty, api_key.as_deref()).await;
+        Commands::Search { query, pretty, api_key } => {
+            commands::search::search(&query, pretty, api_key.as_deref()).await;
         }
         Commands::Fetch { urls, pretty, api_key } => {
             commands::search::fetch(&urls, pretty, api_key.as_deref()).await;

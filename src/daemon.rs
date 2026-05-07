@@ -7,8 +7,6 @@ pub struct DaemonRequest {
     #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
-    pub count: Option<u32>,
-    #[serde(default)]
     pub urls: Option<Vec<String>>,
     #[serde(default)]
     pub body: Option<Value>,
@@ -159,11 +157,10 @@ mod platform {
                     Some(q) => q.as_str(),
                     None => return err_response("Missing query"),
                 };
-                let count = req.count.unwrap_or(10);
                 send_api(
                     client
                         .get(api_url("/v1/search"))
-                        .query(&[("query", query), ("count", &count.to_string())]),
+                        .query(&[("query", query)]),
                 )
                 .await
             }
