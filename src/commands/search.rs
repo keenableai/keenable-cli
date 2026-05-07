@@ -53,10 +53,9 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
     match req.command.as_str() {
         "search" => {
             let query = req.query.as_deref().unwrap_or("");
-            let count = req.count.unwrap_or(10);
             let resp = client
                 .get(api_url("/v1/search"))
-                .query(&[("query", query), ("count", &count.to_string())])
+                .query(&[("query", query)])
                 .send()
                 .await
                 .map_err(|e| e.to_string())?;
@@ -86,11 +85,10 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
     }
 }
 
-pub async fn search(query: &str, count: u32, human: bool, api_key: Option<&str>) {
+pub async fn search(query: &str, human: bool, api_key: Option<&str>) {
     let req = DaemonRequest {
         command: "search".to_string(),
         query: Some(query.to_string()),
-        count: Some(count),
         urls: None,
         body: None,
     };
@@ -139,7 +137,6 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
     let req = DaemonRequest {
         command: "fetch".to_string(),
         query: None,
-        count: None,
         urls: Some(urls.to_vec()),
         body: None,
     };
@@ -204,7 +201,6 @@ pub async fn feedback(query: &str, scores: &[String], text: Option<&str>, human:
     let req = DaemonRequest {
         command: "feedback".to_string(),
         query: None,
-        count: None,
         urls: None,
         body: Some(body),
     };
