@@ -193,17 +193,13 @@ enum Commands {
     },
 
     /// Submit search relevance feedback (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Score format: url=score (0=irrelevant, 5=perfect)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5\" \"https://unrelated.com=1\"\n  keenable feedback \"rust async\" \"https://tokio.rs=5\" -t \"great result\"")]
+    #[command(after_help = "Score format: url=score or url=score=comment (0=irrelevant, 5=perfect)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\"\n  keenable feedback \"rust async\" \"https://tokio.rs=5\"")]
     Feedback {
         /// Original search query
         query: String,
 
-        /// URL=score pairs (score 0-5)
+        /// URL=score=comment entries (score 0-5, comment optional)
         scores: Vec<String>,
-
-        /// Free-form feedback text
-        #[arg(short = 't', long = "text")]
-        text: Option<String>,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -306,11 +302,10 @@ async fn main() {
         Commands::Feedback {
             query,
             scores,
-            text,
             pretty,
             api_key,
         } => {
-            commands::search::feedback(&query, &scores, text.as_deref(), pretty, api_key.as_deref()).await;
+            commands::search::feedback(&query, &scores, pretty, api_key.as_deref()).await;
         }
         Commands::McpStdio { api_key, url } => {
             commands::mcp_stdio::run(api_key.as_deref(), url.as_deref()).await;
