@@ -171,8 +171,8 @@ mod platform {
                 };
                 send_api(
                     client
-                        .post(api_url("/v1/fetch"))
-                        .json(&serde_json::json!({"urls": urls})),
+                        .get(api_url("/v1/fetch"))
+                        .query(&urls.iter().map(|u| ("url", u)).collect::<Vec<_>>()),
                 )
                 .await
             }
@@ -261,12 +261,13 @@ mod platform {
             .map_err(|e| format!("Write error: {}", e))?;
 
         let mut lines = BufReader::new(reader).lines();
-        match lines.next_line().await {
-            Ok(Some(line)) => {
+        match tokio::time::timeout(Duration::from_secs(60), lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
                 serde_json::from_str(&line).map_err(|e| format!("Invalid daemon response: {}", e))
             }
-            Ok(None) => Err("Daemon closed connection".to_string()),
-            Err(e) => Err(format!("Read error: {}", e)),
+            Ok(Ok(None)) => Err("Daemon closed connection".to_string()),
+            Ok(Err(e)) => Err(format!("Read error: {}", e)),
+            Err(_) => Err("Daemon request timed out".to_string()),
         }
     }
 }

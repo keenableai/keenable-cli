@@ -8,7 +8,7 @@ pub fn api_key_client(api_key: &str) -> Client {
     headers.insert("X-API-Key", api_key.parse().unwrap());
     Client::builder()
         .default_headers(headers)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .unwrap()
 }
