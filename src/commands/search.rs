@@ -1,6 +1,5 @@
 use colored::Colorize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 use crate::api::{api_key_client, api_url, handle_response};
 use crate::config;
@@ -169,34 +168,46 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
     }
 }
 
-pub async fn feedback(query: &str, scores: &[String], text: Option<&str>, human: bool, api_key: Option<&str>) {
-    // Parse url=score pairs
-    let mut feedback_map: HashMap<String, u32> = HashMap::new();
-    for score_str in scores {
-        let parts: Vec<&str> = score_str.rsplitn(2, '=').collect();
-        if parts.len() != 2 {
-            ui::error(&format!("Invalid score format: {}. Expected url=score (0-5).", score_str));
+pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Option<&str>) {
+    // Parse url=score=comment entries
+    let mut relevance: Vec<Value> = Vec::new();
+    for entry in scores {
+        // Split as url=score or url=score=comment
+        // URL may contain '=' (e.g. query params), so split from the right
+        let parts: Vec<&str> = entry.rsplitn(3, '=').collect();
+        if parts.len() < 2 {
+            ui::error(&format!("Invalid format: {}. Expected url=score or url=score=comment.", entry));
             eprintln!();
             std::process::exit(1);
         }
-        let score: u32 = match parts[0].parse() {
+
+        let (score_str, url, comment) = if parts.len() == 3 {
+            // url=score=comment (rsplitn reverses: [comment, score, url])
+            (parts[1], parts[2], parts[0])
+        } else {
+            // url=score (rsplitn reverses: [score, url])
+            (parts[0], parts[1], "")
+        };
+
+        let score: u32 = match score_str.parse() {
             Ok(s) if s <= 5 => s,
             _ => {
-                ui::error(&format!("Invalid score in '{}'. Must be 0-5.", score_str));
+                ui::error(&format!("Invalid score in '{}'. Must be 0-5.", entry));
                 eprintln!();
                 std::process::exit(1);
             }
         };
-        feedback_map.insert(parts[1].to_string(), score);
+        relevance.push(json!({
+            "url": url,
+            "score": score,
+            "comment": comment,
+        }));
     }
 
-    let mut body = json!({
+    let body = json!({
         "query": query,
-        "feedback": feedback_map,
+        "relevance": relevance,
     });
-    if let Some(t) = text {
-        body["feedback_text"] = json!(t);
-    }
 
     let req = DaemonRequest {
         command: "feedback".to_string(),
