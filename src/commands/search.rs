@@ -63,8 +63,8 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         "fetch" => {
             let urls = req.urls.as_ref().ok_or("Missing urls")?;
             let resp = client
-                .post(api_url("/v1/fetch"))
-                .json(&json!({"urls": urls}))
+                .get(api_url("/v1/fetch"))
+                .query(&urls.iter().map(|u| ("url", u)).collect::<Vec<_>>())
                 .send()
                 .await
                 .map_err(|e| e.to_string())?;
