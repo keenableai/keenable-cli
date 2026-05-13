@@ -93,7 +93,7 @@ keenable fetch url1 url2 -p             # Fetch multiple URLs, pretty output
 The CLI checks for updates automatically (once per hour). To update manually:
 
 ```bash
-brew upgrade keenable-cli               # Homebrew
+brew update && brew upgrade keenable-cli               # Homebrew
 # or re-run the installer script
 ```
 
