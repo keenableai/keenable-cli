@@ -163,10 +163,30 @@ enum Commands {
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Examples:\n  keenable search \"rust async\"                      YAML output (for agents)\n  keenable search \"rust async\" -p                   Pretty output (for humans)\n  keenable search \"rust async\" --api-key sk_abc123  Use a specific API key")]
+    #[command(after_help = "Examples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key sk_abc123                Use a specific API key")]
     Search {
         /// Search query
         query: String,
+
+        /// Restrict results to a specific site (e.g. "docs.rs")
+        #[arg(long)]
+        site: Option<String>,
+
+        /// Filter to pages acquired/indexed after this date (YYYY-MM-DD)
+        #[arg(long)]
+        acquired_after: Option<String>,
+
+        /// Filter to pages acquired/indexed before this date (YYYY-MM-DD)
+        #[arg(long)]
+        acquired_before: Option<String>,
+
+        /// Filter to pages published after this date (YYYY-MM-DD)
+        #[arg(long)]
+        published_after: Option<String>,
+
+        /// Filter to pages published before this date (YYYY-MM-DD)
+        #[arg(long)]
+        published_before: Option<String>,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -293,8 +313,11 @@ async fn main() {
             let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
             commands::reset::reset(flags);
         }
-        Commands::Search { query, pretty, api_key } => {
-            commands::search::search(&query, pretty, api_key.as_deref()).await;
+        Commands::Search { query, site, acquired_after, acquired_before, published_after, published_before, pretty, api_key } => {
+            let filters = commands::search::SearchFilters {
+                site, acquired_after, acquired_before, published_after, published_before,
+            };
+            commands::search::search(&query, filters, pretty, api_key.as_deref()).await;
         }
         Commands::Fetch { urls, pretty, api_key } => {
             commands::search::fetch(&urls, pretty, api_key.as_deref()).await;

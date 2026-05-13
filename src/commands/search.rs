@@ -6,6 +6,26 @@ use crate::config;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
+pub struct SearchFilters {
+    pub site: Option<String>,
+    pub acquired_after: Option<String>,
+    pub acquired_before: Option<String>,
+    pub published_after: Option<String>,
+    pub published_before: Option<String>,
+}
+
+impl SearchFilters {
+    fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        if let Some(v) = &self.site { map.insert("site".into(), json!(v)); }
+        if let Some(v) = &self.acquired_after { map.insert("acquired_after".into(), json!(v)); }
+        if let Some(v) = &self.acquired_before { map.insert("acquired_before".into(), json!(v)); }
+        if let Some(v) = &self.published_after { map.insert("published_after".into(), json!(v)); }
+        if let Some(v) = &self.published_before { map.insert("published_before".into(), json!(v)); }
+        Value::Object(map)
+    }
+}
+
 fn resolve_api_key(override_key: Option<&str>) -> String {
     if let Some(key) = override_key {
         return key.to_string();
@@ -51,10 +71,10 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
 
     match req.command.as_str() {
         "search" => {
-            let query = req.query.as_deref().unwrap_or("");
+            let body = req.body.as_ref().ok_or("Missing body")?;
             let resp = client
-                .get(api_url("/v1/search"))
-                .query(&[("query", query)])
+                .post(api_url("/v1/search"))
+                .json(body)
                 .send()
                 .await
                 .map_err(|e| e.to_string())?;
@@ -84,12 +104,20 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
     }
 }
 
-pub async fn search(query: &str, human: bool, api_key: Option<&str>) {
+pub async fn search(query: &str, filters: SearchFilters, human: bool, api_key: Option<&str>) {
+    let mut body = json!({ "query": query });
+    // Merge filter fields into body
+    if let Value::Object(filter_map) = filters.to_json() {
+        if let Value::Object(ref mut body_map) = body {
+            body_map.extend(filter_map);
+        }
+    }
+
     let req = DaemonRequest {
         command: "search".to_string(),
         query: Some(query.to_string()),
         urls: None,
-        body: None,
+        body: Some(body),
     };
 
     match execute(&req, api_key).await {
@@ -107,12 +135,20 @@ pub async fn search(query: &str, human: bool, api_key: Option<&str>) {
                         let url = result["url"].as_str().unwrap_or("");
                         let description = result["description"].as_str().unwrap_or("");
                         let desc_truncated: String = description.chars().take(200).collect();
+                        let published = result["published_at"].as_str().unwrap_or("");
+                        let acquired = result["acquired_at"].as_str().unwrap_or("");
 
                         let num = format!("{:>2}.", i + 1).dimmed();
                         eprintln!("   {} {}", num, title.bold());
                         eprintln!("      {}", url.cyan());
                         if !desc_truncated.is_empty() {
                             eprintln!("      {}", desc_truncated.dimmed());
+                        }
+                        if !published.is_empty() || !acquired.is_empty() {
+                            let mut dates = Vec::new();
+                            if !published.is_empty() { dates.push(format!("published: {}", published)); }
+                            if !acquired.is_empty() { dates.push(format!("acquired: {}", acquired)); }
+                            eprintln!("      {}", dates.join("  ").dimmed());
                         }
                         eprintln!();
                     }
