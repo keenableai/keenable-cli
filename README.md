@@ -73,9 +73,12 @@ keenable reset-webql --all              # Remove WebQL from all clients
 ### Search
 
 ```bash
-keenable search "query"                 # YAML output (for agents)
-keenable search "query" -p              # Pretty output (for humans)
-keenable search "query" --api-key KEY   # Use a specific API key
+keenable search "query"                                    # YAML output (for agents)
+keenable search "query" -p                                 # Pretty output (for humans)
+keenable search "AI news" --site techcrunch.com            # Restrict to site
+keenable search "query" --published-after 2026-01-01       # Date filter
+keenable search "query" --acquired-before 2026-05-01       # Date filter
+keenable search "query" --api-key KEY                      # Use a specific API key
 ```
 
 ### Fetch
