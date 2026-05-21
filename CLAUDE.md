@@ -47,7 +47,7 @@ Use `--api-key <KEY>` to override the stored key for one-off calls.
 ```bash
 keenable search "query"                        # YAML output (for agents)
 keenable search "query" -p                     # Pretty output (for humans)
-keenable search "query" --api-key sk_abc123    # Use specific API key
+keenable search "query" --api-key keen_***_*****    # Use specific API key
 ```
 
 Management commands (`login`, `logout`, `configure-mcp`, `keys-create`) always output human-readable text.

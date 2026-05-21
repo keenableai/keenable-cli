@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
     name = "keenable",
     about = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web",
     version,
-    after_help = "Get started:\n  keenable search \"query\" --mode pro   Search the web (works without login)\n  keenable search \"query\" -p           Same, but pretty-printed for humans\n  keenable login                       Authenticate for higher rate limits\n  keenable configure-mcp --all         Configure Keenable MCP in all detected clients\n  keenable config                      View CLI configuration\n  keenable config set default_search_mode pro   Set default search mode"
+    after_help = "Get started:\n  keenable search \"query\" --mode pro       Search the web (works without login)\n  keenable search \"query\" --mode pro -p    Same, but pretty-printed for humans\n  keenable login                           Authenticate (agent-friendly device flow)\n  keenable login --api-key keen_***_*****  Save API key directly\n  keenable configure-mcp --all             Configure Keenable MCP in all detected clients"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -44,7 +44,7 @@ enum ConfigAction {
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
-    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, skips browser login and saves the key directly.\nUseful for CI, servers, or agent machines.\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                         Interactive browser login\n  keenable login --api-key sk_abc123     Save API key directly (no browser)\n  keenable login --api-key $KEENABLE_API_KEY")]
+    #[command(after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY")]
     Login {
         /// API key to save directly (skips browser login)
         #[arg(long = "api-key")]
@@ -191,7 +191,7 @@ enum Commands {
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode standard   Fast results (default)\n  --mode pro        Higher quality, slower\n\nSet a default: keenable config set default_search_mode pro\nForce a mode:  keenable config set forced_search_mode standard\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key sk_abc123                Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode standard   Fast results (default)\n  --mode pro        Higher quality, slower\n\nSet a default: keenable config set default_search_mode pro\nForce a mode:  keenable config set forced_search_mode standard\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
     Search {
         /// Search query
         query: String,
@@ -230,7 +230,7 @@ enum Commands {
     },
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://a.com https://b.com                 Multiple URLs\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key sk_abc123     Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://a.com https://b.com                 Multiple URLs\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key")]
     Fetch {
         /// URLs to fetch
         urls: Vec<String>,
