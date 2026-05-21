@@ -1,7 +1,7 @@
 use colored::Colorize;
 use serde_json::{json, Value};
 
-use crate::api::{api_key_client, api_url, handle_response};
+use crate::api::{api_key_client, api_url, bare_client, handle_response, ApiError};
 use crate::config;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
@@ -26,21 +26,19 @@ impl SearchFilters {
     }
 }
 
-fn resolve_api_key(override_key: Option<&str>) -> String {
+/// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
+fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
     if let Some(key) = override_key {
-        return key.to_string();
+        return Some(key.to_string());
     }
-    match config::get_api_key() {
-        Some(key) => key,
-        None => {
-            ui::error(&format!(
-                "No API key found. Run {} or {} first.",
-                "keenable login".cyan(),
-                "keenable configure --api-key <KEY>".cyan()
-            ));
-            eprintln!();
-            std::process::exit(1);
-        }
+    config::get_api_key()
+}
+
+fn endpoint(path: &str, authenticated: bool) -> String {
+    if authenticated {
+        api_url(path)
+    } else {
+        api_url(&format!("{}/public", path))
     }
 }
 
@@ -53,13 +51,13 @@ fn print_yaml(data: &Value) {
 
 /// Execute a request. When an API key override is provided, go direct (skip daemon).
 /// Otherwise try daemon first, fall back to direct HTTP.
-async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, String> {
+async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, ApiError> {
     // If no override, try daemon first
     if api_key_override.is_none() {
         if daemon::ensure_daemon().is_ok() {
             match daemon::daemon_request(req).await {
                 Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
-                Ok(resp) => return Err(resp.error.unwrap_or("Unknown error".to_string())),
+                Ok(resp) => return Err(daemon_response_to_api_error(resp)),
                 Err(_) => {} // Fall through to direct
             }
         }
@@ -67,45 +65,148 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
 
     // Direct HTTP
     let api_key = resolve_api_key(api_key_override);
-    let client = api_key_client(&api_key);
+    let authenticated = api_key.is_some();
+    let client = match &api_key {
+        Some(key) => api_key_client(key),
+        None => bare_client(),
+    };
+
+    let send_err = |e: reqwest::Error| ApiError {
+        status: 0,
+        error: "Request failed".into(),
+        message: Some(e.to_string()),
+        retry_after: None,
+    };
+    let missing = |field: &str| ApiError {
+        status: 0,
+        error: format!("Missing {}", field),
+        message: None,
+        retry_after: None,
+    };
 
     match req.command.as_str() {
         "search" => {
-            let body = req.body.as_ref().ok_or("Missing body")?;
+            let body = req.body.as_ref().ok_or_else(|| missing("body"))?;
             let resp = client
-                .post(api_url("/v1/search"))
+                .post(endpoint("/v1/search", authenticated))
                 .json(body)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(send_err)?;
             handle_response(resp).await
         }
         "fetch" => {
-            let urls = req.urls.as_ref().ok_or("Missing urls")?;
+            let urls = req.urls.as_ref().ok_or_else(|| missing("urls"))?;
             let resp = client
-                .get(api_url("/v1/fetch"))
+                .get(endpoint("/v1/fetch", authenticated))
                 .query(&urls.iter().map(|u| ("url", u)).collect::<Vec<_>>())
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(send_err)?;
             handle_response(resp).await
         }
         "feedback" => {
-            let body = req.body.as_ref().ok_or("Missing body")?;
+            let body = req.body.as_ref().ok_or_else(|| missing("body"))?;
             let resp = client
-                .post(api_url("/v1/feedback"))
+                .post(endpoint("/v1/feedback", authenticated))
                 .json(body)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(send_err)?;
             handle_response(resp).await
         }
-        _ => Err(format!("Unknown command: {}", req.command)),
+        _ => Err(ApiError {
+            status: 0,
+            error: format!("Unknown command: {}", req.command),
+            message: None,
+            retry_after: None,
+        }),
     }
 }
 
-pub async fn search(query: &str, filters: SearchFilters, human: bool, api_key: Option<&str>) {
+/// Reconstruct an ApiError from a failed DaemonResponse.
+/// The daemon forwards the structured error value in `data`.
+fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
+    if let Some(data) = &resp.data {
+        // Daemon forwards the structured error from handle_response
+        let error = data["error"].as_str().unwrap_or("Request failed").to_string();
+        let message = data["message"].as_str().map(|s| s.to_string());
+        let retry_after = data["retry_after"].as_u64();
+        let status = data["status"].as_u64().unwrap_or(0) as u16;
+        return ApiError { status, error, message, retry_after };
+    }
+    // Fallback: use the plain error string
+    ApiError {
+        status: 0,
+        error: resp.error.unwrap_or("Unknown error".to_string()),
+        message: None,
+        retry_after: None,
+    }
+}
+
+/// Display an ApiError according to output mode (human vs YAML).
+fn handle_api_error(err: ApiError, human: bool) -> ! {
+    if human {
+        ui::error(&err.display());
+        if err.is_auth_error() {
+            ui::hint(&format!("Run {} to authenticate.", "keenable login".cyan()));
+        } else if err.is_rate_limit() {
+            if let Some(secs) = err.retry_after {
+                ui::hint(&format!("Retry after {}s.", secs));
+            }
+            ui::hint(&format!(
+                "Run {} to authenticate and increase your limits.",
+                "keenable login".cyan()
+            ));
+        }
+        eprintln!();
+    } else {
+        // YAML error output for agents
+        let mut val = err.to_yaml_value();
+        if err.is_rate_limit() || err.is_auth_error() {
+            val["hint"] =
+                Value::String("Run `keenable login` to authenticate and increase your limits.".into());
+        }
+        print_yaml(&val);
+    }
+    std::process::exit(1);
+}
+
+/// Resolve the effective search mode.
+/// Priority: forced_search_mode config > --mode flag > default_search_mode config > none.
+fn resolve_mode(flag: Option<&str>) -> Option<String> {
+    let cfg = config::get_config();
+
+    // forced_search_mode always wins
+    if let Some(forced) = cfg["forced_search_mode"].as_str() {
+        return Some(forced.to_string());
+    }
+
+    // --mode flag
+    if let Some(m) = flag {
+        return Some(m.to_string());
+    }
+
+    // default_search_mode as fallback
+    cfg["default_search_mode"].as_str().map(|s| s.to_string())
+}
+
+pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
+    // Validate --mode flag if provided
+    if let Some(m) = mode {
+        if m != "standard" && m != "pro" {
+            ui::error(&format!("Invalid mode \"{}\". Must be \"standard\" or \"pro\".", m));
+            eprintln!();
+            std::process::exit(1);
+        }
+    }
+
+    let effective_mode = resolve_mode(mode);
+
     let mut body = json!({ "query": query });
+    if let Some(m) = &effective_mode {
+        body["mode"] = json!(m);
+    }
     // Merge filter fields into body
     if let Value::Object(filter_map) = filters.to_json() {
         if let Value::Object(ref mut body_map) = body {
@@ -160,11 +261,7 @@ pub async fn search(query: &str, filters: SearchFilters, human: bool, api_key: O
             }
             print_yaml(&data);
         }
-        Err(e) => {
-            ui::error(&e);
-            eprintln!();
-            std::process::exit(1);
-        }
+        Err(e) => handle_api_error(e, human),
     }
 }
 
@@ -196,11 +293,7 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
             }
             print_yaml(&data);
         }
-        Err(e) => {
-            ui::error(&e);
-            eprintln!();
-            std::process::exit(1);
-        }
+        Err(e) => handle_api_error(e, human),
     }
 }
 
@@ -262,10 +355,6 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
             }
             print_yaml(&json!({"status": "ok", "message": "Feedback submitted", "data": data}));
         }
-        Err(e) => {
-            ui::error(&e);
-            eprintln!();
-            std::process::exit(1);
-        }
+        Err(e) => handle_api_error(e, human),
     }
 }

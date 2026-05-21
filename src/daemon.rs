@@ -35,7 +35,7 @@ mod platform {
     use tokio::sync::Mutex;
     use tokio::time::Instant;
 
-    use crate::api::{api_key_client, api_url, handle_response};
+    use crate::api::{api_key_client, api_url, bare_client, handle_response};
     use crate::config;
 
     const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
@@ -53,13 +53,8 @@ mod platform {
     }
 
     pub async fn run_daemon() {
-        let api_key = match config::get_api_key() {
-            Some(key) => key,
-            None => {
-                eprintln!("Daemon: no API key configured");
-                std::process::exit(1);
-            }
-        };
+        let api_key = config::get_api_key();
+        let authenticated = api_key.is_some();
 
         let sock = socket_path();
 
@@ -78,7 +73,11 @@ mod platform {
         // Write PID file
         fs::write(pid_path(), std::process::id().to_string()).ok();
 
-        let client = Arc::new(api_key_client(&api_key));
+        let client = Arc::new(match &api_key {
+            Some(key) => api_key_client(key),
+            None => bare_client(),
+        });
+        let authenticated = Arc::new(authenticated);
         let last_activity = Arc::new(Mutex::new(Instant::now()));
 
         // Spawn idle timeout watcher
@@ -102,6 +101,7 @@ mod platform {
                 Ok((stream, _)) => {
                     *last_activity.lock().await = Instant::now();
                     let client = client.clone();
+                    let authenticated = authenticated.clone();
                     let last_activity = last_activity.clone();
                     tokio::spawn(async move {
                         let (reader, mut writer) = stream.into_split();
@@ -111,7 +111,7 @@ mod platform {
                             *last_activity.lock().await = Instant::now();
 
                             let response = match serde_json::from_str::<DaemonRequest>(&line) {
-                                Ok(req) => handle_request(&client, req).await,
+                                Ok(req) => handle_request(&client, *authenticated, req).await,
                                 Err(e) => DaemonResponse {
                                     ok: false,
                                     data: None,
@@ -140,7 +140,16 @@ mod platform {
         match request.send().await {
             Ok(r) => match handle_response(r).await {
                 Ok(data) => DaemonResponse { ok: true, data: Some(data), error: None },
-                Err(e) => DaemonResponse { ok: false, data: None, error: Some(e) },
+                Err(api_err) => {
+                    // Forward the structured error so the client can reconstruct ApiError
+                    let mut data = api_err.to_yaml_value();
+                    data["status"] = serde_json::json!(api_err.status);
+                    DaemonResponse {
+                        ok: false,
+                        data: Some(data),
+                        error: Some(api_err.display()),
+                    }
+                }
             },
             Err(e) => DaemonResponse { ok: false, data: None, error: Some(e.to_string()) },
         }
@@ -150,17 +159,23 @@ mod platform {
         DaemonResponse { ok: false, data: None, error: Some(msg.to_string()) }
     }
 
-    async fn handle_request(client: &reqwest::Client, req: DaemonRequest) -> DaemonResponse {
+    fn endpoint(path: &str, authenticated: bool) -> String {
+        if authenticated {
+            api_url(path)
+        } else {
+            api_url(&format!("{}/public", path))
+        }
+    }
+
+    async fn handle_request(client: &reqwest::Client, authenticated: bool, req: DaemonRequest) -> DaemonResponse {
         match req.command.as_str() {
             "search" => {
-                let query = match &req.query {
-                    Some(q) => q.as_str(),
-                    None => return err_response("Missing query"),
+                let body = match &req.body {
+                    Some(b) => b.clone(),
+                    None => return err_response("Missing body"),
                 };
                 send_api(
-                    client
-                        .get(api_url("/v1/search"))
-                        .query(&[("query", query)]),
+                    client.post(endpoint("/v1/search", authenticated)).json(&body),
                 )
                 .await
             }
@@ -171,7 +186,7 @@ mod platform {
                 };
                 send_api(
                     client
-                        .get(api_url("/v1/fetch"))
+                        .get(endpoint("/v1/fetch", authenticated))
                         .query(&urls.iter().map(|u| ("url", u)).collect::<Vec<_>>()),
                 )
                 .await
@@ -182,7 +197,7 @@ mod platform {
                     None => return err_response("Missing body"),
                 };
                 send_api(
-                    client.post(api_url("/v1/feedback")).json(&body),
+                    client.post(endpoint("/v1/feedback", authenticated)).json(&body),
                 )
                 .await
             }
@@ -192,6 +207,22 @@ mod platform {
     }
 
     // ── Client side: connect to daemon ──────────────────────────────────────
+
+    /// Kill the running daemon (if any) and clean up socket/PID files.
+    /// Called after login/logout so the daemon restarts with the new auth state.
+    pub fn kill_daemon() {
+        if let Ok(pid_str) = fs::read_to_string(pid_path()) {
+            let pid = pid_str.trim();
+            std::process::Command::new("kill")
+                .arg(pid)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .ok();
+        }
+        fs::remove_file(socket_path()).ok();
+        fs::remove_file(pid_path()).ok();
+    }
 
     pub fn is_daemon_running() -> bool {
         let sock = socket_path();
@@ -282,6 +313,8 @@ mod platform {
         eprintln!("Daemon is not supported on Windows");
         std::process::exit(1);
     }
+
+    pub fn kill_daemon() {}
 
     pub fn ensure_daemon() -> Result<(), String> {
         Err("Daemon is not supported on Windows".to_string())

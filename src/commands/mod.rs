@@ -1,3 +1,4 @@
+pub mod config_cmd;
 pub mod ide;
 pub mod login;
 pub mod mcp_common;

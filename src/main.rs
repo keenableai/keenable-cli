@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
     name = "keenable",
     about = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web",
     version,
-    after_help = "Get started:\n  keenable login                       Authenticate with your Keenable account\n  keenable login --api-key sk_abc123   Save API key directly (no browser)\n  keenable configure-mcp               See which clients are configured\n  keenable configure-mcp --all         Configure Keenable MCP in all detected clients\n  keenable search \"query\"              Search the web (YAML output for agents)\n  keenable search \"query\" -p           Same, but pretty-printed for humans"
+    after_help = "Get started:\n  keenable search \"query\" --mode pro       Search the web (works without login)\n  keenable search \"query\" --mode pro -p    Same, but pretty-printed for humans\n  keenable login                           Authenticate (agent-friendly device flow)\n  keenable login --api-key keen_***_*****  Save API key directly\n  keenable configure-mcp --all             Configure Keenable MCP in all detected clients"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,9 +21,30 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ConfigAction {
+    /// Set a config value
+    Set {
+        /// Config key
+        key: String,
+        /// Config value
+        value: String,
+    },
+    /// Get a config value
+    Get {
+        /// Config key
+        key: String,
+    },
+    /// Remove a config value
+    Unset {
+        /// Config key
+        key: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
-    #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, skips browser login and saves the key directly.\nUseful for CI, servers, or agent machines.\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                         Interactive browser login\n  keenable login --api-key sk_abc123     Save API key directly (no browser)\n  keenable login --api-key $KEENABLE_API_KEY")]
+    #[command(after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY")]
     Login {
         /// API key to save directly (skips browser login)
         #[arg(long = "api-key")]
@@ -162,11 +183,22 @@ enum Commands {
         opencode: bool,
     },
 
+    /// View or modify CLI configuration
+    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set default_search_mode pro\n  keenable config set forced_search_mode standard\n\nGet a single value:\n  keenable config get default_search_mode\n\nRemove a value:\n  keenable config unset forced_search_mode\n\nSupported keys:\n  default_search_mode   Search mode when --mode is not specified (standard, pro)\n  forced_search_mode    Always use this mode, ignoring --mode (standard, pro)")]
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Examples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key sk_abc123                Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode standard   Fast results (default)\n  --mode pro        Higher quality, slower\n\nSet a default: keenable config set default_search_mode pro\nForce a mode:  keenable config set forced_search_mode standard\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
     Search {
         /// Search query
         query: String,
+
+        /// Search mode: "standard" (fast) or "pro" (higher quality)
+        #[arg(long)]
+        mode: Option<String>,
 
         /// Restrict results to a specific site (e.g. "docs.rs")
         #[arg(long)]
@@ -198,7 +230,7 @@ enum Commands {
     },
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Examples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://a.com https://b.com                 Multiple URLs\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key sk_abc123     Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://a.com https://b.com                 Multiple URLs\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key")]
     Fetch {
         /// URLs to fetch
         urls: Vec<String>,
@@ -213,7 +245,7 @@ enum Commands {
     },
 
     /// Submit search relevance feedback (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Score format: url=score or url=score=comment (0=irrelevant, 5=perfect)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\"\n  keenable feedback \"rust async\" \"https://tokio.rs=5\"")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nScore format: url=score or url=score=comment (0=irrelevant, 5=perfect)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\"\n  keenable feedback \"rust async\" \"https://tokio.rs=5\"")]
     Feedback {
         /// Original search query
         query: String,
@@ -313,11 +345,19 @@ async fn main() {
             let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
             commands::reset::reset(flags);
         }
-        Commands::Search { query, site, acquired_after, acquired_before, published_after, published_before, pretty, api_key } => {
+        Commands::Config { action } => {
+            match action {
+                None => commands::config_cmd::config_view(),
+                Some(ConfigAction::Set { key, value }) => commands::config_cmd::config_set(&key, &value),
+                Some(ConfigAction::Get { key }) => commands::config_cmd::config_get(&key),
+                Some(ConfigAction::Unset { key }) => commands::config_cmd::config_unset(&key),
+            }
+        }
+        Commands::Search { query, mode, site, acquired_after, acquired_before, published_after, published_before, pretty, api_key } => {
             let filters = commands::search::SearchFilters {
                 site, acquired_after, acquired_before, published_after, published_before,
             };
-            commands::search::search(&query, filters, pretty, api_key.as_deref()).await;
+            commands::search::search(&query, mode.as_deref(), filters, pretty, api_key.as_deref()).await;
         }
         Commands::Fetch { urls, pretty, api_key } => {
             commands::search::fetch(&urls, pretty, api_key.as_deref()).await;

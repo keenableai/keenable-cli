@@ -48,6 +48,14 @@ pub fn set_config_value(key: &str, value: Value) {
     write_json(&config_file(), &config);
 }
 
+pub fn remove_config_value(key: &str) {
+    let mut config = get_config();
+    if let Value::Object(ref mut map) = config {
+        map.remove(key);
+    }
+    write_json(&config_file(), &config);
+}
+
 pub fn get_api_key() -> Option<String> {
     get_config()["api_key"].as_str().map(|s| s.to_string())
 }

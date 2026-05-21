@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::api::api_url;
 use crate::config;
 use crate::constants::*;
+use crate::daemon;
 
 fn machine_name() -> String {
     std::process::Command::new("hostname")
@@ -121,6 +122,7 @@ pub async fn login(api_key: Option<&str>) {
     // Fast path: --api-key provided, skip browser login
     if let Some(key) = api_key {
         config::set_api_key(key);
+        daemon::kill_daemon();
         ui::success("API key saved");
         ui::hint("You can now use: keenable search \"query\"");
         eprintln!();
@@ -158,8 +160,9 @@ pub async fn login(api_key: Option<&str>) {
     };
     ui::step_done_replace("Approved");
 
-    // Step 4: Save API key
+    // Step 4: Save API key and restart daemon with new credentials
     config::set_api_key(&api_key);
+    daemon::kill_daemon();
     ui::success("Logged in");
 
     ui::hint(&format!("Next: {}", "keenable configure-mcp".cyan()));
@@ -173,6 +176,7 @@ pub fn logout() {
 
     config::clear_credentials();
     config::set_config_value("api_key", serde_json::Value::Null);
+    daemon::kill_daemon();
 
     ui::step_done("Cleared credentials");
     ui::step_done("Removed API key");
