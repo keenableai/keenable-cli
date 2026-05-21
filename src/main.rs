@@ -21,6 +21,27 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ConfigAction {
+    /// Set a config value
+    Set {
+        /// Config key
+        key: String,
+        /// Config value
+        value: String,
+    },
+    /// Get a config value
+    Get {
+        /// Config key
+        key: String,
+    },
+    /// Remove a config value
+    Unset {
+        /// Config key
+        key: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
     #[command(after_help = "Authenticates by showing a code to approve in your browser.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, skips browser login and saves the key directly.\nUseful for CI, servers, or agent machines.\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                         Interactive browser login\n  keenable login --api-key sk_abc123     Save API key directly (no browser)\n  keenable login --api-key $KEENABLE_API_KEY")]
@@ -162,11 +183,22 @@ enum Commands {
         opencode: bool,
     },
 
+    /// View or modify CLI configuration
+    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set default_search_mode pro\n  keenable config set forced_search_mode standard\n\nGet a single value:\n  keenable config get default_search_mode\n\nRemove a value:\n  keenable config unset forced_search_mode\n\nSupported keys:\n  default_search_mode   Search mode when --mode is not specified (standard, pro)\n  forced_search_mode    Always use this mode, ignoring --mode (standard, pro)")]
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Examples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key sk_abc123                Use a specific API key")]
+    #[command(after_help = "Examples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key sk_abc123                Use a specific API key")]
     Search {
         /// Search query
         query: String,
+
+        /// Search mode: "standard" (fast) or "pro" (higher quality)
+        #[arg(long)]
+        mode: Option<String>,
 
         /// Restrict results to a specific site (e.g. "docs.rs")
         #[arg(long)]
@@ -313,11 +345,19 @@ async fn main() {
             let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
             commands::reset::reset(flags);
         }
-        Commands::Search { query, site, acquired_after, acquired_before, published_after, published_before, pretty, api_key } => {
+        Commands::Config { action } => {
+            match action {
+                None => commands::config_cmd::config_view(),
+                Some(ConfigAction::Set { key, value }) => commands::config_cmd::config_set(&key, &value),
+                Some(ConfigAction::Get { key }) => commands::config_cmd::config_get(&key),
+                Some(ConfigAction::Unset { key }) => commands::config_cmd::config_unset(&key),
+            }
+        }
+        Commands::Search { query, mode, site, acquired_after, acquired_before, published_after, published_before, pretty, api_key } => {
             let filters = commands::search::SearchFilters {
                 site, acquired_after, acquired_before, published_after, published_before,
             };
-            commands::search::search(&query, filters, pretty, api_key.as_deref()).await;
+            commands::search::search(&query, mode.as_deref(), filters, pretty, api_key.as_deref()).await;
         }
         Commands::Fetch { urls, pretty, api_key } => {
             commands::search::fetch(&urls, pretty, api_key.as_deref()).await;
