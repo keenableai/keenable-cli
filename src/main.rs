@@ -191,7 +191,7 @@ enum Commands {
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode standard   Fast results (default)\n  --mode pro        Higher quality, slower\n\nSet a default: keenable config set default_search_mode pro\nForce a mode:  keenable config set forced_search_mode standard\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode standard   Fast results (default)\n  --mode pro        Higher quality, slower\n\nSet a default: keenable config set default_search_mode pro\nForce a mode:  keenable config set forced_search_mode standard\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
     Search {
         /// Search query
         query: String,
@@ -204,19 +204,19 @@ enum Commands {
         #[arg(long)]
         site: Option<String>,
 
-        /// Filter to pages acquired/indexed after this date (YYYY-MM-DD)
+        /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
         #[arg(long)]
         acquired_after: Option<String>,
 
-        /// Filter to pages acquired/indexed before this date (YYYY-MM-DD)
+        /// Filter to pages acquired/indexed before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
         #[arg(long)]
         acquired_before: Option<String>,
 
-        /// Filter to pages published after this date (YYYY-MM-DD)
+        /// Filter to pages published after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
         #[arg(long)]
         published_after: Option<String>,
 
-        /// Filter to pages published before this date (YYYY-MM-DD)
+        /// Filter to pages published before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
         #[arg(long)]
         published_before: Option<String>,
 
