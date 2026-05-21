@@ -16,15 +16,15 @@ src/
   ui.rs                # Shared terminal UI helpers (header, step_done, success, error, hint)
   constants.rs         # API URLs, OAuth config, ports
   config.rs            # ~/.keenable/ config and credentials read/write
-  api.rs               # HTTP client factories (api_key_client, bearer_client)
+  api.rs               # HTTP client factories (api_key_client, bare_client), ApiError, response handling
   update.rs            # GitHub Releases version check (cached, non-blocking)
-  daemon.rs            # Background daemon for connection reuse
+  daemon.rs            # Background daemon for connection reuse (auth + unauth)
   commands/
     login.rs           # Device code login + --api-key direct save; also logout
+    config_cmd.rs      # CLI configuration (default_search_mode, forced_search_mode)
     ide.rs             # Shared IDE definitions and config helpers
     configure_mcp.rs   # Client detection, MCP configuration, interactive setup
     reset.rs           # Remove Keenable MCP and restore defaults
-    keys.rs            # API key create (requires login)
     search.rs          # search, fetch, feedback commands
 assets/
   login_success.html   # Styled OAuth callback success page
@@ -45,17 +45,47 @@ Use `-p` / `--pretty` flag for pretty-printed human-readable output.
 Use `--api-key <KEY>` to override the stored key for one-off calls.
 
 ```bash
-keenable search "query"                        # YAML output (for agents)
-keenable search "query" -p                     # Pretty output (for humans)
+keenable search "query" --mode pro             # YAML output (for agents)
+keenable search "query" --mode pro -p          # Pretty output (for humans)
 keenable search "query" --api-key keen_***_*****    # Use specific API key
 ```
 
-Management commands (`login`, `logout`, `configure-mcp`, `keys-create`) always output human-readable text.
+Management commands (`login`, `logout`, `configure-mcp`, `config`) always output human-readable text.
+
+### Search Modes
+
+The `search` command supports `--mode standard` (fast, default) and `--mode pro` (higher quality).
+
+Mode resolution order: `forced_search_mode` config > `--mode` flag > `default_search_mode` config > server default.
+
+### Config Command (`src/commands/config_cmd.rs`)
+
+`keenable config` manages CLI settings stored in `~/.keenable/config.json`.
+
+```bash
+keenable config                                     # View all settings
+keenable config set default_search_mode pro          # Set default search mode
+keenable config set forced_search_mode standard      # Force a mode (overrides --mode flag)
+keenable config get default_search_mode              # Get a single value
+keenable config unset forced_search_mode             # Remove a setting
+```
+
+Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`. Adding a new config key only requires adding an entry there.
+
+### Unauthenticated (Free Tier) Flow
+
+All tool commands (`search`, `fetch`, `feedback`) work without login. When no API key is configured:
+- Requests go to `/v1/{search,fetch,feedback}/public` endpoints (IP-based rate limits)
+- The daemon starts with a bare HTTP client (no `X-API-Key` header)
+- Rate limit errors include a hint to run `keenable login` for higher limits
 
 ### Daemon
 
 The CLI uses a background daemon (`~/.keenable/daemon.sock`) to reuse HTTP connections.
 Commands auto-start the daemon on first call. It auto-exits after 5 minutes of idle.
+
+The daemon works with or without an API key (authenticated vs public endpoints).
+It is automatically killed and restarted on `login` / `logout` so it picks up the new auth state.
 
 ### Terminal UI Design (`src/ui.rs`)
 
@@ -114,6 +144,10 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 - All human output to `stderr` via `eprintln!` or `ui::` helpers; machine output to `stdout` via `println!`
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
+- API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's `{error, message, retryAfter}` format
+- In YAML mode, errors are output as structured YAML to stdout (with `hint` field for auth/rate-limit errors)
+- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr
+- Auth errors (401, 400 auth failed) and rate limit errors (429) include a `keenable login` hint
 
 ### Help Text & Hints
 
@@ -203,10 +237,11 @@ Contains IDE definitions (`IDEDef`, `all_ides()`), config read/write helpers, an
 2. Add it to `src/commands/mod.rs`
 3. Add the clap variant in `src/main.rs` with `after_help` containing examples and hints
 4. If it's a tool command (agent-facing), default to YAML output and support `-p`/`--pretty`
-5. If it makes API calls, route through the daemon client (skipped when `--api-key` is passed directly)
+5. If it makes API calls, route through the daemon (supports both auth and unauth)
 6. Tool commands should accept `--api-key` for one-off use without stored config
-7. Use `ui::` helpers for all human output (see Terminal UI Design above)
-8. All human output to `stderr`; only machine-readable output (YAML/JSON) to `stdout`
+7. Tool commands should work without login (use public endpoints when no API key)
+8. Use `ui::` helpers for all human output (see Terminal UI Design above)
+9. All human output to `stderr`; only machine-readable output (YAML/JSON) to `stdout`
 
 ### Browser Callback Pages (`assets/`)
 
