@@ -165,41 +165,39 @@ pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error
     }
 }
 
-pub fn build_keenable_entry(ide: &IDEDef, api_key: &str) -> Value {
+pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
     let mcp_url = format!("{}/mcp", API_BASE_URL);
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
             transport_type,
         } => {
-            let mut entry = json!({
-                *url_key: mcp_url,
-                "headers": {
-                    "X-API-Key": api_key
-                }
-            });
+            let mut entry = json!({ *url_key: mcp_url });
+            if let Some(key) = api_key {
+                entry["headers"] = json!({ "X-API-Key": key });
+            }
             if let Some(transport) = transport_type {
                 entry["type"] = json!(*transport);
             }
             entry
         }
         McpEntryStyle::Stdio => {
+            let mut args = vec![json!("mcp-stdio")];
+            if let Some(key) = api_key {
+                args.push(json!("--api-key"));
+                args.push(json!(key));
+            }
             json!({
                 "command": "keenable",
-                "args": [
-                    "mcp-stdio",
-                    "--api-key",
-                    api_key
-                ]
+                "args": args
             })
         }
         McpEntryStyle::Toml => {
-            json!({
-                "url": mcp_url,
-                "http_headers": {
-                    "X-API-Key": api_key
-                }
-            })
+            let mut entry = json!({ "url": mcp_url });
+            if let Some(key) = api_key {
+                entry["http_headers"] = json!({ "X-API-Key": key });
+            }
+            entry
         }
     }
 }
@@ -256,43 +254,39 @@ pub fn is_webql_url(url: &str) -> bool {
 
 /// Build the `keenable-webql` MCP entry for a given IDE.
 /// Auth is via `X-API-Key` header (same as Keenable MCP).
-pub fn build_webql_entry(ide: &IDEDef, api_key: &str) -> Value {
+pub fn build_webql_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
     let mcp_url = format!("{}/mcp", WEBQL_BASE_URL);
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
             transport_type,
         } => {
-            let mut entry = json!({
-                *url_key: mcp_url,
-                "headers": {
-                    "X-API-Key": api_key
-                }
-            });
+            let mut entry = json!({ *url_key: mcp_url });
+            if let Some(key) = api_key {
+                entry["headers"] = json!({ "X-API-Key": key });
+            }
             if let Some(transport) = transport_type {
                 entry["type"] = json!(*transport);
             }
             entry
         }
         McpEntryStyle::Stdio => {
+            let mut args = vec![json!("mcp-stdio"), json!("--url"), json!(&mcp_url)];
+            if let Some(key) = api_key {
+                args.push(json!("--api-key"));
+                args.push(json!(key));
+            }
             json!({
                 "command": "keenable",
-                "args": [
-                    "mcp-stdio",
-                    "--url",
-                    &mcp_url,
-                    "--api-key",
-                    api_key
-                ]
+                "args": args
             })
         }
         McpEntryStyle::Toml => {
-            json!({
-                "url": mcp_url,
-                "http_headers": {
-                    "X-API-Key": api_key
-                }
-            })
+            let mut entry = json!({ "url": mcp_url });
+            if let Some(key) = api_key {
+                entry["http_headers"] = json!({ "X-API-Key": key });
+            }
+            entry
         }
     }
 }
