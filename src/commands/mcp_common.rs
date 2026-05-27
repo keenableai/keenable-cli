@@ -31,7 +31,7 @@ pub struct McpProduct {
     /// CLI command for reset (e.g. "reset", "reset-webql").
     pub reset_cmd: &'static str,
     /// Build the MCP entry JSON for this product.
-    pub build_entry: fn(&IDEDef, &str) -> Value,
+    pub build_entry: fn(&IDEDef, Option<&str>) -> Value,
     /// Extract the API key/token from an existing entry.
     pub extract_key: fn(&Value) -> Option<String>,
     /// Check if a URL belongs to this product.
@@ -95,6 +95,8 @@ pub fn webql_product() -> McpProduct {
 pub struct ProductStatus {
     pub has_entry: bool,
     pub wrong_api_key: bool,
+    /// Entry exists without API key but user now has one configured.
+    pub missing_api_key: bool,
     pub uses_legacy_npx: bool,
     pub uses_token_auth: bool,
     pub standard_tools_disabled: bool,
@@ -104,7 +106,7 @@ pub struct ProductStatus {
     pub conflicting_mcps: Vec<String>,
 }
 
-pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> ProductStatus {
+pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> ProductStatus {
     let config = read_config(&ide.config_path);
     let existing = config
         .pointer(&format!("/{}/{}", ide.servers_key, product.entry_name))
@@ -112,13 +114,18 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
 
     let has_entry = existing.is_some();
 
-    let wrong_api_key = if let Some(ref entry) = existing {
-        let existing_key = (product.extract_key)(entry);
-        let desired_key = Some(api_key.to_string());
-        existing_key.is_some() && existing_key != desired_key
-    } else {
-        false
-    };
+    let desired_key = api_key.map(|k| k.to_string());
+    let existing_key = existing.as_ref().and_then(|e| (product.extract_key)(e));
+
+    // wrong_api_key: both have keys but they differ
+    let wrong_api_key = existing_key.is_some()
+        && desired_key.is_some()
+        && existing_key != desired_key;
+
+    // missing_api_key: user has a key but the entry doesn't
+    let missing_api_key = has_entry
+        && existing_key.is_none()
+        && desired_key.is_some();
 
     let uses_legacy_npx = if product.check_legacy_npx {
         existing
@@ -245,6 +252,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
     ProductStatus {
         has_entry,
         wrong_api_key,
+        missing_api_key,
         uses_legacy_npx,
         uses_token_auth,
         standard_tools_disabled,
@@ -259,42 +267,38 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: &str) -> 
 pub async fn configure(product: &McpProduct, selected_flags: Vec<String>) {
     ui::header(&format!("keenable {}", product.configure_cmd));
 
-    // Pre-flight: validate API key
-    let api_key_result = match config::get_api_key() {
+    // Pre-flight: validate API key (optional — unauth flow works without one)
+    let api_key: Option<String> = match config::get_api_key() {
         Some(key) => {
             if validate_api_key(&key).await {
-                Ok(key)
+                Some(key)
             } else {
-                Err("API key is invalid or expired")
+                None // treat invalid key same as no key
             }
         }
-        None => Err("No API key configured"),
+        None => None,
     };
 
     ui::label("Keenable CLI");
-    match api_key_result {
-        Ok(ref _key) => {
+    match &api_key {
+        Some(_) => {
             ui::success("API key configured");
         }
-        Err(msg) => {
-            ui::error(msg);
+        None => {
+            ui::info("No API key — configuring for free tier (IP-based rate limits)");
             ui::sub_info(&format!(
-                "Run {} or {}",
-                "keenable login".cyan(),
-                "keenable login --api-key <KEY>".cyan()
+                "Run {} for higher limits",
+                "keenable login".cyan()
             ));
-            eprintln!();
-            std::process::exit(1);
         }
     }
-    let api_key = api_key_result.unwrap();
 
     let all = all_ides();
     let detected: Vec<&IDEDef> = all.iter().filter(|ide| is_detected(ide)).collect();
     let not_detected: Vec<&IDEDef> = all.iter().filter(|ide| !is_detected(ide)).collect();
 
     if selected_flags.is_empty() {
-        show_configure_status(product, &detected, &not_detected, &api_key);
+        show_configure_status(product, &detected, &not_detected, api_key.as_deref());
     } else {
         let is_all = selected_flags.contains(&"all".to_string());
 
@@ -331,7 +335,7 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>) {
 
         for ide in &targets {
             ui::label(ide.name);
-            configure_ide(product, ide, &api_key);
+            configure_ide(product, ide, api_key.as_deref());
             (product.show_recommendations)(ide);
         }
 
@@ -342,7 +346,7 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>) {
     eprintln!();
 }
 
-fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: &str) {
+fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
     let mut config = read_config(&ide.config_path);
     let mut config_changed = false;
 
@@ -403,12 +407,24 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: &str) {
         }
         Some(ref entry) => {
             let existing_key = (product.extract_key)(entry);
-            let desired_key = Some(api_key.to_string());
-            if existing_key != desired_key && existing_key.is_some() {
-                ui::sub_warning(&format!(
-                    "Updating API key in {} entry",
-                    product.display_name
-                ));
+            let desired_key = api_key.map(|k| k.to_string());
+            if existing_key != desired_key {
+                if existing_key.is_some() && desired_key.is_some() {
+                    ui::sub_warning(&format!(
+                        "Updating API key in {} entry",
+                        product.display_name
+                    ));
+                } else if existing_key.is_none() && desired_key.is_some() {
+                    ui::sub_warning(&format!(
+                        "Adding API key to {} entry",
+                        product.display_name
+                    ));
+                } else if existing_key.is_some() && desired_key.is_none() {
+                    ui::sub_warning(&format!(
+                        "Removing API key from {} entry (switching to free tier)",
+                        product.display_name
+                    ));
+                }
             }
             if product.check_legacy_npx && entry["command"].as_str() == Some("npx") {
                 ui::sub_warning("Replacing npx mcp-remote with built-in stdio bridge (no Node.js needed)");
@@ -615,7 +631,7 @@ fn show_configure_status(
     product: &McpProduct,
     detected: &[&IDEDef],
     not_detected: &[&IDEDef],
-    api_key: &str,
+    api_key: Option<&str>,
 ) {
     ui::label("Your Clients");
 
@@ -630,6 +646,7 @@ fn show_configure_status(
         let status = get_product_status(product, ide, api_key);
 
         let has_issues = status.wrong_api_key
+            || status.missing_api_key
             || status.uses_legacy_npx
             || status.uses_token_auth
             || !status.duplicate_entries.is_empty()
@@ -690,6 +707,9 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
     }
     if status.wrong_api_key {
         ui::sub_warning("Different API key configured");
+    }
+    if status.missing_api_key {
+        ui::sub_warning("Missing API key (configured for free tier)");
     }
     if !status.duplicate_entries.is_empty() {
         ui::sub_warning(&format!(
