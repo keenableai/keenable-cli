@@ -111,7 +111,7 @@ keenable reset-webql --all              # Remove WebQL from all clients
 The CLI checks for updates automatically (once per hour). To update manually:
 
 ```bash
-brew upgrade keenable-cli               # Homebrew
+brew update && brew upgrade keenable-cli               # Homebrew
 # or re-run the installer script
 ```
 
