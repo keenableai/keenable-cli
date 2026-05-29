@@ -5,6 +5,7 @@
 //! back to stdout.  Used by Claude Desktop which requires stdio-based
 //! MCP servers.
 
+use reqwest::header::HeaderMap;
 use reqwest::Client;
 use serde_json::Value;
 use std::process;
@@ -12,6 +13,9 @@ use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::config;
 use crate::constants::API_BASE_URL;
+
+/// Headers with this prefix are round-tripped between server and bridge.
+const MCP_HEADER_PREFIX: &str = "mcp-";
 
 pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
     let key = match api_key_override {
@@ -44,6 +48,9 @@ pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
     let mut reader = BufReader::new(stdin);
     let mut stdout = io::stdout();
     let mut line = String::new();
+
+    // Accumulated mcp-* headers from server responses, forwarded on each request.
+    let mut server_headers: HeaderMap = HeaderMap::new();
 
     loop {
         line.clear();
@@ -87,10 +94,21 @@ pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
         if let Some(ref key) = api_key {
             req = req.header("X-API-Key", key);
         }
+        // Forward all accumulated mcp-* headers from previous responses
+        for (name, value) in server_headers.iter() {
+            req = req.header(name.clone(), value.clone());
+        }
         let resp = req.json(&request).send().await;
 
         match resp {
             Ok(response) => {
+                // Capture all mcp-* headers from the response
+                for (name, value) in response.headers().iter() {
+                    if name.as_str().starts_with(MCP_HEADER_PREFIX) {
+                        server_headers.insert(name.clone(), value.clone());
+                    }
+                }
+
                 let content_type = response
                     .headers()
                     .get("content-type")
