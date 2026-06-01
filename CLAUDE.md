@@ -54,7 +54,7 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 
 ### Search Modes
 
-The `search` command supports `--mode standard` (fast, default) and `--mode pro` (higher quality).
+The `search` command supports `--mode realtime` (fast) and `--mode pro` (higher quality, default).
 
 Mode resolution order: `forced_search_mode` config > `--mode` flag > `default_search_mode` config > server default.
 
@@ -65,7 +65,7 @@ Mode resolution order: `forced_search_mode` config > `--mode` flag > `default_se
 ```bash
 keenable config                                     # View all settings
 keenable config set default_search_mode pro          # Set default search mode
-keenable config set forced_search_mode standard      # Force a mode (overrides --mode flag)
+keenable config set forced_search_mode realtime      # Force a mode (overrides --mode flag)
 keenable config get default_search_mode              # Get a single value
 keenable config unset forced_search_mode             # Remove a setting
 ```

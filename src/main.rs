@@ -184,19 +184,19 @@ enum Commands {
     },
 
     /// View or modify CLI configuration
-    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set default_search_mode pro\n  keenable config set forced_search_mode standard\n\nGet a single value:\n  keenable config get default_search_mode\n\nRemove a value:\n  keenable config unset forced_search_mode\n\nSupported keys:\n  default_search_mode   Search mode when --mode is not specified (standard, pro)\n  forced_search_mode    Always use this mode, ignoring --mode (standard, pro)")]
+    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set default_search_mode pro\n  keenable config set forced_search_mode realtime\n\nGet a single value:\n  keenable config get default_search_mode\n\nRemove a value:\n  keenable config unset forced_search_mode\n\nSupported keys:\n  default_search_mode   Search mode when --mode is not specified (realtime, pro)\n  forced_search_mode    Always use this mode, ignoring --mode (realtime, pro)")]
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode standard   Fast results (default)\n  --mode pro        Higher quality, slower\n\nSet a default: keenable config set default_search_mode pro\nForce a mode:  keenable config set forced_search_mode standard\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode realtime   Fast results\n  --mode pro        Higher quality (default)\n\nSet a default: keenable config set default_search_mode realtime\nForce a mode:  keenable config set forced_search_mode realtime\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
     Search {
         /// Search query
         query: String,
 
-        /// Search mode: "standard" (fast) or "pro" (higher quality)
+        /// Search mode: "realtime" (fast) or "pro" (higher quality, default)
         #[arg(long)]
         mode: Option<String>,
 

@@ -194,14 +194,17 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
 pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
     // Validate --mode flag if provided
     if let Some(m) = mode {
-        if m != "standard" && m != "pro" {
-            ui::error(&format!("Invalid mode \"{}\". Must be \"standard\" or \"pro\".", m));
+        if m != "realtime" && m != "standard" && m != "pro" {
+            ui::error(&format!("Invalid mode \"{}\". Must be \"realtime\" or \"pro\".", m));
             eprintln!();
             std::process::exit(1);
         }
     }
 
-    let effective_mode = resolve_mode(mode);
+    let effective_mode = resolve_mode(mode).map(|m| {
+        // Graceful fallback: "standard" → "realtime"
+        if m == "standard" { "realtime".to_string() } else { m }
+    });
 
     let mut body = json!({ "query": query });
     if let Some(m) = &effective_mode {
