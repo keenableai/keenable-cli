@@ -280,18 +280,15 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
         Ok(data) => {
             if human {
                 ui::header("keenable fetch");
-                if let Some(results) = data["results"].as_array() {
-                    for result in results {
-                        let url = result["url"].as_str().unwrap_or("");
-                        let content = result["content"].as_str().unwrap_or("");
-                        eprintln!("   {}", url.cyan().bold());
-                        eprintln!("   {}", "─".repeat(60).dimmed());
-                        for line in content.lines() {
-                            eprintln!("   {}", line);
-                        }
-                        eprintln!();
-                    }
+                let title = data["title"].as_str().unwrap_or("Untitled");
+                let url = data["url"].as_str().unwrap_or("");
+                let content = data["content"].as_str().unwrap_or("");
+                eprintln!("   {} {}", title.bold(), url.cyan());
+                eprintln!("   {}", "─".repeat(60).dimmed());
+                for line in content.lines() {
+                    eprintln!("   {}", line);
                 }
+                eprintln!();
                 return;
             }
             print_yaml(&data);
