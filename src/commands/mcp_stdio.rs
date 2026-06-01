@@ -52,6 +52,10 @@ pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
     // Accumulated mcp-* headers from server responses, forwarded on each request.
     let mut server_headers: HeaderMap = HeaderMap::new();
 
+    // Store the initialize handshake so we can replay it on session expiry.
+    let mut init_request: Option<Value> = None;
+    let mut initialized_notification: Option<Value> = None;
+
     loop {
         line.clear();
         let n = match reader.read_line(&mut line).await {
@@ -87,77 +91,172 @@ pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
             }
         };
 
-        let mut req = client
-            .post(&mcp_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream");
-        if let Some(ref key) = api_key {
-            req = req.header("X-API-Key", key);
+        // Remember the initialize handshake for session recovery.
+        let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        if method == "initialize" {
+            init_request = Some(request.clone());
+        } else if method == "notifications/initialized" {
+            initialized_notification = Some(request.clone());
         }
-        // Forward all accumulated mcp-* headers from previous responses
-        for (name, value) in server_headers.iter() {
-            req = req.header(name.clone(), value.clone());
+
+        let (body, is_session_expired) =
+            send_request(&client, &mcp_url, &api_key, &mut server_headers, &request).await;
+
+        // If the server-side session expired, transparently re-initialize and retry.
+        if is_session_expired {
+            if let Some(ref init_req) = init_request {
+                eprintln!("[keenable] session expired, re-initializing…");
+                server_headers.clear();
+
+                // Replay initialize
+                let (init_resp, _) =
+                    send_request(&client, &mcp_url, &api_key, &mut server_headers, init_req)
+                        .await;
+
+                let init_ok = init_resp
+                    .as_ref()
+                    .map(|r| r.get("result").is_some())
+                    .unwrap_or(false);
+
+                if init_ok {
+                    // Replay initialized notification
+                    if let Some(ref notif) = initialized_notification {
+                        let _ = send_request(
+                            &client,
+                            &mcp_url,
+                            &api_key,
+                            &mut server_headers,
+                            notif,
+                        )
+                        .await;
+                    }
+
+                    // Retry the original request
+                    let (retry_body, _) = send_request(
+                        &client,
+                        &mcp_url,
+                        &api_key,
+                        &mut server_headers,
+                        &request,
+                    )
+                    .await;
+
+                    if let Some(resp_val) = retry_body {
+                        write_response(&mut stdout, &resp_val).await;
+                    }
+                    continue;
+                }
+                // Re-init failed — fall through and emit the original error
+            }
         }
-        let resp = req.json(&request).send().await;
 
-        match resp {
-            Ok(response) => {
-                // Capture all mcp-* headers from the response
-                for (name, value) in response.headers().iter() {
-                    if name.as_str().starts_with(MCP_HEADER_PREFIX) {
-                        server_headers.insert(name.clone(), value.clone());
-                    }
-                }
-
-                let content_type = response
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_string();
-
-                if content_type.contains("text/event-stream") {
-                    // SSE streaming: parse event stream and emit each JSON data line
-                    let body = response.text().await.unwrap_or_default();
-                    for sse_line in body.lines() {
-                        if let Some(data) = sse_line.strip_prefix("data: ") {
-                            let trimmed_data = data.trim();
-                            if trimmed_data.is_empty() {
-                                continue;
-                            }
-                            let mut out = trimmed_data.to_string();
-                            out.push('\n');
-                            let _ = stdout.write_all(out.as_bytes()).await;
-                            let _ = stdout.flush().await;
-                        }
-                    }
-                } else {
-                    // Regular JSON response
-                    let body = response.text().await.unwrap_or_default();
-                    if !body.trim().is_empty() {
-                        let mut out = body.trim().to_string();
-                        out.push('\n');
-                        let _ = stdout.write_all(out.as_bytes()).await;
-                        let _ = stdout.flush().await;
-                    }
-                }
-            }
-            Err(e) => {
-                // Return a JSON-RPC error for transport failures
-                let id = request.get("id").cloned().unwrap_or(Value::Null);
-                let error_resp = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "error": {
-                        "code": -32000,
-                        "message": format!("Transport error: {}", e)
-                    },
-                    "id": id
-                });
-                let mut out = serde_json::to_string(&error_resp).unwrap();
-                out.push('\n');
-                let _ = stdout.write_all(out.as_bytes()).await;
-                let _ = stdout.flush().await;
-            }
+        if let Some(resp_val) = body {
+            write_response(&mut stdout, &resp_val).await;
         }
     }
+}
+
+/// JSON-RPC error code returned by the server when the session has expired.
+const SESSION_NOT_FOUND: i64 = -32001;
+
+/// Write a JSON-RPC response to stdout.
+async fn write_response(stdout: &mut io::Stdout, value: &Value) {
+    let mut out = serde_json::to_string(value).unwrap();
+    out.push('\n');
+    let _ = stdout.write_all(out.as_bytes()).await;
+    let _ = stdout.flush().await;
+}
+
+/// Send a JSON-RPC request to the MCP endpoint.
+///
+/// Returns the parsed response body (if any) and whether the error is a
+/// session-not-found error that can be recovered by re-initializing.
+async fn send_request(
+    client: &Client,
+    mcp_url: &str,
+    api_key: &Option<String>,
+    server_headers: &mut HeaderMap,
+    request: &Value,
+) -> (Option<Value>, bool) {
+    let mut req = client
+        .post(mcp_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream");
+    if let Some(key) = api_key {
+        req = req.header("X-API-Key", key.as_str());
+    }
+    for (name, value) in server_headers.iter() {
+        req = req.header(name.clone(), value.clone());
+    }
+    let resp = req.json(request).send().await;
+
+    match resp {
+        Ok(response) => {
+            // Capture all mcp-* headers from the response
+            for (name, value) in response.headers().iter() {
+                if name.as_str().starts_with(MCP_HEADER_PREFIX) {
+                    server_headers.insert(name.clone(), value.clone());
+                }
+            }
+
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+
+            if content_type.contains("text/event-stream") {
+                // SSE streaming: parse event stream and emit each JSON data line.
+                // Collect all data frames; the last one is typically the JSON-RPC response.
+                let body = response.text().await.unwrap_or_default();
+                let mut last: Option<Value> = None;
+                for sse_line in body.lines() {
+                    if let Some(data) = sse_line.strip_prefix("data: ") {
+                        let trimmed_data = data.trim();
+                        if trimmed_data.is_empty() {
+                            continue;
+                        }
+                        if let Ok(val) = serde_json::from_str::<Value>(trimmed_data) {
+                            last = Some(val);
+                        }
+                    }
+                }
+                let is_session_expired = is_session_not_found(&last);
+                (last, is_session_expired)
+            } else {
+                // Regular JSON response
+                let body = response.text().await.unwrap_or_default();
+                let trimmed = body.trim();
+                if trimmed.is_empty() {
+                    (None, false)
+                } else if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                    let is_session_expired = is_session_not_found(&Some(val.clone()));
+                    (Some(val), is_session_expired)
+                } else {
+                    (None, false)
+                }
+            }
+        }
+        Err(e) => {
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            let error_resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32000,
+                    "message": format!("Transport error: {}", e)
+                },
+                "id": id
+            });
+            (Some(error_resp), false)
+        }
+    }
+}
+
+fn is_session_not_found(body: &Option<Value>) -> bool {
+    body.as_ref()
+        .and_then(|b| b.get("error"))
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_i64())
+        == Some(SESSION_NOT_FOUND)
 }
