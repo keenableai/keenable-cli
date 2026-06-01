@@ -5,8 +5,8 @@ use crate::ui;
 
 /// Known config keys and their allowed values.
 const KNOWN_KEYS: &[(&str, &[&str])] = &[
-    ("default_search_mode", &["standard", "pro"]),
-    ("forced_search_mode", &["standard", "pro"]),
+    ("default_search_mode", &["realtime", "pro"]),
+    ("forced_search_mode", &["realtime", "pro"]),
 ];
 
 fn find_key(key: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
