@@ -233,6 +233,7 @@ enum Commands {
     #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://a.com https://b.com                 Multiple URLs\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key")]
     Fetch {
         /// URLs to fetch
+        #[arg(required = true)]
         urls: Vec<String>,
 
         /// Pretty-print output for humans instead of YAML

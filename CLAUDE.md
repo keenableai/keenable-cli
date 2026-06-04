@@ -56,7 +56,7 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 
 The `search` command supports `--mode realtime` (fast) and `--mode pro` (higher quality, default).
 
-Mode resolution order: `forced_search_mode` config > `--mode` flag > `default_search_mode` config > server default.
+Mode resolution order: `forced_search_mode` config > `--mode` flag > `default_search_mode` config > `pro` (CLI default).
 
 ### Config Command (`src/commands/config_cmd.rs`)
 
