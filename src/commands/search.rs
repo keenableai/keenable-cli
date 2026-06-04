@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 
 use crate::api::{api_key_client, api_url, bare_client, handle_response, ApiError};
 use crate::config;
+use crate::constants::{DEFAULT_SEARCH_MODE, SEARCH_MODES};
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
@@ -191,15 +192,15 @@ fn resolve_mode(flag: Option<&str>) -> String {
     // default_search_mode, then the documented default
     cfg["default_search_mode"]
         .as_str()
-        .unwrap_or("pro")
+        .unwrap_or(DEFAULT_SEARCH_MODE)
         .to_string()
 }
 
 pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
-    // Validate --mode flag if provided
+    // Validate --mode flag if provided ("standard" is a legacy alias for "realtime")
     if let Some(m) = mode {
-        if m != "realtime" && m != "standard" && m != "pro" {
-            ui::error(&format!("Invalid mode \"{}\". Must be \"realtime\" or \"pro\".", m));
+        if !SEARCH_MODES.contains(&m) && m != "standard" {
+            ui::error(&format!("Invalid mode \"{}\". Must be \"{}\".", m, SEARCH_MODES.join("\" or \"")));
             eprintln!();
             std::process::exit(1);
         }
@@ -285,16 +286,16 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
 
     // Single URL keeps the original output shape (object / single page).
     if pages.len() == 1 {
-        match pages.into_iter().next().unwrap() {
-            Ok(data) => {
-                if human {
-                    ui::header("keenable fetch");
-                    print_page(&data);
-                    return;
-                }
-                print_yaml(&data);
-            }
-            Err(e) => handle_api_error(e, human),
+        let data = pages
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap_or_else(|e| handle_api_error(e, human));
+        if human {
+            ui::header("keenable fetch");
+            print_page(&data);
+        } else {
+            print_yaml(&data);
         }
         return;
     }

@@ -1,12 +1,13 @@
 use colored::Colorize;
 
 use crate::config;
+use crate::constants::SEARCH_MODES;
 use crate::ui;
 
 /// Known config keys and their allowed values.
 const KNOWN_KEYS: &[(&str, &[&str])] = &[
-    ("default_search_mode", &["realtime", "pro"]),
-    ("forced_search_mode", &["realtime", "pro"]),
+    ("default_search_mode", SEARCH_MODES),
+    ("forced_search_mode", SEARCH_MODES),
 ];
 
 fn find_key(key: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
