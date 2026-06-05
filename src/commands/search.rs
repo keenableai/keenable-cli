@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 
 use crate::api::{api_key_client, api_url, bare_client, handle_response, ApiError};
 use crate::config;
+use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
@@ -174,6 +175,7 @@ fn handle_api_error(err: ApiError, human: bool) -> ! {
 
 /// Resolve the effective search mode.
 /// Priority: forced_search_mode config > --mode flag > default_search_mode config > none.
+/// None lets the server default apply (including org-level overrides).
 fn resolve_mode(flag: Option<&str>) -> Option<String> {
     let cfg = config::get_config();
 
@@ -192,10 +194,10 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
 }
 
 pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
-    // Validate --mode flag if provided
+    // Validate --mode flag if provided ("standard" is a legacy alias for "realtime")
     if let Some(m) = mode {
-        if m != "realtime" && m != "standard" && m != "pro" {
-            ui::error(&format!("Invalid mode \"{}\". Must be \"realtime\" or \"pro\".", m));
+        if !SEARCH_MODES.contains(&m) && m != "standard" {
+            ui::error(&format!("Invalid mode \"{}\". Must be \"{}\".", m, SEARCH_MODES.join("\" or \"")));
             eprintln!();
             std::process::exit(1);
         }
@@ -268,11 +270,11 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
     }
 }
 
-pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
+pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
     let req = DaemonRequest {
         command: "fetch".to_string(),
         query: None,
-        urls: Some(urls.to_vec()),
+        urls: Some(vec![url.to_string()]),
         body: None,
     };
 
