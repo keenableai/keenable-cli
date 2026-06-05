@@ -230,11 +230,10 @@ enum Commands {
     },
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://a.com https://b.com                 Multiple URLs\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key")]
     Fetch {
-        /// URLs to fetch
-        #[arg(required = true)]
-        urls: Vec<String>,
+        /// URL to fetch
+        url: String,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -360,8 +359,8 @@ async fn main() {
             };
             commands::search::search(&query, mode.as_deref(), filters, pretty, api_key.as_deref()).await;
         }
-        Commands::Fetch { urls, pretty, api_key } => {
-            commands::search::fetch(&urls, pretty, api_key.as_deref()).await;
+        Commands::Fetch { url, pretty, api_key } => {
+            commands::search::fetch(&url, pretty, api_key.as_deref()).await;
         }
         Commands::Feedback {
             query,

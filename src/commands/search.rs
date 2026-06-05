@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use crate::api::{api_key_client, api_url, bare_client, handle_response, ApiError};
 use crate::config;
-use crate::constants::{DEFAULT_SEARCH_MODE, SEARCH_MODES};
+use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
@@ -174,26 +174,23 @@ fn handle_api_error(err: ApiError, human: bool) -> ! {
 }
 
 /// Resolve the effective search mode.
-/// Priority: forced_search_mode config > --mode flag > default_search_mode config > "pro".
-/// Always sends an explicit mode — the server default differs from the documented "pro".
-fn resolve_mode(flag: Option<&str>) -> String {
+/// Priority: forced_search_mode config > --mode flag > default_search_mode config > none.
+/// None lets the server default apply (including org-level overrides).
+fn resolve_mode(flag: Option<&str>) -> Option<String> {
     let cfg = config::get_config();
 
     // forced_search_mode always wins
     if let Some(forced) = cfg["forced_search_mode"].as_str() {
-        return forced.to_string();
+        return Some(forced.to_string());
     }
 
     // --mode flag
     if let Some(m) = flag {
-        return m.to_string();
+        return Some(m.to_string());
     }
 
-    // default_search_mode, then the documented default
-    cfg["default_search_mode"]
-        .as_str()
-        .unwrap_or(DEFAULT_SEARCH_MODE)
-        .to_string()
+    // default_search_mode as fallback
+    cfg["default_search_mode"].as_str().map(|s| s.to_string())
 }
 
 pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
@@ -206,13 +203,15 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
         }
     }
 
-    let mut effective_mode = resolve_mode(mode);
-    // Graceful fallback: "standard" → "realtime"
-    if effective_mode == "standard" {
-        effective_mode = "realtime".to_string();
-    }
+    let effective_mode = resolve_mode(mode).map(|m| {
+        // Graceful fallback: "standard" → "realtime"
+        if m == "standard" { "realtime".to_string() } else { m }
+    });
 
-    let mut body = json!({ "query": query, "mode": effective_mode });
+    let mut body = json!({ "query": query });
+    if let Some(m) = &effective_mode {
+        body["mode"] = json!(m);
+    }
     // Merge filter fields into body
     if let Value::Object(filter_map) = filters.to_json() {
         if let Value::Object(ref mut body_map) = body {
@@ -271,77 +270,33 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
     }
 }
 
-pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
-    // The API accepts a single URL per request, so fetch each URL separately.
-    let mut pages: Vec<Result<Value, ApiError>> = Vec::new();
-    for url in urls {
-        let req = DaemonRequest {
-            command: "fetch".to_string(),
-            query: None,
-            urls: Some(vec![url.clone()]),
-            body: None,
-        };
-        pages.push(execute(&req, api_key).await);
-    }
+pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
+    let req = DaemonRequest {
+        command: "fetch".to_string(),
+        query: None,
+        urls: Some(vec![url.to_string()]),
+        body: None,
+    };
 
-    // Single URL keeps the original output shape (object / single page).
-    if pages.len() == 1 {
-        let data = pages
-            .into_iter()
-            .next()
-            .unwrap()
-            .unwrap_or_else(|e| handle_api_error(e, human));
-        if human {
-            ui::header("keenable fetch");
-            print_page(&data);
-        } else {
+    match execute(&req, api_key).await {
+        Ok(data) => {
+            if human {
+                ui::header("keenable fetch");
+                let title = data["title"].as_str().unwrap_or("Untitled");
+                let url = data["url"].as_str().unwrap_or("");
+                let content = data["content"].as_str().unwrap_or("");
+                eprintln!("   {} {}", title.bold(), url.cyan());
+                eprintln!("   {}", "─".repeat(60).dimmed());
+                for line in content.lines() {
+                    eprintln!("   {}", line);
+                }
+                eprintln!();
+                return;
+            }
             print_yaml(&data);
         }
-        return;
+        Err(e) => handle_api_error(e, human),
     }
-
-    let any_failed = pages.iter().any(|p| p.is_err());
-    if human {
-        ui::header("keenable fetch");
-        for (url, page) in urls.iter().zip(&pages) {
-            match page {
-                Ok(data) => print_page(data),
-                Err(e) => {
-                    ui::error(&format!("{}: {}", url, e.display()));
-                    eprintln!();
-                }
-            }
-        }
-    } else {
-        let results: Vec<Value> = urls
-            .iter()
-            .zip(pages)
-            .map(|(url, page)| match page {
-                Ok(data) => data,
-                Err(e) => {
-                    let mut val = e.to_yaml_value();
-                    val["url"] = json!(url);
-                    val
-                }
-            })
-            .collect();
-        print_yaml(&json!({ "results": results }));
-    }
-    if any_failed {
-        std::process::exit(1);
-    }
-}
-
-fn print_page(data: &Value) {
-    let title = data["title"].as_str().unwrap_or("Untitled");
-    let url = data["url"].as_str().unwrap_or("");
-    let content = data["content"].as_str().unwrap_or("");
-    eprintln!("   {} {}", title.bold(), url.cyan());
-    eprintln!("   {}", "─".repeat(60).dimmed());
-    for line in content.lines() {
-        eprintln!("   {}", line);
-    }
-    eprintln!();
 }
 
 pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Option<&str>) {

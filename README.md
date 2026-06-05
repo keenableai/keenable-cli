@@ -62,7 +62,7 @@ Works without login (free tier). Log in for higher rate limits.
 
 ```bash
 keenable fetch https://example.com      # Fetch page content
-keenable fetch url1 url2 -p             # Fetch multiple URLs, pretty output
+keenable fetch https://example.com -p   # Pretty output
 ```
 
 ### Configuration
