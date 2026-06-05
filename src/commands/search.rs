@@ -300,7 +300,7 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
         return;
     }
 
-    let all_failed = pages.iter().all(|p| p.is_err());
+    let any_failed = pages.iter().any(|p| p.is_err());
     if human {
         ui::header("keenable fetch");
         for (url, page) in urls.iter().zip(&pages) {
@@ -327,7 +327,7 @@ pub async fn fetch(urls: &[String], human: bool, api_key: Option<&str>) {
             .collect();
         print_yaml(&json!({ "results": results }));
     }
-    if all_failed {
+    if any_failed {
         std::process::exit(1);
     }
 }
