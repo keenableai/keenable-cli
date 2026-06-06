@@ -58,4 +58,6 @@ jobs:
       - name: Run e2e suite
         env:
           KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          # Point the in-suite installer test at the same version under test.
+          KEENABLE_INSTALLER_URL: ${{ inputs.version && format('https://github.com/keenableai/keenable-cli/releases/download/v{0}/keenable-cli-installer.sh', inputs.version) || '' }}
         run: uv run --project tests/e2e pytest tests/e2e -v -ra --color=yes

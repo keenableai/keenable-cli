@@ -37,11 +37,12 @@ class Result:
 class Runner:
     """Runs the keenable binary under an isolated HOME."""
 
-    def __init__(self, home: str):
+    def __init__(self, home: str, bin: str = BIN):
         self.home = home
+        self.bin = bin
 
     def __call__(self, *args: str, key: bool = True, timeout: int = 90) -> Result:
-        cmd = [BIN, *args]
+        cmd = [self.bin, *args]
         if key:
             assert API_KEY, "KEENABLE_API_KEY must be set for API tests"
             cmd += ["--api-key", API_KEY]

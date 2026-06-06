@@ -15,4 +15,5 @@ package = false
 markers = [
     "latency: wall-clock latency checks (loose, tail-focused bounds)",
     "semantic: relevance checks against the live index",
+    "install: downloads the installer from GitHub Releases and smoke-tests the installed binary",
 ]

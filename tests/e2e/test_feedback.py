@@ -1,8 +1,6 @@
 """T-30..T-36 — feedback. Valid feedback requires a recent search for the
 same query with the same key, so tests depend on the basic_search fixture."""
 
-import pytest
-
 QUERY = "rust async patterns"  # matches basic_search
 
 
@@ -13,16 +11,14 @@ def test_t30_valid_feedback(kn, basic_search):
     assert data["status"] == "ok"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: --help says comment is optional, but the CLI always sends "
-    'comment:"" and the server rejects empty comments '
-    '(\'"relevance": each entry must have a non-empty "comment" string\'). '
-    "Fix: CLI should omit the comment field when empty.",
-)
-def test_t31_score_without_comment(kn, basic_search):
+def test_t31_score_without_comment_rejected(kn):
+    # The API requires a non-empty comment per entry; the CLI rejects
+    # comment-less entries client-side with a clear error.
     res = kn("feedback", QUERY, "https://tokio.rs=4")
-    assert res.code == 0, res.out + res.err
+    assert res.code == 1
+    # ui::error word-wraps to terminal width, so assert wrap-safe fragments.
+    assert "Invalid format: https://tokio.rs=4" in res.err
+    assert "url=score=comment" in res.err
 
 
 def test_t32_multiple_scores(kn, basic_search):
@@ -40,9 +36,9 @@ def test_t33_feedback_for_unsearched_query(kn):
 
 
 def test_t34_out_of_range_score(kn):
-    res = kn("feedback", QUERY, "https://tokio.rs=9")
+    res = kn("feedback", QUERY, "https://tokio.rs=9=too good")
     assert res.code == 1
-    assert "Invalid score in 'https://tokio.rs=9'. Must be 0-5." in res.err
+    assert "Invalid score in 'https://tokio.rs=9=too good'. Must be 0-5." in res.err
 
 
 def test_t35_no_scores(kn, basic_search):

@@ -300,25 +300,19 @@ pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
 }
 
 pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Option<&str>) {
-    // Parse url=score=comment entries
+    // Parse url=score=comment entries. The API requires a non-empty comment
+    // on every entry, so reject comment-less entries here with a clear error.
     let mut relevance: Vec<Value> = Vec::new();
     for entry in scores {
-        // Split as url=score or url=score=comment
         // URL may contain '=' (e.g. query params), so split from the right
         let parts: Vec<&str> = entry.rsplitn(3, '=').collect();
-        if parts.len() < 2 {
-            ui::error(&format!("Invalid format: {}. Expected url=score or url=score=comment.", entry));
+        // rsplitn reverses: [comment, score, url]
+        if parts.len() < 3 || parts[0].is_empty() {
+            ui::error(&format!("Invalid format: {}. Expected url=score=comment (comment is required).", entry));
             eprintln!();
             std::process::exit(1);
         }
-
-        let (score_str, url, comment) = if parts.len() == 3 {
-            // url=score=comment (rsplitn reverses: [comment, score, url])
-            (parts[1], parts[2], parts[0])
-        } else {
-            // url=score (rsplitn reverses: [score, url])
-            (parts[0], parts[1], "")
-        };
+        let (comment, score_str, url) = (parts[0], parts[1], parts[2]);
 
         let score: u32 = match score_str.parse() {
             Ok(s) if s <= 5 => s,

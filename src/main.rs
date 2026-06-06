@@ -245,12 +245,12 @@ enum Commands {
     },
 
     /// Submit search relevance feedback (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nScore format: url=score or url=score=comment (0=irrelevant, 5=perfect)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\"\n  keenable feedback \"rust async\" \"https://tokio.rs=5\"")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nScore format: url=score=comment (0=irrelevant, 5=perfect; comment is required)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\"")]
     Feedback {
         /// Original search query
         query: String,
 
-        /// URL=score=comment entries (score 0-5, comment optional)
+        /// URL=score=comment entries (score 0-5, comment required)
         scores: Vec<String>,
 
         /// Pretty-print output for humans instead of YAML
