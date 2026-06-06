@@ -12,8 +12,6 @@ def test_t30_valid_feedback(kn, basic_search):
 
 
 def test_t31_score_without_comment_rejected(kn):
-    # The API requires a non-empty comment per entry; the CLI rejects
-    # comment-less entries client-side with a clear error.
     res = kn("feedback", QUERY, "https://tokio.rs=4")
     assert res.code == 1
     # ui::error word-wraps to terminal width, so assert wrap-safe fragments.

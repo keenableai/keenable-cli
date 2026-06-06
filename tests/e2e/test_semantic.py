@@ -91,7 +91,6 @@ def test_s08_non_empty_recall_rate(kn):
                if q.strip() and not q.startswith("#")]
     assert len(queries) >= 10, "seed corpus too small to be meaningful"
 
-    # Recall is order-independent, so run the corpus concurrently.
     with ThreadPoolExecutor(max_workers=8) as pool:
         non_empty = sum(1 for results in pool.map(lambda q: search_results(kn, q), queries) if results)
     rate = non_empty / len(queries)

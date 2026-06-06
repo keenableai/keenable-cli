@@ -300,8 +300,8 @@ pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
 }
 
 pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Option<&str>) {
-    // Parse url=score=comment entries. The API requires a non-empty comment
-    // on every entry, so reject comment-less entries here with a clear error.
+    // The API requires a non-empty comment per entry, so reject comment-less
+    // entries up front
     let mut relevance: Vec<Value> = Vec::new();
     for entry in scores {
         // URL may contain '=' (e.g. query params), so split from the right

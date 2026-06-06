@@ -48,7 +48,6 @@ def report(name, samples) -> str:
 
 @pytest.fixture(scope="module")
 def samples(kn):
-    # Warm up process/connection path; discard.
     for _ in range(2):
         timed_ms(kn, "warmup query", "--mode", "realtime")
     data = {mode: [timed_ms(kn, q, "--mode", mode) for _ in range(REPS) for q in QUERIES]
@@ -93,6 +92,6 @@ def test_l05_cache_warm_path(kn):
 
 
 def test_l06_no_result_query_latency(kn):
-    # Empty results shouldn't hang; best-of-3 against the realtime bound.
+    # Empty results shouldn't hang
     best = min(timed_ms(kn, "zxqwvbnm qwerty asdfgh nonsense") for _ in range(3))
     assert best <= REALTIME_MEDIAN_MS, f"gibberish query best-of-3 {best:.0f}ms"

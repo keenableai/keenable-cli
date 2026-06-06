@@ -21,8 +21,7 @@ import yaml
 BIN = os.environ.get("KEENABLE_BIN", "keenable")
 API_KEY = os.environ.get("KEENABLE_API_KEY", "")
 
-# Seeds basic_search; feedback tests must submit for this exact query, so they
-# import it rather than re-typing the literal.
+# Seeds basic_search; feedback tests must submit for this exact query
 SEARCH_QUERY = "rust async patterns"
 
 
