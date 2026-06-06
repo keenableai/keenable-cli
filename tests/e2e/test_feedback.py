@@ -1,7 +1,7 @@
 """T-30..T-36 — feedback. Valid feedback requires a recent search for the
 same query with the same key, so tests depend on the basic_search fixture."""
 
-QUERY = "rust async patterns"  # matches basic_search
+from conftest import SEARCH_QUERY as QUERY  # must match basic_search's query
 
 
 def test_t30_valid_feedback(kn, basic_search):

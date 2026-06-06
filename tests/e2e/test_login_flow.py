@@ -15,9 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import API_KEY, Runner, results_of
-
-QUERY = "rust async patterns"
+from conftest import API_KEY, SEARCH_QUERY as QUERY, Runner, search_results
 
 
 def _kill_daemon(home: str):
@@ -38,9 +36,7 @@ def logged_in(tmp_path):
 
 
 def test_login_then_search_via_daemon(logged_in):
-    res = logged_in("search", QUERY, key=False)
-    assert res.code == 0, res.out + res.err
-    assert results_of(res.yaml())
+    assert search_results(logged_in, QUERY, key=False)
 
     keenable_dir = Path(logged_in.home) / ".keenable"
     assert (keenable_dir / "daemon.sock").exists(), "daemon did not start"

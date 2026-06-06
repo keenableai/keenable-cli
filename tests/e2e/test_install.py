@@ -7,11 +7,10 @@ KEENABLE_INSTALLER_URL (the CI workflow sets it when given a version input).
 
 import os
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from conftest import Runner, results_of
+from conftest import Runner, search_results
 
 pytestmark = pytest.mark.install
 
@@ -25,9 +24,11 @@ def installed(tmp_path_factory) -> Runner:
     home = tmp_path_factory.mktemp("install-home")
     script = home / "installer.sh"
 
+    # --retry covers transient HTTP 5xx from GitHub (observed 502s).
     curl = subprocess.run(
-        ["curl", "--proto", "=https", "--tlsv1.2", "-LsSf", "-o", str(script), INSTALLER_URL],
-        capture_output=True, text=True, timeout=120,
+        ["curl", "--proto", "=https", "--tlsv1.2", "-LsSf", "--retry", "3",
+         "-o", str(script), INSTALLER_URL],
+        capture_output=True, text=True, timeout=300,
     )
     assert curl.returncode == 0, f"installer download failed: {curl.stderr}"
 
@@ -50,6 +51,4 @@ def test_installer_installs_working_binary(installed):
 
 
 def test_installed_binary_smoke_search(installed):
-    res = installed("search", "rust async patterns")
-    assert res.code == 0, res.out + res.err
-    assert results_of(res.yaml())
+    assert search_results(installed, "rust async patterns")

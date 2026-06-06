@@ -6,11 +6,12 @@ quality dashboards, not a smoke suite).
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from conftest import host_of, host_under, results_of
+from conftest import host_of, host_under, search_results
 
 pytestmark = pytest.mark.semantic
 
@@ -21,10 +22,6 @@ def blob(result) -> str:
 
 def hosts(results, k=None):
     return [host_of(r["url"]) for r in results[:k]]
-
-
-def search_results(kn, *args):
-    return results_of(kn("search", *args).yaml())
 
 
 def test_s01_gold_fact_mozart(kn):
@@ -94,7 +91,9 @@ def test_s08_non_empty_recall_rate(kn):
                if q.strip() and not q.startswith("#")]
     assert len(queries) >= 10, "seed corpus too small to be meaningful"
 
-    non_empty = sum(1 for q in queries if search_results(kn, q))
+    # Recall is order-independent, so run the corpus concurrently.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        non_empty = sum(1 for results in pool.map(lambda q: search_results(kn, q), queries) if results)
     rate = non_empty / len(queries)
     print(f"\nS-08 non-empty recall: {non_empty}/{len(queries)} = {rate:.0%}")
     assert rate >= 0.9, f"recall rate {rate:.0%} below 90% (n={len(queries)})"

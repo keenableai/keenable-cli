@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import host_of, host_under, parse_ts, results_of, utc
+from conftest import SEARCH_QUERY, host_of, host_under, parse_ts, results_of, search_results, utc
 
 RESULT_FIELDS = ("url", "title", "description", "snippet", "acquired_at", "published_at")
 
@@ -12,7 +12,7 @@ RESULT_FIELDS = ("url", "title", "description", "snippet", "acquired_at", "publi
 # --- 2.1 core ---
 
 def test_t01_basic_search(basic_search):
-    assert basic_search["query"] == "rust async patterns"
+    assert basic_search["query"] == SEARCH_QUERY
     assert basic_search["mode"] in ("realtime", "pro")
     results = results_of(basic_search)
     assert results
@@ -82,53 +82,53 @@ def test_mode_standard_legacy_alias(kn):
 # --- 2.3 filters ---
 
 def _non_empty_results(kn, *args):
-    results = results_of(kn(*args).yaml())
+    results = search_results(kn, *args)
     if not results:
         pytest.skip(f"no results for {args} — filter assertion would be vacuous")
     return results
 
 
 def test_t09_site_filter(kn):
-    for r in _non_empty_results(kn, "search", "async", "--site", "docs.rs"):
+    for r in _non_empty_results(kn, "async", "--site", "docs.rs"):
         assert host_under(host_of(r["url"]), "docs.rs"), r["url"]
 
 
 def test_t10_acquired_after(kn):
-    for r in _non_empty_results(kn, "search", "AI news", "--acquired-after", "2026-01-01"):
+    for r in _non_empty_results(kn, "AI news", "--acquired-after", "2026-01-01"):
         assert parse_ts(r["acquired_at"]) >= utc(2026, 1, 1), r["url"]
 
 
 def test_t11_acquired_before(kn):
-    for r in _non_empty_results(kn, "search", "AI news", "--acquired-before", "2026-05-01"):
+    for r in _non_empty_results(kn, "AI news", "--acquired-before", "2026-05-01"):
         assert parse_ts(r["acquired_at"]) <= utc(2026, 5, 1), r["url"]
 
 
 def test_t12_published_after(kn):
-    for r in _non_empty_results(kn, "search", "AI news", "--published-after", "2026-01-01"):
+    for r in _non_empty_results(kn, "AI news", "--published-after", "2026-01-01"):
         if r["published_at"] is not None:
             assert parse_ts(r["published_at"]) >= utc(2026, 1, 1), r["url"]
 
 
 def test_t13_published_before(kn):
-    for r in _non_empty_results(kn, "search", "rust async", "--published-before", "2024-01-01"):
+    for r in _non_empty_results(kn, "rust async", "--published-before", "2024-01-01"):
         if r["published_at"] is not None:
             assert parse_ts(r["published_at"]) <= utc(2024, 1, 1), r["url"]
 
 
 def test_t14_relative_date(kn):
     cutoff = datetime.now(timezone.utc) - timedelta(days=7, hours=1)  # 1h skew allowance
-    for r in _non_empty_results(kn, "search", "AI news", "--acquired-after", "7d"):
+    for r in _non_empty_results(kn, "AI news", "--acquired-after", "7d"):
         assert parse_ts(r["acquired_at"]) >= cutoff, r["url"]
 
 
 def test_t15_iso8601_datetime(kn):
     instant = utc(2026, 1, 15).replace(hour=10, minute=30)
-    for r in _non_empty_results(kn, "search", "AI news", "--acquired-after", "2026-01-15T10:30:00Z"):
+    for r in _non_empty_results(kn, "AI news", "--acquired-after", "2026-01-15T10:30:00Z"):
         assert parse_ts(r["acquired_at"]) >= instant, r["url"]
 
 
 def test_t16_combined_filters(kn):
-    for r in _non_empty_results(kn, "search", "async", "--site", "docs.rs", "--acquired-after", "2025-01-01"):
+    for r in _non_empty_results(kn, "async", "--site", "docs.rs", "--acquired-after", "2025-01-01"):
         assert host_under(host_of(r["url"]), "docs.rs"), r["url"]
         assert parse_ts(r["acquired_at"]) >= utc(2025, 1, 1), r["url"]
 
@@ -175,5 +175,5 @@ def test_t21_unicode_query(kn):
 
 
 def test_t22_inline_date_operator(kn):
-    for r in _non_empty_results(kn, "search", "python asyncio acquired_after:2026-01-01"):
+    for r in _non_empty_results(kn, "python asyncio acquired_after:2026-01-01"):
         assert parse_ts(r["acquired_at"]) >= utc(2026, 1, 1), r["url"]

@@ -21,6 +21,10 @@ import yaml
 BIN = os.environ.get("KEENABLE_BIN", "keenable")
 API_KEY = os.environ.get("KEENABLE_API_KEY", "")
 
+# Seeds basic_search; feedback tests must submit for this exact query, so they
+# import it rather than re-typing the literal.
+SEARCH_QUERY = "rust async patterns"
+
 
 class Result:
     def __init__(self, proc: subprocess.CompletedProcess):
@@ -64,7 +68,7 @@ def kn_fresh(tmp_path) -> Runner:
 @pytest.fixture(scope="session")
 def basic_search(kn) -> dict:
     """T-01 search output, reused by schema/count/feedback tests."""
-    res = kn("search", "rust async patterns")
+    res = kn("search", SEARCH_QUERY)
     assert res.code == 0, res.err
     return res.yaml()
 
@@ -73,6 +77,13 @@ def results_of(data: dict) -> list:
     results = data.get("results")
     assert isinstance(results, list), f"missing results list: {list(data)}"
     return results
+
+
+def search_results(kn, *args: str, **kwargs) -> list:
+    """Run a search and return its results list (asserts exit 0)."""
+    res = kn("search", *args, **kwargs)
+    assert res.code == 0, res.out + res.err
+    return results_of(res.yaml())
 
 
 def parse_ts(value) -> datetime:
