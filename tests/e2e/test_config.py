@@ -2,7 +2,7 @@
 config state never bleeds into other tests."""
 
 
-def test_t37_set_get_unset_roundtrip(kn_fresh):
+def test_set_get_unset_roundtrip(kn_fresh):
     res = kn_fresh("config", "set", "default_search_mode", "realtime", key=False)
     assert res.code == 0
     assert "default_search_mode = realtime" in res.err
@@ -19,7 +19,7 @@ def test_t37_set_get_unset_roundtrip(kn_fresh):
     assert "default_search_mode (not set" in res.err
 
 
-def test_t38_list_all(kn_fresh):
+def test_list_all(kn_fresh):
     res = kn_fresh("config", key=False)
     assert res.code == 0
     assert "default_search_mode" in res.err
@@ -27,14 +27,14 @@ def test_t38_list_all(kn_fresh):
     assert "realtime, pro" in res.err
 
 
-def test_t39_invalid_value(kn_fresh):
+def test_invalid_value(kn_fresh):
     res = kn_fresh("config", "set", "default_search_mode", "bogus", key=False)
     assert res.code == 1
     assert 'Invalid value "bogus"' in res.err
     assert "Allowed: realtime, pro" in res.err
 
 
-def test_t40_forced_mode_overrides_flag(kn_fresh):
+def test_forced_mode_overrides_flag(kn_fresh):
     assert kn_fresh("config", "set", "forced_search_mode", "realtime", key=False).code == 0
     data = kn_fresh("search", "x", "--mode", "pro").yaml()
     assert data["mode"] == "realtime"

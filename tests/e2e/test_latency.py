@@ -56,24 +56,24 @@ def samples(kn):
     return data
 
 
-def test_l01_realtime_median(samples):
+def test_realtime_median(samples):
     assert median(samples["realtime"]) <= REALTIME_MEDIAN_MS, report("realtime", samples["realtime"])
 
 
-def test_l02_pro_median(samples):
+def test_pro_median(samples):
     assert median(samples["pro"]) <= PRO_MEDIAN_MS, report("pro", samples["pro"])
 
 
-def test_l03_pro_tail(samples):
+def test_pro_tail(samples):
     pro = samples["pro"]
     over_5s = sum(1 for s in pro if s > 5000) / len(pro)
-    print(f"\nL-03 pro calls >5s: {over_5s:.0%}")
+    print(f"\nPro calls >5s: {over_5s:.0%}")
     assert p90(pro) <= PRO_P90_MS, report("pro", pro)
     # The gate-miss tail exists by design; bound its frequency, not its existence.
     assert over_5s <= 0.2, f"{over_5s:.0%} of pro calls exceeded 5s (gate firing less often?)"
 
 
-def test_l04_relative_mode_behavior(samples):
+def test_relative_mode_behavior(samples):
     # Relative bound survives environment changes better than absolute ms;
     # the 1s floor avoids false alarms when realtime medians are tiny.
     bound = max(3 * median(samples["realtime"]), 1000)
@@ -81,17 +81,17 @@ def test_l04_relative_mode_behavior(samples):
         f"median(pro)={median(samples['pro']):.0f}ms > {bound:.0f}ms"
 
 
-def test_l05_cache_warm_path(kn):
+def test_cache_warm_path(kn):
     # Soft check: log the cold/warm delta, never fail — the public CLI may not
     # hit the same cache layer as the internal orchestrator.
     cold = timed_ms(kn, "redis cluster failover details", "--mode", "realtime")
     warm = timed_ms(kn, "redis cluster failover details", "--mode", "realtime")
-    print(f"\nL-05 cold={cold:.0f}ms warm={warm:.0f}ms delta={warm - cold:+.0f}ms")
+    print(f"\ncold={cold:.0f}ms warm={warm:.0f}ms delta={warm - cold:+.0f}ms")
     if warm > cold:
         pytest.skip(f"warm call slower than cold ({warm:.0f}ms > {cold:.0f}ms) — logged, not failed")
 
 
-def test_l06_no_result_query_latency(kn):
+def test_no_result_query_latency(kn):
     # Empty results shouldn't hang
     best = min(timed_ms(kn, "zxqwvbnm qwerty asdfgh nonsense") for _ in range(3))
     assert best <= REALTIME_MEDIAN_MS, f"gibberish query best-of-3 {best:.0f}ms"

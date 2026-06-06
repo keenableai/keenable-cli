@@ -1,7 +1,7 @@
 """T-23..T-29 — fetch. Single-URL by design since 0.1.16 (clap rejects extras)."""
 
 
-def test_t23_fetch_single_url(kn):
+def test_fetch_single_url(kn):
     res = kn("fetch", "https://example.com")
     assert res.code == 0
     data = res.yaml()
@@ -10,14 +10,14 @@ def test_t23_fetch_single_url(kn):
     assert "# Example Domain" in data["content"]
 
 
-def test_t24_pretty_fetch(kn):
+def test_pretty_fetch(kn):
     res = kn("fetch", "https://example.com", "-p")
     assert res.code == 0
     assert res.out == ""
     assert "Example Domain" in res.err
 
 
-def test_t25_multiple_urls_rejected(kn):
+def test_multiple_urls_rejected(kn):
     # 0.1.15 documented multi-URL but broke at the API; 0.1.16 made fetch
     # single-URL by design. Extra URLs are a clap parse error.
     res = kn("fetch", "https://example.com", "https://example.org")
@@ -25,7 +25,7 @@ def test_t25_multiple_urls_rejected(kn):
     assert "unexpected argument" in res.err
 
 
-def test_t26_unparseable_url(kn):
+def test_unparseable_url(kn):
     res = kn("fetch", "not-a-url")
     assert res.code == 1
     data = res.yaml()
@@ -33,14 +33,14 @@ def test_t26_unparseable_url(kn):
     assert "Could not parse the provided URL" in data["message"]
 
 
-def test_t27_dead_page(kn):
+def test_dead_page(kn):
     res = kn("fetch", "https://example.com/nonexistent-xyz-12345")
     assert res.code == 1
     data = res.yaml()
     assert data["error"] == "Not found"
 
 
-def test_t28_invalid_key_on_fetch(kn):
+def test_invalid_key_on_fetch(kn):
     res = kn("fetch", "https://example.com", "--api-key", "keen_bad", key=False)
     assert res.code == 1
     data = res.yaml()
@@ -49,7 +49,7 @@ def test_t28_invalid_key_on_fetch(kn):
     assert data["message"] in ("Invalid API key", "Malformed API key")
 
 
-def test_t29_no_url_arg(kn):
+def test_no_url_arg(kn):
     res = kn("fetch")
     assert res.code == 2
     assert "the following required arguments were not provided" in res.err
