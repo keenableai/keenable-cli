@@ -1,6 +1,11 @@
 # Rust
 target/
 
+# Python (tests/e2e)
+.venv/
+__pycache__/
+.pytest_cache/
+
 # Local scripts
 scripts/
 

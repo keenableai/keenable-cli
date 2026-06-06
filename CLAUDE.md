@@ -8,6 +8,18 @@ Rust CLI for Keenable — authenticate, manage API keys, configure MCP, and sear
 cargo build --release
 ```
 
+## Tests
+
+End-to-end suite in `tests/e2e/` (pytest, run with UV) exercises the real binary against the live API: every subcommand/flag/error path, semantic-relevance checks (gold facts, authority domains, `site:` parity), and wall-clock latency checks.
+
+```bash
+export KEENABLE_API_KEY=keen_...                 # required
+export KEENABLE_BIN=./target/release/keenable    # default: `keenable` on PATH
+uv run --project tests/e2e pytest tests/e2e -v
+```
+
+Markers: `-m "not latency"` / `-m "not semantic"` to skip the slow/live-index groups. CI (`.github/workflows/e2e.yml`) installs the latest released binary via the installer script and runs the full suite nightly and on manual dispatch (with an optional version input). Requires the `KEENABLE_API_KEY` repo secret.
+
 ## Project Structure
 
 ```

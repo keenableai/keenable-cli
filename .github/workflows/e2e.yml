@@ -1,0 +1,61 @@
+# End-to-end suite: downloads a released keenable binary (the same installer
+# users run) and exercises every subcommand against the live API, plus
+# semantic-relevance and latency checks. See tests/e2e/.
+#
+# Not triggered by `release: published` — releases are created with
+# GITHUB_TOKEN, which never triggers other workflows. Run it manually after a
+# release, or wait for the nightly schedule.
+
+name: E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CLI version to test (e.g. 0.1.16). Empty = latest release."
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check API key secret
+        run: |
+          if [ -z "${{ secrets.KEENABLE_API_KEY }}" ]; then
+            echo "::error::KEENABLE_API_KEY secret is not set"
+            exit 1
+          fi
+
+      - name: Install keenable CLI from GitHub Releases
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -n "$VERSION" ]; then
+            URL="https://github.com/keenableai/keenable-cli/releases/download/v${VERSION}/keenable-cli-installer.sh"
+          else
+            URL="https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.sh"
+          fi
+          curl --proto '=https' --tlsv1.2 -LsSf "$URL" | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Verify installed binary
+        run: keenable --version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Run e2e suite
+        env:
+          KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+        run: uv run --project tests/e2e pytest tests/e2e -v -ra --color=yes

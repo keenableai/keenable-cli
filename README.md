@@ -121,6 +121,15 @@ brew update && brew upgrade keenable-cli               # Homebrew
 cargo build --release
 ```
 
+## Testing
+
+End-to-end suite (real binary, live API — see `tests/e2e/`):
+
+```bash
+export KEENABLE_API_KEY=keen_...
+uv run --project tests/e2e pytest tests/e2e -v
+```
+
 ## Contributing
 
 See [CLAUDE.md](CLAUDE.md) for project conventions and architecture.
