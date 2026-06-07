@@ -78,9 +78,9 @@ def results_of(data: dict) -> list:
     return results
 
 
-def search_results(kn, *args: str, **kwargs) -> list:
+def search_results(kn, *args: str, key: bool = True) -> list:
     """Run a search and return its results list (asserts exit 0)."""
-    res = kn("search", *args, **kwargs)
+    res = kn("search", *args, key=key)
     assert res.code == 0, res.out + res.err
     return results_of(res.yaml())
 

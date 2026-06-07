@@ -20,10 +20,6 @@ def blob(result) -> str:
     return " ".join(str(result.get(f) or "") for f in ("title", "description", "snippet"))
 
 
-def hosts(results, k=None):
-    return [host_of(r["url"]) for r in results[:k]]
-
-
 def test_gold_fact_mozart(kn):
     results = search_results(kn, "Wolfgang Amadeus Mozart birth year")
     assert any("1756" in blob(r) for r in results[:5]), \
@@ -79,7 +75,7 @@ def test_site_flag_vs_inline_operator_parity(kn):
 
 def test_entity_navigational(kn):
     results = search_results(kn, "Keenable AI search")
-    top5 = hosts(results, 5)
+    top5 = [host_of(r["url"]) for r in results[:5]]
     assert any(host_under(h, "keenable.ai") for h in top5), \
         f"keenable.ai not in top-5 hosts: {top5}"
 
