@@ -24,6 +24,14 @@ API_KEY = os.environ.get("KEENABLE_API_KEY", "")
 # Seeds basic_search; feedback tests must submit for this exact query
 SEARCH_QUERY = "rust async patterns"
 
+# Successful feedback submissions persist synthetic relevance data in the live
+# API (no test tenant / dry-run mode exists), so they are opt-in only and must
+# never run on a schedule.
+write_feedback = pytest.mark.skipif(
+    os.environ.get("KEENABLE_E2E_WRITE_FEEDBACK") != "1",
+    reason="persists synthetic feedback to the live API — opt in with KEENABLE_E2E_WRITE_FEEDBACK=1",
+)
+
 
 class Result:
     def __init__(self, proc: subprocess.CompletedProcess):

@@ -1,11 +1,17 @@
 """T-30..T-36 — feedback. Valid feedback requires a recent search for the
-same query with the same key, so tests depend on the basic_search fixture."""
+same query with the same key, so tests depend on the basic_search fixture.
+
+Success-path tests persist real feedback and carry the write_feedback opt-in
+gate; the error-path tests are rejected server- or client-side and are safe.
+"""
 
 from conftest import SEARCH_QUERY as QUERY  # must match basic_search's query
+from conftest import write_feedback
 
 
+@write_feedback
 def test_valid_feedback(kn, basic_search):
-    res = kn("feedback", QUERY, "https://tokio.rs=5=great overview")
+    res = kn("feedback", QUERY, "https://tokio.rs=5=synthetic e2e feedback, ignore")
     assert res.code == 0, res.out + res.err
     data = res.yaml()
     assert data["status"] == "ok"
@@ -19,8 +25,11 @@ def test_score_without_comment_rejected(kn):
     assert "url=score=comment" in res.err
 
 
+@write_feedback
 def test_multiple_scores(kn, basic_search):
-    res = kn("feedback", QUERY, "https://tokio.rs=5=good", "https://example.com=1=off topic")
+    res = kn("feedback", QUERY,
+             "https://tokio.rs=5=synthetic e2e feedback, ignore",
+             "https://example.com=1=synthetic e2e feedback, ignore")
     assert res.code == 0, res.out + res.err
     assert res.yaml()["status"] == "ok"
 

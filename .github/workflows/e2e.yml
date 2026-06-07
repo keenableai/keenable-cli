@@ -39,14 +39,24 @@ jobs:
 
       - name: Install keenable CLI from GitHub Releases
         shell: bash
+        env:
+          # Via env, never interpolated into the script — a crafted dispatch
+          # input must not be able to execute in a job that holds the API key.
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
+          BASE="https://github.com/keenableai/keenable-cli/releases"
           if [ -n "$VERSION" ]; then
-            URL="https://github.com/keenableai/keenable-cli/releases/download/v${VERSION}/keenable-cli-installer.sh"
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be plain semver (e.g. 0.1.16), got: $VERSION"
+              exit 1
+            fi
+            URL="$BASE/download/v${VERSION}/keenable-cli-installer.sh"
+            # Point the in-suite installer test at the same version under test.
+            echo "KEENABLE_INSTALLER_URL=$URL" >> "$GITHUB_ENV"
           else
-            URL="https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.sh"
+            URL="$BASE/latest/download/keenable-cli-installer.sh"
           fi
-          curl --proto '=https' --tlsv1.2 -LsSf "$URL" | sh
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 3 "$URL" | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Verify installed binary
@@ -58,6 +68,7 @@ jobs:
       - name: Run e2e suite
         env:
           KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
-          # Point the in-suite installer test at the same version under test.
-          KEENABLE_INSTALLER_URL: ${{ inputs.version && format('https://github.com/keenableai/keenable-cli/releases/download/v{0}/keenable-cli-installer.sh', inputs.version) || '' }}
+          # KEENABLE_E2E_WRITE_FEEDBACK is deliberately NOT set: the
+          # success-path feedback tests persist synthetic relevance data and
+          # are opt-in only (run them locally or on a staging tenant).
         run: uv run --project tests/e2e pytest tests/e2e -v -ra --color=yes

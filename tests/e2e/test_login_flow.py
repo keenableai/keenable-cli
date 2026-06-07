@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import API_KEY, SEARCH_QUERY as QUERY, Runner, search_results
+from conftest import API_KEY, SEARCH_QUERY as QUERY, Runner, search_results, write_feedback
 
 
 def _kill_daemon(home: str):
@@ -53,9 +53,10 @@ def test_login_then_fetch_via_daemon(logged_in):
     assert res.yaml()["title"] == "Example Domain"
 
 
+@write_feedback
 def test_login_then_feedback_via_daemon(logged_in):
     assert logged_in("search", QUERY, key=False).code == 0
-    res = logged_in("feedback", QUERY, "https://tokio.rs=5=great overview", key=False)
+    res = logged_in("feedback", QUERY, "https://tokio.rs=5=synthetic e2e feedback, ignore", key=False)
     assert res.code == 0, res.out + res.err
     assert res.yaml()["status"] == "ok"
 
