@@ -1,0 +1,29 @@
+# Seed corpus for S-08 (non-empty recall rate over realistic traffic).
+# Seeded from real DEV user_queries (daily_ranking_eval_queries, 2026-06-04)
+# plus common dev queries. Refresh from the hourly table when it drifts:
+#   bq --project_id=keenable-night-shift query --use_legacy_sql=false --format=json --max_rows=30 '
+#   SELECT query_text FROM `keenable-eval-dev.keenable_eval_dev.daily_ranking_eval_queries`
+#   WHERE query_source = "user_queries"
+#     AND hour_ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+#   ORDER BY source_hour_ts DESC LIMIT 30'
+# Override per-run with KEENABLE_SEED_QUERIES=/path/to/file.
+Wolfgang Amadeus Mozart birth year
+Frank Sargeson death year
+langchain
+agno agent framework github
+Keenable AI search
+site:github.com OpenHands open source AI agent framework 2026 latest
+rust async patterns
+python asyncio best practices
+kubernetes pod restart policy
+postgres jsonb index performance
+react server components
+openai structured outputs
+anthropic claude api pricing
+docker compose healthcheck
+github actions cache key
+typescript satisfies operator
+golang context cancellation
+redis cluster failover
+llm evaluation frameworks
+vector database comparison 2026
