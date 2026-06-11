@@ -12,6 +12,14 @@ pub struct DaemonRequest {
     pub body: Option<Value>,
 }
 
+impl DaemonRequest {
+    /// Non-idempotent commands must not be retried after a failure that may
+    /// have already delivered them.
+    pub fn idempotent(&self) -> bool {
+        self.command != "feedback"
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DaemonResponse {
     pub ok: bool,

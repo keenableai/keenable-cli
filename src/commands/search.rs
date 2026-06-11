@@ -59,15 +59,10 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
             match daemon::daemon_request(req).await {
                 Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
                 Ok(resp) => return Err(daemon_response_to_api_error(resp)),
-                // Feedback is not idempotent: if the request may already have
-                // reached the API, surface the failure instead of re-sending.
-                Err(daemon::DaemonError::AfterSend(e)) if req.command == "feedback" => {
-                    return Err(ApiError {
-                        status: 0,
-                        error: "Request failed".into(),
-                        message: Some(e),
-                        retry_after: None,
-                    });
+                // If a non-idempotent request may already have reached the
+                // API, surface the failure instead of re-sending.
+                Err(daemon::DaemonError::AfterSend(e)) if !req.idempotent() => {
+                    return Err(ApiError::request_failed(e));
                 }
                 Err(_) => {} // Fall through to direct
             }
@@ -82,12 +77,7 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         None => bare_client(),
     };
 
-    let send_err = |e: reqwest::Error| ApiError {
-        status: 0,
-        error: "Request failed".into(),
-        message: Some(e.to_string()),
-        retry_after: None,
-    };
+    let send_err = |e: reqwest::Error| ApiError::request_failed(e.to_string());
     let missing = |field: &str| ApiError {
         status: 0,
         error: format!("Missing {}", field),
@@ -159,7 +149,8 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
 /// Login can't raise limits for an already-authenticated key, so the login
 /// hint is shown for auth errors (re-auth fixes a bad key) and anonymous
 /// rate limits, but not for authenticated rate limits.
-fn handle_api_error(err: ApiError, human: bool, authenticated: bool) -> ! {
+fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
+    let authenticated = resolve_api_key(api_key_override).is_some();
     let login_hint = if err.is_auth_error() {
         Some("to authenticate.")
     } else if err.is_rate_limit() && !authenticated {
@@ -283,7 +274,7 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human, resolve_api_key(api_key).is_some()),
+        Err(e) => handle_api_error(e, human, api_key),
     }
 }
 
@@ -312,7 +303,7 @@ pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human, resolve_api_key(api_key).is_some()),
+        Err(e) => handle_api_error(e, human, api_key),
     }
 }
 
@@ -370,6 +361,6 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
             }
             print_yaml(&json!({"status": "ok", "message": "Feedback submitted", "data": data}));
         }
-        Err(e) => handle_api_error(e, human, resolve_api_key(api_key).is_some()),
+        Err(e) => handle_api_error(e, human, api_key),
     }
 }

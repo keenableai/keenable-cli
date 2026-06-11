@@ -355,16 +355,9 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
 }
 
 fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
-    let mut config = match read_config(&ide.config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            ui::sub_error(&format!(
-                "{}: {} — not modifying. Fix the file and re-run.",
-                ide.config_path.display(),
-                e
-            ));
-            return;
-        }
+    let Some(mut config) = read_config_for_write(&ide.config_path, "Fix the file and re-run.")
+    else {
+        return;
     };
     let mut config_changed = false;
 
@@ -455,11 +448,7 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
             ui::sub_success(&format!("{} updated", product.display_name));
         }
         None => {
-            // A non-object value here (e.g. hand-edited `"mcpServers": []`)
-            // would make the nested index assignment panic.
-            if !config[ide.servers_key].is_object() {
-                config[ide.servers_key] = json!({});
-            }
+            ensure_object(&mut config, ide.servers_key);
             config[ide.servers_key][product.entry_name] = desired;
             config_changed = true;
             ui::sub_success(&format!("{} added", product.display_name));
@@ -575,16 +564,9 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
 }
 
 fn reset_ide(product: &McpProduct, ide: &IDEDef) {
-    let mut config = match read_config(&ide.config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            ui::sub_error(&format!(
-                "{}: {} — not modifying. Fix the file and re-run.",
-                ide.config_path.display(),
-                e
-            ));
-            return;
-        }
+    let Some(mut config) = read_config_for_write(&ide.config_path, "Fix the file and re-run.")
+    else {
+        return;
     };
     let mut config_changed = false;
 
@@ -796,6 +778,32 @@ fn show_reset_status(product: &McpProduct, configured: &[&IDEDef]) {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+/// Strict read for paths that write the config back. On a read/parse error
+/// reports it and returns None — proceeding would replace the user's file
+/// with just our entries (see `read_config`).
+fn read_config_for_write(path: &std::path::Path, consequence: &str) -> Option<Value> {
+    match read_config(&path.to_path_buf()) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            ui::sub_error(&format!(
+                "{}: {} — not modifying. {}",
+                path.display(),
+                e,
+                consequence
+            ));
+            None
+        }
+    }
+}
+
+/// Nested index assignment panics when the key holds a non-object value
+/// (hand-edited configs) — reset it to an empty object first.
+fn ensure_object(config: &mut Value, key: &str) {
+    if !config[key].is_object() {
+        config[key] = json!({});
+    }
+}
+
 fn has_product_entry(product: &McpProduct, ide: &IDEDef) -> bool {
     let config = read_config_lenient(&ide.config_path);
     config
@@ -972,9 +980,7 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
         for tool in &missing_names {
             new_deny.push(tool.to_string());
         }
-        if !config["permissions"].is_object() {
-            config["permissions"] = json!({});
-        }
+        ensure_object(config, "permissions");
         config["permissions"]["deny"] = json!(new_deny);
         *changed = true;
         ui::sub_success(&format!(
@@ -988,35 +994,28 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
 
     // Also add deny + remove from allow list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path() {
-        match read_config(&settings_path) {
-            Err(e) => {
-                ui::sub_error(&format!(
-                    "{}: {} — not modifying. Standard tools may still be enabled",
-                    settings_path.display(),
-                    e
-                ));
-            }
-            Ok(mut settings) => {
-                let mut settings_changed = false;
-                let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
-                let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
-                if settings_changed {
-                    match write_config(&settings_path, &settings) {
-                        Ok(()) => {
-                            if let Some(msg) = deny_msg {
-                                ui::sub_success(&msg);
-                            }
-                            if let Some(msg) = allow_msg {
-                                ui::sub_success(&msg);
-                            }
+        if let Some(mut settings) =
+            read_config_for_write(&settings_path, "Standard tools may still be enabled")
+        {
+            let mut settings_changed = false;
+            let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
+            let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
+            if settings_changed {
+                match write_config(&settings_path, &settings) {
+                    Ok(()) => {
+                        if let Some(msg) = deny_msg {
+                            ui::sub_success(&msg);
                         }
-                        Err(e) => {
-                            ui::sub_error(&format!(
-                                "Failed to write {}: {}. Standard tools may still be enabled",
-                                settings_path.display(),
-                                e
-                            ));
+                        if let Some(msg) = allow_msg {
+                            ui::sub_success(&msg);
                         }
+                    }
+                    Err(e) => {
+                        ui::sub_error(&format!(
+                            "Failed to write {}: {}. Standard tools may still be enabled",
+                            settings_path.display(),
+                            e
+                        ));
                     }
                 }
             }
@@ -1098,9 +1097,7 @@ fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<
         for tool in &missing {
             new_deny.push(tool.to_string());
         }
-        if !config["permissions"].is_object() {
-            config["permissions"] = json!({});
-        }
+        ensure_object(config, "permissions");
         config["permissions"]["deny"] = json!(new_deny);
         *changed = true;
         Some(msg)
@@ -1251,9 +1248,7 @@ fn disable_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
         ));
     } else {
         let mut missing = Vec::new();
-        if !config["permission"].is_object() {
-            config["permission"] = json!({});
-        }
+        ensure_object(config, "permission");
         for tool in OPENCODE_STANDARD_TOOLS {
             let current = config
                 .pointer(&format!("/permission/{}", tool))
@@ -1318,16 +1313,10 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
 
     // Also remove from deny list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path() {
-        let mut settings = match read_config(&settings_path) {
-            Ok(s) => s,
-            Err(e) => {
-                ui::sub_error(&format!(
-                    "{}: {} — not modifying. Standard tools may still be disabled",
-                    settings_path.display(),
-                    e
-                ));
-                return;
-            }
+        let Some(mut settings) =
+            read_config_for_write(&settings_path, "Standard tools may still be disabled")
+        else {
+            return;
         };
         let mut settings_changed = false;
         remove_from_deny_list(&mut settings, &mut settings_changed);

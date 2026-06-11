@@ -33,6 +33,16 @@ impl ApiError {
         Value::Object(map)
     }
 
+    /// Transport-level failure (no HTTP status).
+    pub fn request_failed(message: String) -> Self {
+        ApiError {
+            status: 0,
+            error: "Request failed".into(),
+            message: Some(message),
+            retry_after: None,
+        }
+    }
+
     pub fn is_rate_limit(&self) -> bool {
         self.status == 429
     }

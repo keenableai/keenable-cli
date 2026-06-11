@@ -11,15 +11,6 @@ use std::io::IsTerminal;
 
 const EYES: &str = "👀";
 
-/// Text starts at column 7 for top-level icon items: "   ✓  "
-const TOP_CONT_WIDTH: usize = 6;
-/// Text starts at column 4 for plain items: "   " + 1 char
-const PLAIN_CONT_WIDTH: usize = 4;
-/// Text starts at column 12 for sub-items: "      - ⚠  "
-const SUB_CONT_WIDTH: usize = 11;
-/// Text starts at column 9 for icon-less sub-items: "      - "
-const SUB_PLAIN_CONT_WIDTH: usize = 8;
-
 // ── Terminal width ─────────────────────────────────────────────────
 
 fn terminal_width() -> usize {
@@ -82,14 +73,16 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// Print wrapped text with a displayed prefix and aligned continuation.
-/// `cont_width` is the display width where text starts (used for continuation indent).
+/// Print wrapped text with a displayed prefix; continuation lines are
+/// indented to align with where the first line's text starts.
 fn print_wrapped(
     prefix: impl std::fmt::Display,
-    cont_width: usize,
     msg: &str,
     style: impl Fn(&str) -> ColoredString,
 ) {
+    let prefix = prefix.to_string();
+    // prefix may start with a leading newline (ui::hint) — measure the last line
+    let cont_width = visible_len(prefix.rsplit('\n').next().unwrap_or(""));
     // +2 margin accounts for emoji icons that may render as 2 display columns,
     // ensuring our word-wrap fires before the terminal's native line break.
     let text_width = terminal_width().saturating_sub(cont_width + 2);
@@ -132,7 +125,6 @@ pub fn header(msg: &str) {
 pub fn step_done(msg: &str) {
     print_wrapped(
         format!("   {}  ", "✓".dimmed()),
-        TOP_CONT_WIDTH,
         msg,
         |s| s.dimmed().strikethrough(),
     );
@@ -144,7 +136,6 @@ pub fn step(msg: &str) {
     save_cursor();
     print_wrapped(
         format!("   {}  ", "…".dimmed()),
-        TOP_CONT_WIDTH,
         msg,
         |s| s.dimmed(),
     );
@@ -160,7 +151,6 @@ pub fn step_done_replace(msg: &str) {
 pub fn success(msg: &str) {
     print_wrapped(
         format!("   {}  ", "✓".green().bold()),
-        TOP_CONT_WIDTH,
         msg,
         |s| s.green(),
     );
@@ -170,7 +160,6 @@ pub fn success(msg: &str) {
 pub fn error(msg: &str) {
     print_wrapped(
         format!("   {}  ", "✗".red().bold()),
-        TOP_CONT_WIDTH,
         msg,
         |s| s.red(),
     );
@@ -180,7 +169,6 @@ pub fn error(msg: &str) {
 pub fn warning(msg: &str) {
     print_wrapped(
         format!("   {}  ", "⚠".yellow()),
-        TOP_CONT_WIDTH,
         msg,
         |s| s.yellow(),
     );
@@ -189,8 +177,7 @@ pub fn warning(msg: &str) {
 /// Print a hint / next-step line.
 pub fn hint(msg: &str) {
     print_wrapped(
-        format!("\n{}", " ".repeat(PLAIN_CONT_WIDTH)),
-        PLAIN_CONT_WIDTH,
+        "\n    ",
         msg,
         |s| s.dimmed(),
     );
@@ -199,8 +186,7 @@ pub fn hint(msg: &str) {
 /// Print an indented info line.
 pub fn info(msg: &str) {
     print_wrapped(
-        " ".repeat(PLAIN_CONT_WIDTH),
-        PLAIN_CONT_WIDTH,
+        "    ",
         msg,
         |s| s.normal(),
     );
@@ -212,7 +198,6 @@ pub fn info(msg: &str) {
 pub fn sub_done(msg: &str) {
     print_wrapped(
         format!("      - {}  ", "✓".dimmed()),
-        SUB_CONT_WIDTH,
         msg,
         |s| s.dimmed().strikethrough(),
     );
@@ -222,7 +207,6 @@ pub fn sub_done(msg: &str) {
 pub fn sub_success(msg: &str) {
     print_wrapped(
         format!("      - {}  ", "✓".green()),
-        SUB_CONT_WIDTH,
         msg,
         |s| s.green(),
     );
@@ -232,7 +216,6 @@ pub fn sub_success(msg: &str) {
 pub fn sub_error(msg: &str) {
     print_wrapped(
         format!("      - {}  ", "✗".red().bold()),
-        SUB_CONT_WIDTH,
         msg,
         |s| s.red(),
     );
@@ -242,7 +225,6 @@ pub fn sub_error(msg: &str) {
 pub fn sub_warning(msg: &str) {
     print_wrapped(
         format!("      - {}  ", "⚠".yellow()),
-        SUB_CONT_WIDTH,
         msg,
         |s| s.yellow(),
     );
@@ -252,7 +234,6 @@ pub fn sub_warning(msg: &str) {
 pub fn sub_info(msg: &str) {
     print_wrapped(
         "      - ",
-        SUB_PLAIN_CONT_WIDTH,
         msg,
         |s| s.normal(),
     );
@@ -262,7 +243,6 @@ pub fn sub_info(msg: &str) {
 pub fn sub_hint(msg: &str) {
     print_wrapped(
         format!("      - {}  ", "⚠".yellow()),
-        SUB_CONT_WIDTH,
         msg,
         |s| s.dimmed(),
     );
