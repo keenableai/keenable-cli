@@ -859,6 +859,8 @@ fn confirm_configure(product: &McpProduct, ide_names: &[&str], yes: bool) -> boo
 }
 
 fn confirm_reset(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
+    // Unlike configure, the stored skip_setup_confirmation does not apply:
+    // reset is destructive, so only an explicit --yes skips the prompt.
     if yes {
         return true;
     }
