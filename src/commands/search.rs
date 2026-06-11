@@ -28,9 +28,10 @@ impl SearchFilters {
 }
 
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
+/// Trimmed — stray whitespace breaks HTTP header building.
 fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
     if let Some(key) = override_key {
-        return Some(key.to_string());
+        return Some(key.trim().to_string());
     }
     config::get_api_key()
 }
@@ -146,35 +147,48 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
 }
 
 /// Display an ApiError according to output mode (human vs YAML).
-/// Login can't raise limits for an already-authenticated key, so the login
-/// hint is shown for auth errors (re-auth fixes a bad key) and anonymous
-/// rate limits, but not for authenticated rate limits.
+/// Auth and rate-limit errors always carry a `keenable login` hint (a
+/// structured `hint` field in YAML mode), but the wording is auth-aware:
+/// login can't raise limits for a key that's already in use, so an
+/// authenticated 429 suggests retrying or switching accounts instead of
+/// falsely promising higher limits.
 fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
     let authenticated = resolve_api_key(api_key_override).is_some();
     let login_hint = if err.is_auth_error() {
-        Some("to authenticate.")
-    } else if err.is_rate_limit() && !authenticated {
-        Some("to authenticate and increase your limits.")
+        Some("Run `keenable login` to authenticate.".to_string())
+    } else if err.is_rate_limit() {
+        if authenticated {
+            let retry = err
+                .retry_after
+                .map(|s| format!("Retry after {}s", s))
+                .unwrap_or_else(|| "Retry later".to_string());
+            Some(format!(
+                "Rate limit reached for your API key. {}, or run `keenable login` to switch accounts.",
+                retry
+            ))
+        } else {
+            Some("Run `keenable login` to authenticate and increase your limits.".to_string())
+        }
     } else {
         None
     };
 
     if human {
         ui::error(&err.display());
-        if err.is_rate_limit() {
+        if err.is_rate_limit() && !authenticated {
             if let Some(secs) = err.retry_after {
                 ui::hint(&format!("Retry after {}s.", secs));
             }
         }
-        if let Some(suffix) = login_hint {
-            ui::hint(&format!("Run {} {}", "keenable login".cyan(), suffix));
+        if let Some(hint) = &login_hint {
+            ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
         }
         eprintln!();
     } else {
         // YAML error output for agents (retry_after is already a field)
         let mut val = err.to_yaml_value();
-        if let Some(suffix) = login_hint {
-            val["hint"] = Value::String(format!("Run `keenable login` {}", suffix));
+        if let Some(hint) = login_hint {
+            val["hint"] = Value::String(hint);
         }
         print_yaml(&val);
     }

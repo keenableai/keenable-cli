@@ -18,8 +18,9 @@ use crate::constants::API_BASE_URL;
 const MCP_HEADER_PREFIX: &str = "mcp-";
 
 pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
+    // Trimmed — the key goes verbatim into an HTTP header.
     let key = match api_key_override {
-        Some(k) => Some(k.to_string()),
+        Some(k) => Some(k.trim().to_string()),
         None => config::get_api_key(),
     };
 

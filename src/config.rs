@@ -106,12 +106,19 @@ pub fn remove_config_value(key: &str) {
     write_json(&config_file(), &config);
 }
 
+// Keys are trimmed on save AND read (read covers configs written by older
+// versions or by hand) — stray whitespace breaks HTTP header building.
+
 pub fn get_api_key() -> Option<String> {
-    get_config()["api_key"].as_str().map(|s| s.to_string())
+    get_config()["api_key"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 pub fn set_api_key(key: &str) {
-    set_config_value("api_key", Value::String(key.to_string()));
+    set_config_value("api_key", Value::String(key.trim().to_string()));
 }
 
 pub fn clear_credentials() {

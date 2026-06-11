@@ -49,6 +49,7 @@ impl ApiError {
 
     pub fn is_auth_error(&self) -> bool {
         self.status == 401
+            || self.status == 403
             || (self.status == 400
                 && self.error.to_lowercase().contains("authentication"))
     }
