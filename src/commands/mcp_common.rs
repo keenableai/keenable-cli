@@ -341,23 +341,30 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
             return;
         }
 
+        let mut all_ok = true;
         for ide in &targets {
             ui::label(ide.name);
-            configure_ide(product, ide, api_key.as_deref());
+            all_ok &= configure_ide(product, ide, api_key.as_deref());
             (product.show_recommendations)(ide);
         }
 
         eprintln!();
-        ui::success("Configuration complete");
+        if all_ok {
+            ui::success("Configuration complete");
+        } else {
+            ui::error("Some clients could not be configured");
+            eprintln!();
+            std::process::exit(1);
+        }
     }
 
     eprintln!();
 }
 
-fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
+fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> bool {
     let Some(mut config) = read_config_for_write(&ide.config_path, "Fix the file and re-run.")
     else {
-        return;
+        return false;
     };
     let mut config_changed = false;
 
@@ -471,8 +478,10 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
                 ide.config_path.display(),
                 e
             ));
+            return false;
         }
     }
+    true
 }
 
 // ── Reset flow ──────────────────────────────────────────────────────
@@ -551,22 +560,29 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
             eprintln!("   {} {}", "✓".green(), ide.name.green());
         }
 
+        let mut all_ok = true;
         for ide in &targets {
             ui::label(ide.name);
-            reset_ide(product, ide);
+            all_ok &= reset_ide(product, ide);
         }
 
         eprintln!();
-        ui::success("Reset complete");
+        if all_ok {
+            ui::success("Reset complete");
+        } else {
+            ui::error("Some clients could not be reset");
+            eprintln!();
+            std::process::exit(1);
+        }
     }
 
     eprintln!();
 }
 
-fn reset_ide(product: &McpProduct, ide: &IDEDef) {
+fn reset_ide(product: &McpProduct, ide: &IDEDef) -> bool {
     let Some(mut config) = read_config_for_write(&ide.config_path, "Fix the file and re-run.")
     else {
-        return;
+        return false;
     };
     let mut config_changed = false;
 
@@ -633,8 +649,10 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) {
                 ide.config_path.display(),
                 e
             ));
+            return false;
         }
     }
+    true
 }
 
 // ── Status display ──────────────────────────────────────────────────

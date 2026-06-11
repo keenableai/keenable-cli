@@ -185,9 +185,6 @@ pub fn read_config_lenient(path: &PathBuf) -> Value {
 }
 
 pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
     let content = if is_toml(path) {
         let toml_val: toml::Value = serde_json::from_value(config.clone())
             .map_err(|e| std::io::Error::other(format!("TOML conversion failed: {}", e)))?;
@@ -196,15 +193,9 @@ pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error
     } else {
         serde_json::to_string_pretty(config).map_err(std::io::Error::other)?
     };
-    // Temp + rename: a crash mid-write must not leave a truncated config
+    // Atomic: a crash mid-write must not leave a truncated config
     // (e.g. ~/.claude.json holds all of Claude Code's state).
-    let tmp = path.with_extension("keenable-tmp");
-    fs::write(&tmp, content)?;
-    #[cfg(unix)]
-    if let Ok(meta) = fs::metadata(path) {
-        fs::set_permissions(&tmp, meta.permissions()).ok();
-    }
-    fs::rename(&tmp, path)
+    crate::config::atomic_write(path, &content, false)
 }
 
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
