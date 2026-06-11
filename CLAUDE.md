@@ -224,6 +224,8 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 **Interactive confirmation:**
 Before modifying configs, shows a prompt with three options: "Proceed", "Proceed and don't ask again", "Cancel". The "don't ask again" preference is stored in `~/.keenable/config.json` as `skip_setup_confirmation: true`.
 
+**Non-interactive use:** `configure-mcp`, `configure-webql`, `reset`, and `reset-webql` accept `-y`/`--yes` to skip the confirmation prompt (CI, headless agents). Without `--yes`, a non-TTY stdin exits 1 with a hint instead of hanging on the prompt.
+
 **Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `ConfigureMcp` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_client_recommendations()` in `configure_mcp.rs`.
 
 ### Reset Command (`src/commands/reset.rs`)
