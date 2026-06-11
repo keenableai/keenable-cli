@@ -28,14 +28,25 @@ fn write_json(path: &PathBuf, data: &Value) {
     let dir = path.parent().unwrap();
     fs::create_dir_all(dir).expect("failed to create config directory");
     let content = serde_json::to_string_pretty(data).unwrap();
-    fs::write(path, &content).expect("failed to write config file");
 
-    // Restrict permissions — config files contain API keys
-    #[cfg(unix)]
+    // Write to a temp file created 0600 (the config holds API keys — it must
+    // never exist world-readable, even briefly), then rename so concurrent
+    // readers see either the old or the new file, never a partial one.
+    let tmp = path.with_extension("json.tmp");
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).ok();
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        use std::io::Write;
+        let mut f = opts.open(&tmp).expect("failed to write config file");
+        f.write_all(content.as_bytes())
+            .expect("failed to write config file");
     }
+    fs::rename(&tmp, path).expect("failed to write config file");
 }
 
 pub fn get_config() -> Value {
@@ -44,6 +55,11 @@ pub fn get_config() -> Value {
 
 pub fn set_config_value(key: &str, value: Value) {
     let mut config = get_config();
+    // A valid-JSON-but-not-object file (e.g. hand-edited to `[]`) would make
+    // the index assignment panic; start over instead.
+    if !config.is_object() {
+        config = Value::Object(Default::default());
+    }
     config[key] = value;
     write_json(&config_file(), &config);
 }

@@ -199,6 +199,7 @@ async fn send_request(
                 }
             }
 
+            let status = response.status();
             let content_type = response
                 .headers()
                 .get("content-type")
@@ -212,7 +213,8 @@ async fn send_request(
                 let body = response.text().await.unwrap_or_default();
                 let mut last: Option<Value> = None;
                 for sse_line in body.lines() {
-                    if let Some(data) = sse_line.strip_prefix("data: ") {
+                    // spec allows both "data: x" and "data:x"
+                    if let Some(data) = sse_line.strip_prefix("data:") {
                         let trimmed_data = data.trim();
                         if trimmed_data.is_empty() {
                             continue;
@@ -222,35 +224,64 @@ async fn send_request(
                         }
                     }
                 }
+                if last.is_none() {
+                    // A request must get *some* answer or the client hangs.
+                    return (
+                        rpc_error(request, format!("HTTP {}: empty event stream", status)),
+                        false,
+                    );
+                }
                 let is_session_expired = is_session_not_found(&last);
                 (last, is_session_expired)
             } else {
                 // Regular JSON response
                 let body = response.text().await.unwrap_or_default();
                 let trimmed = body.trim();
-                if trimmed.is_empty() {
+                if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                    if is_session_not_found(&Some(val.clone())) {
+                        return (Some(val), true);
+                    }
+                    if val.get("jsonrpc").is_some() {
+                        (Some(val), false)
+                    } else if !status.is_success() {
+                        // Backend error format ({"error", "message"}) — wrap it,
+                        // a non-JSON-RPC object on stdout violates the protocol.
+                        (
+                            rpc_error(request, format!("HTTP {}: {}", status, snippet(trimmed))),
+                            false,
+                        )
+                    } else {
+                        (Some(val), false)
+                    }
+                } else if trimmed.is_empty() && status.is_success() {
+                    // e.g. 202 Accepted for a notification
                     (None, false)
-                } else if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                    let is_session_expired = is_session_not_found(&Some(val.clone()));
-                    (Some(val), is_session_expired)
                 } else {
-                    (None, false)
+                    (
+                        rpc_error(request, format!("HTTP {}: {}", status, snippet(trimmed))),
+                        false,
+                    )
                 }
             }
         }
-        Err(e) => {
-            let id = request.get("id").cloned().unwrap_or(Value::Null);
-            let error_resp = serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32000,
-                    "message": format!("Transport error: {}", e)
-                },
-                "id": id
-            });
-            (Some(error_resp), false)
-        }
+        Err(e) => (rpc_error(request, format!("Transport error: {}", e)), false),
     }
+}
+
+/// Build a JSON-RPC error response for `request`, or `None` when the request
+/// is a notification (no `id`) — JSON-RPC forbids responding to those.
+fn rpc_error(request: &Value, message: String) -> Option<Value> {
+    let id = request.get("id")?.clone();
+    Some(serde_json::json!({
+        "jsonrpc": "2.0",
+        "error": { "code": -32000, "message": message },
+        "id": id
+    }))
+}
+
+/// Trim server bodies for error messages (an HTML error page can be huge).
+fn snippet(body: &str) -> String {
+    body.chars().take(200).collect()
 }
 
 fn is_session_not_found(body: &Option<Value>) -> bool {

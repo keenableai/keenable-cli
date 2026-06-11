@@ -21,6 +21,16 @@ pub struct DaemonResponse {
     pub error: Option<String>,
 }
 
+/// Whether a daemon failure happened before or after the request may have
+/// been forwarded to the API — callers must not retry non-idempotent
+/// commands after a possible delivery.
+pub enum DaemonError {
+    /// Failed before delivery — safe to retry directly.
+    Unavailable,
+    /// The request may have reached the API before the failure.
+    AfterSend(String),
+}
+
 // ── Unix implementation (Unix sockets) ──────────────────────────────────────
 
 #[cfg(unix)]
@@ -58,8 +68,12 @@ mod platform {
 
         let sock = socket_path();
 
-        // Clean up stale socket
+        // Clean up stale socket — but two commands racing can both spawn a
+        // daemon, and the loser must not unlink the winner's live socket.
         if sock.exists() {
+            if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+                return; // another daemon is already serving
+            }
             fs::remove_file(&sock).ok();
         }
 
@@ -88,9 +102,15 @@ mod platform {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 let elapsed = last_activity_clone.lock().await.elapsed();
                 if elapsed >= IDLE_TIMEOUT {
-                    // Clean up and exit
-                    fs::remove_file(&sock_clone).ok();
-                    fs::remove_file(pid_path()).ok();
+                    // Clean up only if the files are still ours — a newer
+                    // daemon may have replaced them.
+                    let owns_files = fs::read_to_string(pid_path())
+                        .map(|p| p.trim() == std::process::id().to_string())
+                        .unwrap_or(false);
+                    if owns_files {
+                        fs::remove_file(&sock_clone).ok();
+                        fs::remove_file(pid_path()).ok();
+                    }
                     std::process::exit(0);
                 }
             }
@@ -211,14 +231,19 @@ mod platform {
     /// Kill the running daemon (if any) and clean up socket/PID files.
     /// Called after login/logout so the daemon restarts with the new auth state.
     pub fn kill_daemon() {
-        if let Ok(pid_str) = fs::read_to_string(pid_path()) {
-            let pid = pid_str.trim();
-            std::process::Command::new("kill")
-                .arg(pid)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .ok();
+        // Only signal if a daemon actually answers on the socket — a pid file
+        // left behind by a crash may point at an unrelated process by now.
+        let daemon_alive = std::os::unix::net::UnixStream::connect(socket_path()).is_ok();
+        if daemon_alive {
+            if let Ok(pid_str) = fs::read_to_string(pid_path()) {
+                let pid = pid_str.trim();
+                std::process::Command::new("kill")
+                    .arg(pid)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .ok();
+            }
         }
         fs::remove_file(socket_path()).ok();
         fs::remove_file(pid_path()).ok();
@@ -276,11 +301,11 @@ mod platform {
         Ok(())
     }
 
-    pub async fn daemon_request(req: &DaemonRequest) -> Result<DaemonResponse, String> {
+    pub async fn daemon_request(req: &DaemonRequest) -> Result<DaemonResponse, DaemonError> {
         let sock = socket_path();
         let stream = tokio::net::UnixStream::connect(&sock)
             .await
-            .map_err(|e| format!("Cannot connect to daemon: {}", e))?;
+            .map_err(|_| DaemonError::Unavailable)?;
 
         let (reader, mut writer) = stream.into_split();
 
@@ -289,16 +314,18 @@ mod platform {
         writer
             .write_all(req_line.as_bytes())
             .await
-            .map_err(|e| format!("Write error: {}", e))?;
+            .map_err(|_| DaemonError::Unavailable)?;
 
         let mut lines = BufReader::new(reader).lines();
-        match tokio::time::timeout(Duration::from_secs(60), lines.next_line()).await {
-            Ok(Ok(Some(line))) => {
-                serde_json::from_str(&line).map_err(|e| format!("Invalid daemon response: {}", e))
-            }
-            Ok(Ok(None)) => Err("Daemon closed connection".to_string()),
-            Ok(Err(e)) => Err(format!("Read error: {}", e)),
-            Err(_) => Err("Daemon request timed out".to_string()),
+        // Wait longer than the daemon's own 60s HTTP timeout, so a slow
+        // upstream yields the daemon's structured error instead of a client
+        // timeout (which callers would treat as "maybe delivered").
+        match tokio::time::timeout(Duration::from_secs(75), lines.next_line()).await {
+            Ok(Ok(Some(line))) => serde_json::from_str(&line)
+                .map_err(|e| DaemonError::AfterSend(format!("Invalid daemon response: {}", e))),
+            Ok(Ok(None)) => Err(DaemonError::AfterSend("Daemon closed connection".to_string())),
+            Ok(Err(e)) => Err(DaemonError::AfterSend(format!("Read error: {}", e))),
+            Err(_) => Err(DaemonError::AfterSend("Daemon request timed out".to_string())),
         }
     }
 }
@@ -320,8 +347,8 @@ mod platform {
         Err("Daemon is not supported on Windows".to_string())
     }
 
-    pub async fn daemon_request(_req: &DaemonRequest) -> Result<DaemonResponse, String> {
-        Err("Daemon is not supported on Windows".to_string())
+    pub async fn daemon_request(_req: &DaemonRequest) -> Result<DaemonResponse, DaemonError> {
+        Err(DaemonError::Unavailable)
     }
 }
 

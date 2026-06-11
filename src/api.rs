@@ -46,7 +46,11 @@ impl ApiError {
 
 pub fn api_key_client(api_key: &str) -> Client {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("X-API-Key", api_key.parse().unwrap());
+    // Keys from --api-key or a hand-edited config may carry stray whitespace
+    // or control chars; a bad header value must yield a 401, not a panic.
+    if let Ok(value) = api_key.trim().parse() {
+        headers.insert("X-API-Key", value);
+    }
     Client::builder()
         .default_headers(headers)
         .timeout(std::time::Duration::from_secs(60))

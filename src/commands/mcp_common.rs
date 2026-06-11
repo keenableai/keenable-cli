@@ -108,7 +108,7 @@ pub struct ProductStatus {
 }
 
 pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> ProductStatus {
-    let config = read_config(&ide.config_path);
+    let config = read_config_lenient(&ide.config_path);
     let existing = config
         .pointer(&format!("/{}/{}", ide.servers_key, product.entry_name))
         .cloned();
@@ -154,7 +154,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
             // Only check ~/.claude/settings.json for deny (the file Claude Code reads)
             let settings_deny_list = claude_code_settings_path()
                 .map(|p| {
-                    let settings = read_config(&p);
+                    let settings = read_config_lenient(&p);
                     settings
                         .pointer("/permissions/deny")
                         .and_then(|v| v.as_array())
@@ -204,7 +204,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
 
             let none_allowed_in_settings = claude_code_settings_path()
                 .map(|p| {
-                    let settings = read_config(&p);
+                    let settings = read_config_lenient(&p);
                     let allow = settings
                         .pointer("/permissions/allow")
                         .and_then(|v| v.as_array())
@@ -269,30 +269,37 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
     ui::header(&format!("keenable {}", product.configure_cmd));
 
     // Pre-flight: validate API key (optional — unauth flow works without one)
-    let api_key: Option<String> = match config::get_api_key() {
-        Some(key) => {
-            if validate_api_key(&key).await {
-                Some(key)
-            } else {
-                None // treat invalid key same as no key
-            }
-        }
-        None => None,
-    };
-
     ui::label("Keenable CLI");
-    match &api_key {
-        Some(_) => {
-            ui::success("API key configured");
-        }
+    let api_key: Option<String> = match config::get_api_key() {
+        Some(key) => match validate_api_key(&key).await {
+            KeyCheck::Valid => {
+                ui::success("API key is valid");
+                Some(key)
+            }
+            KeyCheck::Invalid => {
+                ui::warning("Stored API key is invalid — configuring for free tier (IP-based rate limits)");
+                ui::sub_info(&format!(
+                    "Run {} to fix it",
+                    "keenable login".cyan()
+                ));
+                None
+            }
+            // Can't verify ≠ invalid: silently stripping the key from client
+            // configs over a network blip would break working setups.
+            KeyCheck::Unreachable => {
+                ui::warning("Could not verify API key (network error) — using the stored key");
+                Some(key)
+            }
+        },
         None => {
             ui::info("No API key — configuring for free tier (IP-based rate limits)");
             ui::sub_info(&format!(
                 "Run {} for higher limits",
                 "keenable login".cyan()
             ));
+            None
         }
-    }
+    };
 
     let all = all_ides();
     let detected: Vec<&IDEDef> = all.iter().filter(|ide| is_detected(ide)).collect();
@@ -348,7 +355,17 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
 }
 
 fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
-    let mut config = read_config(&ide.config_path);
+    let mut config = match read_config(&ide.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            ui::sub_error(&format!(
+                "{}: {} — not modifying. Fix the file and re-run.",
+                ide.config_path.display(),
+                e
+            ));
+            return;
+        }
+    };
     let mut config_changed = false;
 
     // Step 1: Remove duplicate entries (other names pointing at this product's URL)
@@ -438,7 +455,9 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
             ui::sub_success(&format!("{} updated", product.display_name));
         }
         None => {
-            if config.get(ide.servers_key).is_none() {
+            // A non-object value here (e.g. hand-edited `"mcpServers": []`)
+            // would make the nested index assignment panic.
+            if !config[ide.servers_key].is_object() {
                 config[ide.servers_key] = json!({});
             }
             config[ide.servers_key][product.entry_name] = desired;
@@ -556,7 +575,17 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
 }
 
 fn reset_ide(product: &McpProduct, ide: &IDEDef) {
-    let mut config = read_config(&ide.config_path);
+    let mut config = match read_config(&ide.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            ui::sub_error(&format!(
+                "{}: {} — not modifying. Fix the file and re-run.",
+                ide.config_path.display(),
+                e
+            ));
+            return;
+        }
+    };
     let mut config_changed = false;
 
     // Step 1: Remove the product's MCP entry
@@ -768,7 +797,7 @@ fn show_reset_status(product: &McpProduct, configured: &[&IDEDef]) {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn has_product_entry(product: &McpProduct, ide: &IDEDef) -> bool {
-    let config = read_config(&ide.config_path);
+    let config = read_config_lenient(&ide.config_path);
     config
         .pointer(&format!("/{}/{}", ide.servers_key, product.entry_name))
         .is_some()
@@ -787,11 +816,20 @@ fn warn_unmatched_flags(selected_flags: &[String], all: &[IDEDef], detected: &[&
     }
 }
 
-async fn validate_api_key(api_key: &str) -> bool {
+enum KeyCheck {
+    Valid,
+    /// The server rejected the key (401/403).
+    Invalid,
+    /// Network failure or server error — validity unknown.
+    Unreachable,
+}
+
+async fn validate_api_key(api_key: &str) -> KeyCheck {
     let client = api_key_client(api_key);
     match client.get(api_url("/v1/auth/user")).send().await {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+        Ok(resp) if resp.status().is_success() => KeyCheck::Valid,
+        Ok(resp) if resp.status() == 401 || resp.status() == 403 => KeyCheck::Invalid,
+        _ => KeyCheck::Unreachable,
     }
 }
 
@@ -934,7 +972,7 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
         for tool in &missing_names {
             new_deny.push(tool.to_string());
         }
-        if config.pointer("/permissions").is_none() {
+        if !config["permissions"].is_object() {
             config["permissions"] = json!({});
         }
         config["permissions"]["deny"] = json!(new_deny);
@@ -950,26 +988,36 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
 
     // Also add deny + remove from allow list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path() {
-        let mut settings = read_config(&settings_path);
-        let mut settings_changed = false;
-        let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
-        let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
-        if settings_changed {
-            match write_config(&settings_path, &settings) {
-                Ok(()) => {
-                    if let Some(msg) = deny_msg {
-                        ui::sub_success(&msg);
+        match read_config(&settings_path) {
+            Err(e) => {
+                ui::sub_error(&format!(
+                    "{}: {} — not modifying. Standard tools may still be enabled",
+                    settings_path.display(),
+                    e
+                ));
+            }
+            Ok(mut settings) => {
+                let mut settings_changed = false;
+                let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
+                let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
+                if settings_changed {
+                    match write_config(&settings_path, &settings) {
+                        Ok(()) => {
+                            if let Some(msg) = deny_msg {
+                                ui::sub_success(&msg);
+                            }
+                            if let Some(msg) = allow_msg {
+                                ui::sub_success(&msg);
+                            }
+                        }
+                        Err(e) => {
+                            ui::sub_error(&format!(
+                                "Failed to write {}: {}. Standard tools may still be enabled",
+                                settings_path.display(),
+                                e
+                            ));
+                        }
                     }
-                    if let Some(msg) = allow_msg {
-                        ui::sub_success(&msg);
-                    }
-                }
-                Err(e) => {
-                    ui::sub_error(&format!(
-                        "Failed to write {}: {}. Standard tools may still be enabled",
-                        settings_path.display(),
-                        e
-                    ));
                 }
             }
         }
@@ -1050,7 +1098,7 @@ fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<
         for tool in &missing {
             new_deny.push(tool.to_string());
         }
-        if config.pointer("/permissions").is_none() {
+        if !config["permissions"].is_object() {
             config["permissions"] = json!({});
         }
         config["permissions"]["deny"] = json!(new_deny);
@@ -1085,9 +1133,11 @@ fn remove_from_project_allow_lists() {
     find_claude_settings(&home, &mut settings_files, 0, 1);
 
     for path in settings_files {
-        let mut config = read_config(&path);
+        let Ok(mut config) = read_config(&path) else {
+            continue; // unparseable project settings — leave untouched
+        };
         let mut changed = false;
-        let _ = remove_from_allow_list_quiet(&mut config, &mut changed);
+        let removed_msg = remove_from_allow_list_quiet(&mut config, &mut changed);
         if changed {
             let display_path = path.strip_prefix(&home)
                 .map(|p| format!("~/{}", p.display()))
@@ -1095,8 +1145,8 @@ fn remove_from_project_allow_lists() {
             match write_config(&path, &config) {
                 Ok(()) => {
                     ui::sub_success(&format!(
-                        "Removed {} from allow list in {}",
-                        CLAUDE_CODE_STANDARD_TOOLS.join(", "),
+                        "{} in {}",
+                        removed_msg.unwrap_or_else(|| "Updated allow list".to_string()),
                         display_path
                     ));
                 }
@@ -1201,7 +1251,7 @@ fn disable_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
         ));
     } else {
         let mut missing = Vec::new();
-        if config.pointer("/permission").is_none() {
+        if !config["permission"].is_object() {
             config["permission"] = json!({});
         }
         for tool in OPENCODE_STANDARD_TOOLS {
@@ -1268,7 +1318,17 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
 
     // Also remove from deny list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path() {
-        let mut settings = read_config(&settings_path);
+        let mut settings = match read_config(&settings_path) {
+            Ok(s) => s,
+            Err(e) => {
+                ui::sub_error(&format!(
+                    "{}: {} — not modifying. Standard tools may still be disabled",
+                    settings_path.display(),
+                    e
+                ));
+                return;
+            }
+        };
         let mut settings_changed = false;
         remove_from_deny_list(&mut settings, &mut settings_changed);
         if settings_changed {

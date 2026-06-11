@@ -188,7 +188,7 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
    ⚠  Cursor                        ← yellow, configured with issues
       ⚠  Different API key          ← ui::sub_warning()
       We recommend disabling ...    ← ui::sub_hint() — dimmed
-   ✗  VS Code                       ← red, not configured
+   ✗  OpenCode                      ← red, not configured
 ```
 
 **Two modes:**
@@ -200,11 +200,11 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 2. API key is valid (pings search API) → `ui::error()` + `ui::sub_info()` if invalid
 
 **Client detection:**
-- Supported: Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Codex
+- Supported: Claude Code, Claude Desktop, Cursor, Windsurf, Codex, OpenCode
 - Detection: parent directory of config file exists
 
 **Client-specific flags:**
-`--claude-code`, `--claude-desktop`, `--cursor`, `--vscode`, `--windsurf`, `--codex`, `--all`
+`--claude-code`, `--claude-desktop`, `--cursor`, `--windsurf`, `--codex`, `--opencode`, `--all`
 
 **Status mode per-client display:**
 - **✓ green**: fully configured, no issues. May show dimmed `sub_hint` recommendations.
