@@ -7,6 +7,7 @@
 //! start position, keeping paragraphs clean at any terminal width.
 
 use colored::{ColoredString, Colorize};
+use std::io::IsTerminal;
 
 const EYES: &str = "👀";
 
@@ -78,14 +79,19 @@ fn print_wrapped(
 
 // ── Cursor helpers ─────────────────────────────────────────────────
 
-/// Save the current cursor position (DEC private mode).
+/// Save the current cursor position (DEC private mode). No-op when stderr
+/// is not a terminal — the escapes would just litter piped output.
 pub fn save_cursor() {
-    eprint!("\x1b7");
+    if std::io::stderr().is_terminal() {
+        eprint!("\x1b7");
+    }
 }
 
 /// Restore the saved cursor position and clear everything below it.
 pub fn restore_and_clear() {
-    eprint!("\x1b8\x1b[J");
+    if std::io::stderr().is_terminal() {
+        eprint!("\x1b8\x1b[J");
+    }
 }
 
 // ── Top-level steps ─────────────────────────────────────────────────

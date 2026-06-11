@@ -4,6 +4,7 @@ use colored::Colorize;
 use dialoguer::Select;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::IsTerminal;
 
 use crate::api::{api_key_client, api_url};
 use crate::config;
@@ -264,7 +265,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
 
 // ── Configure flow ──────────────────────────────────────────────────
 
-pub async fn configure(product: &McpProduct, selected_flags: Vec<String>) {
+pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
     ui::header(&format!("keenable {}", product.configure_cmd));
 
     // Pre-flight: validate API key (optional — unauth flow works without one)
@@ -328,7 +329,7 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>) {
 
         let target_names: Vec<&str> = targets.iter().map(|ide| ide.name).collect();
 
-        if !confirm_configure(product, &target_names) {
+        if !confirm_configure(product, &target_names, yes) {
             eprintln!();
             return;
         }
@@ -468,7 +469,7 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) {
 
 // ── Reset flow ──────────────────────────────────────────────────────
 
-pub fn reset(product: &McpProduct, selected_flags: Vec<String>) {
+pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
     ui::header(&format!("keenable {}", product.reset_cmd));
 
     let all = all_ides();
@@ -531,7 +532,7 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>) {
         let target_names: Vec<&str> = targets.iter().map(|ide| ide.name).collect();
 
         ui::save_cursor();
-        if !confirm_reset(product, &target_names) {
+        if !confirm_reset(product, &target_names, yes) {
             eprintln!();
             return;
         }
@@ -794,10 +795,25 @@ async fn validate_api_key(api_key: &str) -> bool {
     }
 }
 
-fn confirm_configure(product: &McpProduct, ide_names: &[&str]) -> bool {
-    if config::get_skip_setup_confirmation() {
+// dialoguer reads keys from stdin; with piped stdin it errors and we'd
+// silently treat that as "Cancel". Fail loudly with the fix instead.
+fn require_terminal() {
+    if !std::io::stdin().is_terminal() {
+        ui::error("Confirmation needed, but stdin is not a terminal");
+        ui::hint(&format!(
+            "Re-run with {} to skip the confirmation prompt",
+            "--yes".cyan()
+        ));
+        eprintln!();
+        std::process::exit(1);
+    }
+}
+
+fn confirm_configure(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
+    if yes || config::get_skip_setup_confirmation() {
         return true;
     }
+    require_terminal();
 
     eprintln!();
     let target = if ide_names.len() == 1 {
@@ -842,7 +858,14 @@ fn confirm_configure(product: &McpProduct, ide_names: &[&str]) -> bool {
     }
 }
 
-fn confirm_reset(product: &McpProduct, ide_names: &[&str]) -> bool {
+fn confirm_reset(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
+    // Unlike configure, the stored skip_setup_confirmation does not apply:
+    // reset is destructive, so only an explicit --yes skips the prompt.
+    if yes {
+        return true;
+    }
+    require_terminal();
+
     eprintln!();
     let target = if ide_names.len() == 1 {
         ide_names[0].to_string()
