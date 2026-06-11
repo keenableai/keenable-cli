@@ -57,6 +57,9 @@ pub struct IDEDef {
     pub entry_style: McpEntryStyle,
     /// Whether this IDE has standard tools that can be disabled via config.
     pub has_standard_tools: bool,
+    /// Path whose existence indicates the IDE is installed. When `None`,
+    /// detection falls back to "parent dir of config_path exists".
+    pub detect_path: Option<PathBuf>,
 }
 
 pub fn all_ides() -> Vec<IDEDef> {
@@ -73,14 +76,21 @@ pub fn all_ides() -> Vec<IDEDef> {
                 transport_type: Some("http"),
             },
             has_standard_tools: true,
+            // config_path's parent is $HOME, which always exists — without
+            // this, Claude Code is "detected" on every machine.
+            detect_path: Some(home.join(".claude")),
         },
         IDEDef {
             name: "Claude Desktop",
             flag: "claude-desktop",
-            config_path: home.join("Library/Application Support/Claude/claude_desktop_config.json"),
+            // macOS: ~/Library/Application Support, Windows: %APPDATA%
+            config_path: dirs::config_dir()
+                .unwrap_or_else(|| home.join(".config"))
+                .join("Claude/claude_desktop_config.json"),
             servers_key: "mcpServers",
             entry_style: McpEntryStyle::Stdio,
             has_standard_tools: false,
+            detect_path: None,
         },
         IDEDef {
             name: "Cursor",
@@ -92,6 +102,7 @@ pub fn all_ides() -> Vec<IDEDef> {
                 transport_type: Some("streamable-http"),
             },
             has_standard_tools: false,
+            detect_path: None,
         },
         IDEDef {
             name: "Windsurf",
@@ -103,6 +114,7 @@ pub fn all_ides() -> Vec<IDEDef> {
                 transport_type: None,
             },
             has_standard_tools: false,
+            detect_path: None,
         },
         IDEDef {
             name: "Codex",
@@ -111,6 +123,7 @@ pub fn all_ides() -> Vec<IDEDef> {
             servers_key: "mcp_servers",
             entry_style: McpEntryStyle::Toml,
             has_standard_tools: false,
+            detect_path: None,
         },
         IDEDef {
             name: "OpenCode",
@@ -122,12 +135,17 @@ pub fn all_ides() -> Vec<IDEDef> {
                 transport_type: Some("remote"),
             },
             has_standard_tools: true,
+            detect_path: None,
         },
     ]
 }
 
-/// Check if an IDE is "detected" — parent directory exists.
+/// Check if an IDE is "detected" — its detect_path (or the config file's
+/// parent directory) exists.
 pub fn is_detected(ide: &IDEDef) -> bool {
+    if let Some(p) = &ide.detect_path {
+        return p.exists() || ide.config_path.exists();
+    }
     ide.config_path
         .parent()
         .map_or(false, |p| p.exists())
@@ -139,30 +157,45 @@ fn is_toml(path: &PathBuf) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some("toml")
 }
 
-pub fn read_config(path: &PathBuf) -> Value {
-    if path.exists() {
-        let content = fs::read_to_string(path).unwrap_or_default();
-        if is_toml(path) {
-            let toml_val: toml::Value = toml::from_str(&content).unwrap_or(toml::Value::Table(Default::default()));
-            serde_json::to_value(&toml_val).unwrap_or(json!({}))
-        } else {
-            serde_json::from_str(&content).unwrap_or(json!({}))
-        }
-    } else {
-        json!({})
+/// Read an IDE config file. Missing file reads as an empty object; a file
+/// that exists but can't be read or parsed is an `Err` — callers that write
+/// the config back MUST NOT proceed on `Err`, or they would replace the
+/// user's entire file with just the keenable entry.
+pub fn read_config(path: &PathBuf) -> Result<Value, String> {
+    if !path.exists() {
+        return Ok(json!({}));
     }
+    let content = fs::read_to_string(path).map_err(|e| format!("cannot read: {}", e))?;
+    let value: Value = if is_toml(path) {
+        let toml_val: toml::Value =
+            toml::from_str(&content).map_err(|e| format!("invalid TOML: {}", e))?;
+        serde_json::to_value(&toml_val).map_err(|e| format!("invalid TOML: {}", e))?
+    } else {
+        serde_json::from_str(&content).map_err(|e| format!("invalid JSON: {}", e))?
+    };
+    if !value.is_object() {
+        return Err("root is not an object".to_string());
+    }
+    Ok(value)
+}
+
+/// Lenient read for status display only — invalid configs read as empty.
+pub fn read_config_lenient(path: &PathBuf) -> Value {
+    read_config(path).unwrap_or_else(|_| json!({}))
 }
 
 pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    if is_toml(path) {
-        let toml_val: toml::Value = serde_json::from_value(config.clone()).unwrap_or(toml::Value::Table(Default::default()));
-        fs::write(path, toml::to_string_pretty(&toml_val).unwrap_or_default())
+    let content = if is_toml(path) {
+        let toml_val: toml::Value = serde_json::from_value(config.clone())
+            .map_err(|e| std::io::Error::other(format!("TOML conversion failed: {}", e)))?;
+        toml::to_string_pretty(&toml_val)
+            .map_err(|e| std::io::Error::other(format!("TOML serialization failed: {}", e)))?
     } else {
-        fs::write(path, serde_json::to_string_pretty(config).unwrap_or_default())
-    }
+        serde_json::to_string_pretty(config).map_err(std::io::Error::other)?
+    };
+    // Atomic: a crash mid-write must not leave a truncated config
+    // (e.g. ~/.claude.json holds all of Claude Code's state).
+    crate::config::atomic_write(path, &content, false)
 }
 
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {

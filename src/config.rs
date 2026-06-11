@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -24,17 +24,62 @@ fn read_json(path: &PathBuf) -> Value {
     }
 }
 
-fn write_json(path: &PathBuf, data: &Value) {
-    let dir = path.parent().unwrap();
-    fs::create_dir_all(dir).expect("failed to create config directory");
-    let content = serde_json::to_string_pretty(data).unwrap();
-    fs::write(path, &content).expect("failed to write config file");
+/// Atomically replace `path` with `content`: write a uniquely-named temp file
+/// in the same directory, then rename, so concurrent readers see either the
+/// old or the new file, never a partial one. With `restrict`, the temp is
+/// created 0600 (for files holding secrets); otherwise the destination's
+/// existing permissions are preserved.
+pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    // Unique temp name — concurrent writers must not clobber each other's temp.
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    let tmp = path.with_file_name(tmp_name);
 
-    // Restrict permissions — config files contain API keys
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).ok();
+    let result = (|| {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if restrict {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        {
+            use std::io::Write;
+            let mut f = opts.open(&tmp)?;
+            f.write_all(content.as_bytes())?;
+        }
+        #[cfg(unix)]
+        if !restrict {
+            if let Ok(meta) = fs::metadata(path) {
+                fs::set_permissions(&tmp, meta.permissions()).ok();
+            }
+        }
+        let renamed = fs::rename(&tmp, path);
+        // Windows refuses to replace a destination that's locked or
+        // read-only; fall back to remove + rename (brief non-atomic window).
+        #[cfg(windows)]
+        let renamed = renamed.or_else(|_| {
+            fs::remove_file(path)?;
+            fs::rename(&tmp, path)
+        });
+        renamed
+    })();
+    if result.is_err() {
+        fs::remove_file(&tmp).ok();
+    }
+    result
+}
+
+fn write_json(path: &PathBuf, data: &Value) {
+    let content = serde_json::to_string_pretty(data).unwrap();
+    // restrict: the config holds API keys — never world-readable, even briefly
+    if let Err(e) = atomic_write(path, &content, true) {
+        crate::ui::error(&format!("Failed to write {}: {}", path.display(), e));
+        eprintln!();
+        std::process::exit(1);
     }
 }
 
@@ -44,6 +89,11 @@ pub fn get_config() -> Value {
 
 pub fn set_config_value(key: &str, value: Value) {
     let mut config = get_config();
+    // A valid-JSON-but-not-object file (e.g. hand-edited to `[]`) would make
+    // the index assignment panic; start over instead.
+    if !config.is_object() {
+        config = Value::Object(Default::default());
+    }
     config[key] = value;
     write_json(&config_file(), &config);
 }
@@ -56,12 +106,19 @@ pub fn remove_config_value(key: &str) {
     write_json(&config_file(), &config);
 }
 
+// Keys are trimmed on save AND read (read covers configs written by older
+// versions or by hand) — stray whitespace breaks HTTP header building.
+
 pub fn get_api_key() -> Option<String> {
-    get_config()["api_key"].as_str().map(|s| s.to_string())
+    get_config()["api_key"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 pub fn set_api_key(key: &str) {
-    set_config_value("api_key", Value::String(key.to_string()));
+    set_config_value("api_key", Value::String(key.trim().to_string()));
 }
 
 pub fn clear_credentials() {

@@ -33,12 +33,23 @@ impl ApiError {
         Value::Object(map)
     }
 
+    /// Transport-level failure (no HTTP status).
+    pub fn request_failed(message: String) -> Self {
+        ApiError {
+            status: 0,
+            error: "Request failed".into(),
+            message: Some(message),
+            retry_after: None,
+        }
+    }
+
     pub fn is_rate_limit(&self) -> bool {
         self.status == 429
     }
 
     pub fn is_auth_error(&self) -> bool {
         self.status == 401
+            || self.status == 403
             || (self.status == 400
                 && self.error.to_lowercase().contains("authentication"))
     }
@@ -46,7 +57,11 @@ impl ApiError {
 
 pub fn api_key_client(api_key: &str) -> Client {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("X-API-Key", api_key.parse().unwrap());
+    // Keys from --api-key or a hand-edited config may carry stray whitespace
+    // or control chars; a bad header value must yield a 401, not a panic.
+    if let Ok(value) = api_key.trim().parse() {
+        headers.insert("X-API-Key", value);
+    }
     Client::builder()
         .default_headers(headers)
         .timeout(std::time::Duration::from_secs(60))

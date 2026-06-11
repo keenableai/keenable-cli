@@ -28,9 +28,10 @@ impl SearchFilters {
 }
 
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
+/// Trimmed — stray whitespace breaks HTTP header building.
 fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
     if let Some(key) = override_key {
-        return Some(key.to_string());
+        return Some(key.trim().to_string());
     }
     config::get_api_key()
 }
@@ -59,6 +60,11 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
             match daemon::daemon_request(req).await {
                 Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
                 Ok(resp) => return Err(daemon_response_to_api_error(resp)),
+                // If a non-idempotent request may already have reached the
+                // API, surface the failure instead of re-sending.
+                Err(daemon::DaemonError::AfterSend(e)) if !req.idempotent() => {
+                    return Err(ApiError::request_failed(e));
+                }
                 Err(_) => {} // Fall through to direct
             }
         }
@@ -72,12 +78,7 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         None => bare_client(),
     };
 
-    let send_err = |e: reqwest::Error| ApiError {
-        status: 0,
-        error: "Request failed".into(),
-        message: Some(e.to_string()),
-        retry_after: None,
-    };
+    let send_err = |e: reqwest::Error| ApiError::request_failed(e.to_string());
     let missing = |field: &str| ApiError {
         status: 0,
         error: format!("Missing {}", field),
@@ -146,27 +147,48 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
 }
 
 /// Display an ApiError according to output mode (human vs YAML).
-fn handle_api_error(err: ApiError, human: bool) -> ! {
+/// Auth and rate-limit errors always carry a `keenable login` hint (a
+/// structured `hint` field in YAML mode), but the wording is auth-aware:
+/// login can't raise limits for a key that's already in use, so an
+/// authenticated 429 suggests retrying or switching accounts instead of
+/// falsely promising higher limits.
+fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
+    let authenticated = resolve_api_key(api_key_override).is_some();
+    let login_hint = if err.is_auth_error() {
+        Some("Run `keenable login` to authenticate.".to_string())
+    } else if err.is_rate_limit() {
+        if authenticated {
+            let retry = err
+                .retry_after
+                .map(|s| format!("Retry after {}s", s))
+                .unwrap_or_else(|| "Retry later".to_string());
+            Some(format!(
+                "Rate limit reached for your API key. {}, or run `keenable login` to switch accounts.",
+                retry
+            ))
+        } else {
+            Some("Run `keenable login` to authenticate and increase your limits.".to_string())
+        }
+    } else {
+        None
+    };
+
     if human {
         ui::error(&err.display());
-        if err.is_auth_error() {
-            ui::hint(&format!("Run {} to authenticate.", "keenable login".cyan()));
-        } else if err.is_rate_limit() {
+        if err.is_rate_limit() && !authenticated {
             if let Some(secs) = err.retry_after {
                 ui::hint(&format!("Retry after {}s.", secs));
             }
-            ui::hint(&format!(
-                "Run {} to authenticate and increase your limits.",
-                "keenable login".cyan()
-            ));
+        }
+        if let Some(hint) = &login_hint {
+            ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
         }
         eprintln!();
     } else {
-        // YAML error output for agents
+        // YAML error output for agents (retry_after is already a field)
         let mut val = err.to_yaml_value();
-        if err.is_rate_limit() || err.is_auth_error() {
-            val["hint"] =
-                Value::String("Run `keenable login` to authenticate and increase your limits.".into());
+        if let Some(hint) = login_hint {
+            val["hint"] = Value::String(hint);
         }
         print_yaml(&val);
     }
@@ -266,7 +288,7 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human),
+        Err(e) => handle_api_error(e, human, api_key),
     }
 }
 
@@ -295,7 +317,7 @@ pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human),
+        Err(e) => handle_api_error(e, human, api_key),
     }
 }
 
@@ -304,10 +326,12 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
     // entries up front
     let mut relevance: Vec<Value> = Vec::new();
     for entry in scores {
-        // URL may contain '=' (e.g. query params), so split from the right
+        // URL may contain '=' (e.g. query params), so split from the right.
+        // Note this means the comment itself cannot contain '=' — its first
+        // '=' would be taken as the score separator.
         let parts: Vec<&str> = entry.rsplitn(3, '=').collect();
         // rsplitn reverses: [comment, score, url]
-        if parts.len() < 3 || parts[0].is_empty() {
+        if parts.len() < 3 || parts[0].is_empty() || parts[2].is_empty() {
             ui::error(&format!("Invalid format: {}. Expected url=score=comment (comment is required).", entry));
             eprintln!();
             std::process::exit(1);
@@ -317,7 +341,7 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
         let score: u32 = match score_str.parse() {
             Ok(s) if s <= 5 => s,
             _ => {
-                ui::error(&format!("Invalid score in '{}'. Must be 0-5.", entry));
+                ui::error(&format!("Invalid score in '{}'. Must be 0-5. Expected url=score=comment — note the comment cannot contain '='.", entry));
                 eprintln!();
                 std::process::exit(1);
             }
@@ -351,6 +375,6 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
             }
             print_yaml(&json!({"status": "ok", "message": "Feedback submitted", "data": data}));
         }
-        Err(e) => handle_api_error(e, human),
+        Err(e) => handle_api_error(e, human, api_key),
     }
 }

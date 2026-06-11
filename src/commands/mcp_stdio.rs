@@ -18,8 +18,9 @@ use crate::constants::API_BASE_URL;
 const MCP_HEADER_PREFIX: &str = "mcp-";
 
 pub async fn run(api_key_override: Option<&str>, url_override: Option<&str>) {
+    // Trimmed — the key goes verbatim into an HTTP header.
     let key = match api_key_override {
-        Some(k) => Some(k.to_string()),
+        Some(k) => Some(k.trim().to_string()),
         None => config::get_api_key(),
     };
 
@@ -199,6 +200,7 @@ async fn send_request(
                 }
             }
 
+            let status = response.status();
             let content_type = response
                 .headers()
                 .get("content-type")
@@ -212,7 +214,8 @@ async fn send_request(
                 let body = response.text().await.unwrap_or_default();
                 let mut last: Option<Value> = None;
                 for sse_line in body.lines() {
-                    if let Some(data) = sse_line.strip_prefix("data: ") {
+                    // spec allows both "data: x" and "data:x"
+                    if let Some(data) = sse_line.strip_prefix("data:") {
                         let trimmed_data = data.trim();
                         if trimmed_data.is_empty() {
                             continue;
@@ -222,40 +225,66 @@ async fn send_request(
                         }
                     }
                 }
-                let is_session_expired = is_session_not_found(&last);
+                if last.is_none() {
+                    // A request must get *some* answer or the client hangs.
+                    return (
+                        rpc_error(request, format!("HTTP {}: empty event stream", status)),
+                        false,
+                    );
+                }
+                let is_session_expired = is_session_not_found(last.as_ref());
                 (last, is_session_expired)
             } else {
                 // Regular JSON response
                 let body = response.text().await.unwrap_or_default();
                 let trimmed = body.trim();
-                if trimmed.is_empty() {
+                if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                    if is_session_not_found(Some(&val)) {
+                        return (Some(val), true);
+                    }
+                    if status.is_success() || val.get("jsonrpc").is_some() {
+                        (Some(val), false)
+                    } else {
+                        // Backend error format ({"error", "message"}) — wrap it,
+                        // a non-JSON-RPC object on stdout violates the protocol.
+                        (
+                            rpc_error(request, format!("HTTP {}: {}", status, snippet(trimmed))),
+                            false,
+                        )
+                    }
+                } else if trimmed.is_empty() && status.is_success() {
+                    // e.g. 202 Accepted for a notification
                     (None, false)
-                } else if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                    let is_session_expired = is_session_not_found(&Some(val.clone()));
-                    (Some(val), is_session_expired)
                 } else {
-                    (None, false)
+                    (
+                        rpc_error(request, format!("HTTP {}: {}", status, snippet(trimmed))),
+                        false,
+                    )
                 }
             }
         }
-        Err(e) => {
-            let id = request.get("id").cloned().unwrap_or(Value::Null);
-            let error_resp = serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32000,
-                    "message": format!("Transport error: {}", e)
-                },
-                "id": id
-            });
-            (Some(error_resp), false)
-        }
+        Err(e) => (rpc_error(request, format!("Transport error: {}", e)), false),
     }
 }
 
-fn is_session_not_found(body: &Option<Value>) -> bool {
-    body.as_ref()
-        .and_then(|b| b.get("error"))
+/// Build a JSON-RPC error response for `request`, or `None` when the request
+/// is a notification (no `id`) — JSON-RPC forbids responding to those.
+fn rpc_error(request: &Value, message: String) -> Option<Value> {
+    let id = request.get("id")?.clone();
+    Some(serde_json::json!({
+        "jsonrpc": "2.0",
+        "error": { "code": -32000, "message": message },
+        "id": id
+    }))
+}
+
+/// Trim server bodies for error messages (an HTML error page can be huge).
+fn snippet(body: &str) -> String {
+    body.chars().take(200).collect()
+}
+
+fn is_session_not_found(body: Option<&Value>) -> bool {
+    body.and_then(|b| b.get("error"))
         .and_then(|e| e.get("code"))
         .and_then(|c| c.as_i64())
         == Some(SESSION_NOT_FOUND)

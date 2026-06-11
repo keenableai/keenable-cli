@@ -73,6 +73,7 @@ async fn poll_for_token(
 ) -> Result<String, String> {
     let client = Client::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(expires_in);
+    let interval = interval.max(1); // a server-sent 0 must not busy-poll
 
     loop {
         if std::time::Instant::now() > deadline {
@@ -81,7 +82,9 @@ async fn poll_for_token(
 
         tokio::time::sleep(Duration::from_secs(interval)).await;
 
-        let resp = client
+        // The user is mid-authorization in the browser; a dropped poll must
+        // not abort the whole flow — keep polling until the code expires.
+        let resp = match client
             .post(api_url("/v1/auth/agent/token"))
             .json(&serde_json::json!({
                 "client_id": CLIENT_ID,
@@ -91,12 +94,15 @@ async fn poll_for_token(
             .timeout(Duration::from_secs(10))
             .send()
             .await
-            .map_err(|e| format!("Polling failed: {}", e))?;
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
 
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse token response: {}", e))?;
+        let data: serde_json::Value = match resp.json().await {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
 
         if let Some(key) = data["api_key"].as_str() {
             return Ok(key.to_string());
@@ -175,7 +181,7 @@ pub fn logout() {
     ui::header("keenable logout");
 
     config::clear_credentials();
-    config::set_config_value("api_key", serde_json::Value::Null);
+    config::remove_config_value("api_key");
     daemon::kill_daemon();
 
     ui::step_done("Cleared credentials");

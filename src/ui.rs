@@ -11,13 +11,6 @@ use std::io::IsTerminal;
 
 const EYES: &str = "👀";
 
-/// Text starts at column 5 for top-level icon items: "   ✓ "
-const TOP_CONT_WIDTH: usize = 5;
-/// Text starts at column 4 for plain items: "   " + 1 char
-const PLAIN_CONT_WIDTH: usize = 4;
-/// Text starts at column 11 for sub-items: "      - ⚠ "
-const SUB_CONT_WIDTH: usize = 11;
-
 // ── Terminal width ─────────────────────────────────────────────────
 
 fn terminal_width() -> usize {
@@ -28,22 +21,47 @@ fn terminal_width() -> usize {
 
 // ── Word wrapping ──────────────────────────────────────────────────
 
-/// Word-wrap `text` to fit within `width` columns.
+/// Display width of `s`, skipping ANSI escape sequences — messages often
+/// embed colored spans (e.g. `"keenable login".cyan()`) whose escape bytes
+/// must not count as columns or lines wrap far short of the terminal edge.
+fn visible_len(s: &str) -> usize {
+    let mut len = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else if c == '\x1b' {
+            in_escape = true;
+        } else {
+            len += 1;
+        }
+    }
+    len
+}
+
+/// Word-wrap `text` to fit within `width` display columns.
 fn word_wrap(text: &str, width: usize) -> Vec<String> {
     if width == 0 || text.is_empty() {
         return vec![text.to_string()];
     }
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_len = 0;
     for word in text.split_whitespace() {
+        let word_len = visible_len(word);
         if current.is_empty() {
             current = word.to_string();
-        } else if current.len() + 1 + word.len() <= width {
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= width {
             current.push(' ');
             current.push_str(word);
+            current_len += 1 + word_len;
         } else {
             lines.push(current);
             current = word.to_string();
+            current_len = word_len;
         }
     }
     if !current.is_empty() {
@@ -55,14 +73,16 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// Print wrapped text with a displayed prefix and aligned continuation.
-/// `cont_width` is the display width where text starts (used for continuation indent).
+/// Print wrapped text with a displayed prefix; continuation lines are
+/// indented to align with where the first line's text starts.
 fn print_wrapped(
     prefix: impl std::fmt::Display,
-    cont_width: usize,
     msg: &str,
     style: impl Fn(&str) -> ColoredString,
 ) {
+    let prefix = prefix.to_string();
+    // prefix may start with a leading newline (ui::hint) — measure the last line
+    let cont_width = visible_len(prefix.rsplit('\n').next().unwrap_or(""));
     // +2 margin accounts for emoji icons that may render as 2 display columns,
     // ensuring our word-wrap fires before the terminal's native line break.
     let text_width = terminal_width().saturating_sub(cont_width + 2);
@@ -104,8 +124,7 @@ pub fn header(msg: &str) {
 /// Print a completed intermediate step (dimmed + strikethrough).
 pub fn step_done(msg: &str) {
     print_wrapped(
-        format!("   {} ", "✓".dimmed()),
-        TOP_CONT_WIDTH,
+        format!("   {}  ", "✓".dimmed()),
         msg,
         |s| s.dimmed().strikethrough(),
     );
@@ -116,8 +135,7 @@ pub fn step_done(msg: &str) {
 pub fn step(msg: &str) {
     save_cursor();
     print_wrapped(
-        format!("   {} ", "…".dimmed()),
-        TOP_CONT_WIDTH,
+        format!("   {}  ", "…".dimmed()),
         msg,
         |s| s.dimmed(),
     );
@@ -132,8 +150,7 @@ pub fn step_done_replace(msg: &str) {
 /// Print the final success line (green, bold).
 pub fn success(msg: &str) {
     print_wrapped(
-        format!("   {} ", "✓".green().bold()),
-        TOP_CONT_WIDTH,
+        format!("   {}  ", "✓".green().bold()),
         msg,
         |s| s.green(),
     );
@@ -142,8 +159,7 @@ pub fn success(msg: &str) {
 /// Print a failure line (red).
 pub fn error(msg: &str) {
     print_wrapped(
-        format!("   {} ", "✗".red().bold()),
-        TOP_CONT_WIDTH,
+        format!("   {}  ", "✗".red().bold()),
         msg,
         |s| s.red(),
     );
@@ -152,8 +168,7 @@ pub fn error(msg: &str) {
 /// Print a warning line (yellow).
 pub fn warning(msg: &str) {
     print_wrapped(
-        format!("   {} ", "⚠".yellow()),
-        TOP_CONT_WIDTH,
+        format!("   {}  ", "⚠".yellow()),
         msg,
         |s| s.yellow(),
     );
@@ -162,8 +177,7 @@ pub fn warning(msg: &str) {
 /// Print a hint / next-step line.
 pub fn hint(msg: &str) {
     print_wrapped(
-        format!("\n{}", " ".repeat(PLAIN_CONT_WIDTH)),
-        PLAIN_CONT_WIDTH,
+        "\n    ",
         msg,
         |s| s.dimmed(),
     );
@@ -172,8 +186,7 @@ pub fn hint(msg: &str) {
 /// Print an indented info line.
 pub fn info(msg: &str) {
     print_wrapped(
-        " ".repeat(PLAIN_CONT_WIDTH),
-        PLAIN_CONT_WIDTH,
+        "    ",
         msg,
         |s| s.normal(),
     );
@@ -184,8 +197,7 @@ pub fn info(msg: &str) {
 /// Print a completed sub-step (dimmed + strikethrough, extra indent).
 pub fn sub_done(msg: &str) {
     print_wrapped(
-        format!("      - {} ", "✓".dimmed()),
-        SUB_CONT_WIDTH,
+        format!("      - {}  ", "✓".dimmed()),
         msg,
         |s| s.dimmed().strikethrough(),
     );
@@ -194,8 +206,7 @@ pub fn sub_done(msg: &str) {
 /// Print a sub-step success (green, extra indent).
 pub fn sub_success(msg: &str) {
     print_wrapped(
-        format!("      - {} ", "✓".green()),
-        SUB_CONT_WIDTH,
+        format!("      - {}  ", "✓".green()),
         msg,
         |s| s.green(),
     );
@@ -204,8 +215,7 @@ pub fn sub_success(msg: &str) {
 /// Print a sub-step error (red, extra indent).
 pub fn sub_error(msg: &str) {
     print_wrapped(
-        format!("      - {} ", "✗".red().bold()),
-        SUB_CONT_WIDTH,
+        format!("      - {}  ", "✗".red().bold()),
         msg,
         |s| s.red(),
     );
@@ -214,8 +224,7 @@ pub fn sub_error(msg: &str) {
 /// Print a sub-step warning (yellow, extra indent).
 pub fn sub_warning(msg: &str) {
     print_wrapped(
-        format!("      - {} ", "⚠".yellow()),
-        SUB_CONT_WIDTH,
+        format!("      - {}  ", "⚠".yellow()),
         msg,
         |s| s.yellow(),
     );
@@ -225,7 +234,6 @@ pub fn sub_warning(msg: &str) {
 pub fn sub_info(msg: &str) {
     print_wrapped(
         "      - ",
-        SUB_CONT_WIDTH,
         msg,
         |s| s.normal(),
     );
@@ -234,8 +242,7 @@ pub fn sub_info(msg: &str) {
 /// Print a dimmed sub-step hint with warning icon (extra indent).
 pub fn sub_hint(msg: &str) {
     print_wrapped(
-        format!("      - {} ", "⚠".yellow()),
-        SUB_CONT_WIDTH,
+        format!("      - {}  ", "⚠".yellow()),
         msg,
         |s| s.dimmed(),
     );
