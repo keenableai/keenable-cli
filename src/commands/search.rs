@@ -36,6 +36,15 @@ fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
     config::get_api_key()
 }
 
+/// Effective key override: --api-key flag, then the KEENABLE_API_KEY env var.
+/// Either bypasses the daemon (whose cached auth state may differ).
+fn key_override(flag: Option<&str>) -> Option<String> {
+    flag.map(str::to_string)
+        .or_else(|| std::env::var("KEENABLE_API_KEY").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn endpoint(path: &str, authenticated: bool) -> String {
     if authenticated {
         api_url(path)
@@ -195,6 +204,23 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
     std::process::exit(1);
 }
 
+/// Read a mode from config, ignoring (with a warning) hand-edited invalid
+/// values — they would otherwise pass straight through to the server.
+fn config_mode(cfg: &Value, key: &str) -> Option<String> {
+    let m = cfg[key].as_str()?;
+    if SEARCH_MODES.contains(&m) || m == "standard" {
+        Some(m.to_string())
+    } else {
+        ui::warning(&format!(
+            "Ignoring invalid {} \"{}\" in config (allowed: {})",
+            key,
+            m,
+            SEARCH_MODES.join(", ")
+        ));
+        None
+    }
+}
+
 /// Resolve the effective search mode.
 /// Priority: forced_search_mode config > --mode flag > default_search_mode config > none.
 /// None lets the server default apply (including org-level overrides).
@@ -202,8 +228,8 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     let cfg = config::get_config();
 
     // forced_search_mode always wins
-    if let Some(forced) = cfg["forced_search_mode"].as_str() {
-        return Some(forced.to_string());
+    if let Some(forced) = config_mode(&cfg, "forced_search_mode") {
+        return Some(forced);
     }
 
     // --mode flag
@@ -212,7 +238,7 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     }
 
     // default_search_mode as fallback
-    cfg["default_search_mode"].as_str().map(|s| s.to_string())
+    config_mode(&cfg, "default_search_mode")
 }
 
 pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
@@ -243,11 +269,12 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
 
     let req = DaemonRequest {
         command: "search".to_string(),
-        query: Some(query.to_string()),
         urls: None,
         body: Some(body),
     };
 
+    let api_key = key_override(api_key);
+    let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
         Ok(data) => {
             if human {
@@ -295,11 +322,12 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
 pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
     let req = DaemonRequest {
         command: "fetch".to_string(),
-        query: None,
         urls: Some(vec![url.to_string()]),
         body: None,
     };
 
+    let api_key = key_override(api_key);
+    let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
         Ok(data) => {
             if human {
@@ -360,11 +388,12 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
 
     let req = DaemonRequest {
         command: "feedback".to_string(),
-        query: None,
         urls: None,
         body: Some(body),
     };
 
+    let api_key = key_override(api_key);
+    let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
         Ok(data) => {
             if human {

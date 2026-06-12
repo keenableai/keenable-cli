@@ -80,12 +80,12 @@ def test_logout_clears_key_and_falls_back_to_public(logged_in):
         assert "keenable login" in data.get("hint", ""), data
 
 
-def test_invalid_login_key_rejected_at_search(tmp_path):
+def test_invalid_login_key_rejected_at_login(tmp_path):
+    """Since 0.1.19, login --api-key validates the key up front and refuses
+    to save one the server rejects."""
     kn = Runner(str(tmp_path))
-    assert kn("login", "--api-key", "keen_bad_key", key=False).code == 0  # saved unvalidated
-    try:
-        res = kn("search", "x", key=False)
-        assert res.code == 1
-        assert res.yaml()["error"] == "Authentication failed"
-    finally:
-        _kill_daemon(kn.home)
+    res = kn("login", "--api-key", "keen_bad_key", key=False)
+    assert res.code == 1
+    assert "invalid" in res.err.lower()
+    cfg = Path(kn.home) / ".keenable" / "config.json"
+    assert not cfg.exists() or "keen_bad_key" not in cfg.read_text()

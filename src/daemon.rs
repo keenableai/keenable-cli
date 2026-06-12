@@ -5,8 +5,6 @@ use serde_json::Value;
 pub struct DaemonRequest {
     pub command: String,
     #[serde(default)]
-    pub query: Option<String>,
-    #[serde(default)]
     pub urls: Option<Vec<String>>,
     #[serde(default)]
     pub body: Option<Value>,
@@ -85,12 +83,30 @@ mod platform {
             fs::remove_file(&sock).ok();
         }
 
-        // Ensure parent dir exists
+        // Ensure parent dir exists; it holds credentials and the daemon
+        // socket, so keep it private to the user.
         if let Some(parent) = sock.parent() {
             fs::create_dir_all(parent).ok();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).ok();
         }
 
-        let listener = UnixListener::bind(&sock).expect("failed to bind daemon socket");
+        let listener = match UnixListener::bind(&sock) {
+            Ok(l) => l,
+            // Lost the spawn race to another daemon — exit quietly.
+            Err(_) if std::os::unix::net::UnixStream::connect(&sock).is_ok() => return,
+            Err(e) => {
+                eprintln!("Failed to bind daemon socket: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        // Anyone who can write to the socket can use the stored API key —
+        // don't rely on umask.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&sock, fs::Permissions::from_mode(0o600)).ok();
+        }
 
         // Write PID file
         fs::write(pid_path(), std::process::id().to_string()).ok();
@@ -119,7 +135,14 @@ mod platform {
                         fs::remove_file(&sock_clone).ok();
                         fs::remove_file(pid_path()).ok();
                     }
-                    std::process::exit(0);
+                    // A client may have connected between the idle check and
+                    // the unlink; exiting now would EOF its in-flight request.
+                    // The socket is gone, so no new connections can race in —
+                    // re-check and keep serving the straggler if one arrived.
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    if last_activity_clone.lock().await.elapsed() >= IDLE_TIMEOUT {
+                        std::process::exit(0);
+                    }
                 }
             }
         });
@@ -139,6 +162,23 @@ mod platform {
                             *last_activity.lock().await = Instant::now();
 
                             let response = match serde_json::from_str::<DaemonRequest>(&line) {
+                                // Reply first, then exit — login/logout use this
+                                // to restart the daemon with new auth state.
+                                Ok(req) if req.command == "shutdown" => {
+                                    let resp = DaemonResponse { ok: true, data: None, error: None };
+                                    let mut resp_line =
+                                        serde_json::to_string(&resp).unwrap_or_default();
+                                    resp_line.push('\n');
+                                    let _ = writer.write_all(resp_line.as_bytes()).await;
+                                    let owns_files = fs::read_to_string(pid_path())
+                                        .map(|p| p.trim() == std::process::id().to_string())
+                                        .unwrap_or(false);
+                                    if owns_files {
+                                        fs::remove_file(socket_path()).ok();
+                                        fs::remove_file(pid_path()).ok();
+                                    }
+                                    std::process::exit(0);
+                                }
                                 Ok(req) => handle_request(&client, *authenticated, req).await,
                                 Err(e) => DaemonResponse {
                                     ok: false,
@@ -236,23 +276,25 @@ mod platform {
 
     // ── Client side: connect to daemon ──────────────────────────────────────
 
-    /// Kill the running daemon (if any) and clean up socket/PID files.
+    /// Stop the running daemon (if any) and clean up socket/PID files.
     /// Called after login/logout so the daemon restarts with the new auth state.
     pub fn kill_daemon() {
-        // Only signal if a daemon actually answers on the socket — a pid file
-        // left behind by a crash may point at an unrelated process by now.
-        let daemon_alive = std::os::unix::net::UnixStream::connect(socket_path()).is_ok();
-        if daemon_alive {
-            if let Ok(pid_str) = fs::read_to_string(pid_path()) {
-                let pid = pid_str.trim();
-                std::process::Command::new("kill")
-                    .arg(pid)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .ok();
+        use std::io::{BufRead, Write};
+        // Ask over the socket rather than signaling the pid file's process —
+        // a stale pid may have been recycled by an unrelated process.
+        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(socket_path()) {
+            stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+            if stream.write_all(b"{\"command\":\"shutdown\"}\n").is_ok() {
+                // Wait for the ack so the exit (and file cleanup) lands before
+                // we remove/recreate the files ourselves.
+                let mut line = String::new();
+                std::io::BufReader::new(&stream).read_line(&mut line).ok();
             }
         }
+        // A pre-shutdown-command daemon answers "Unknown command" and stays
+        // up; removing its files orphans it until its idle exit, while new
+        // commands spawn a fresh daemon with the right auth state.
         fs::remove_file(socket_path()).ok();
         fs::remove_file(pid_path()).ok();
     }

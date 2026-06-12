@@ -6,7 +6,8 @@ import pytest
 
 from conftest import SEARCH_QUERY, host_of, host_under, parse_ts, results_of, search_results, utc
 
-RESULT_FIELDS = ("url", "title", "description", "snippet", "acquired_at", "published_at")
+# published_at is omitted (not nulled) for pages with no known publish date
+RESULT_FIELDS = ("url", "title", "description", "snippet", "acquired_at")
 
 
 # --- 2.1 core ---
@@ -35,7 +36,7 @@ def test_result_schema(basic_search):
         assert r["url"].startswith(("http://", "https://"))
         assert isinstance(r["title"], str) and r["title"]
         parse_ts(r["acquired_at"])
-        if r["published_at"] is not None:
+        if r.get("published_at") is not None:
             parse_ts(r["published_at"])
 
 
@@ -105,13 +106,13 @@ def test_acquired_before(kn):
 
 def test_published_after(kn):
     for r in _non_empty_results(kn, "AI news", "--published-after", "2026-01-01"):
-        if r["published_at"] is not None:
+        if r.get("published_at") is not None:
             assert parse_ts(r["published_at"]) >= utc(2026, 1, 1), r["url"]
 
 
 def test_published_before(kn):
     for r in _non_empty_results(kn, "rust async", "--published-before", "2024-01-01"):
-        if r["published_at"] is not None:
+        if r.get("published_at") is not None:
             assert parse_ts(r["published_at"]) <= utc(2024, 1, 1), r["url"]
 
 
@@ -137,7 +138,8 @@ def test_malformed_date(kn):
     res = kn("search", "x", "--acquired-after", "notadate")
     assert res.code == 1
     data = res.yaml()
-    assert data["error"] == "Invalid parameter"
+    # server wording drifted from "Invalid parameter" to "Bad request" (2026-06)
+    assert data["error"] in ("Invalid parameter", "Bad request")
     assert "acquired_after" in data["message"]
 
 

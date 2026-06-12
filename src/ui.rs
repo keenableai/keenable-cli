@@ -75,11 +75,12 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
 
 /// Print wrapped text with a displayed prefix; continuation lines are
 /// indented to align with where the first line's text starts.
+/// Returns the number of terminal lines printed.
 fn print_wrapped(
     prefix: impl std::fmt::Display,
     msg: &str,
     style: impl Fn(&str) -> ColoredString,
-) {
+) -> usize {
     let prefix = prefix.to_string();
     // prefix may start with a leading newline (ui::hint) — measure the last line
     let cont_width = visible_len(prefix.rsplit('\n').next().unwrap_or(""));
@@ -89,12 +90,16 @@ fn print_wrapped(
     let lines = word_wrap(msg, text_width);
     let cont = " ".repeat(cont_width);
 
+    let mut printed = prefix.matches('\n').count();
     if let Some((first, rest)) = lines.split_first() {
         eprintln!("{}{}", prefix, style(first));
+        printed += 1;
         for line in rest {
             eprintln!("{}{}", cont, style(line));
+            printed += 1;
         }
     }
+    printed
 }
 
 // ── Cursor helpers ─────────────────────────────────────────────────
@@ -131,19 +136,22 @@ pub fn step_done(msg: &str) {
 }
 
 /// Print an in-progress step (shows a spinner-like marker).
-/// Saves cursor position so `step_done_replace` can overwrite it.
-pub fn step(msg: &str) {
-    save_cursor();
+/// Returns the number of lines printed, for `step_done_replace`.
+pub fn step(msg: &str) -> usize {
     print_wrapped(
         format!("   {}  ", "…".dimmed()),
         msg,
         |s| s.dimmed(),
-    );
+    )
 }
 
-/// Replace the last `step()` output with a completed step (dimmed + strikethrough).
-pub fn step_done_replace(msg: &str) {
-    restore_and_clear();
+/// Replace the last `step()` output (which printed `lines` lines) with a
+/// completed step. Moves the cursor up relatively — unlike DEC save/restore,
+/// this stays correct if the terminal scrolled during a long wait.
+pub fn step_done_replace(msg: &str, lines: usize) {
+    if std::io::stderr().is_terminal() && lines > 0 {
+        eprint!("\x1b[{}A\x1b[J", lines);
+    }
     step_done(msg);
 }
 

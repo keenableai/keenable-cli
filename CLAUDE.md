@@ -54,7 +54,7 @@ assets/
 
 All tool commands (`search`, `fetch`, `feedback`) output **YAML by default** (token-efficient for agents).
 Use `-p` / `--pretty` flag for pretty-printed human-readable output.
-Use `--api-key <KEY>` to override the stored key for one-off calls.
+Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct.
 
 ```bash
 keenable search "query" --mode pro             # YAML output (for agents)
@@ -217,7 +217,7 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 **Per-client configuration (when a flag is set):**
 1. **Duplicate cleanup** — removes non-`keenable` entries pointing at `api.keenable.ai` or `api-test.keenable.ai`.
 2. **Keenable MCP entry** — adds or updates the `keenable` MCP entry with correct URL and API key.
-3. **Standard tools** (Claude Code only) — adds `WebSearch` and `WebFetch` to `permissions.deny`.
+3. **Standard tools** (Claude Code only) — adds `WebSearch` and `WebFetch` to `permissions.deny` in `~/.claude/settings.json` (the file Claude Code reads; legacy denies in `~/.claude.json` are migrated out). Tools it added are recorded in `~/.keenable/config.json` (`managed_deny_tools`) so reset restores only those.
 4. **Conflicting MCPs** — warns about known search MCPs (`brave-search`, `tavily`, `exa`, etc.) but does not auto-remove them.
 
 **Interactive confirmation:**
@@ -238,7 +238,7 @@ Before modifying configs, shows a prompt with three options: "Proceed", "Proceed
 **Per-client reset:**
 1. Removes the `keenable` MCP entry from the IDE config.
 2. Removes any other entries pointing at `api.keenable.ai` / `api-test.keenable.ai`.
-3. **Claude Code only**: removes `WebSearch` and `WebFetch` from `permissions.deny` to re-enable standard tools. Cleans up empty `deny`/`permissions` objects.
+3. **Claude Code only**: removes from `permissions.deny` the tools recorded in `managed_deny_tools` (all of `WebSearch`/`WebFetch` when no record exists) to re-enable standard tools without undoing denies the user set independently. Cleans up empty `deny`/`permissions` objects.
 
 ### Shared IDE Module (`src/commands/ide.rs`)
 

@@ -295,9 +295,17 @@ fn collect_client_flags(
 async fn main() {
     let cli = Cli::parse();
 
-    // Non-blocking update check (fire and forget for most commands)
-    let update_handle = tokio::spawn(async {
-        update::check_for_update().await
+    // Update check only for human-facing output: awaiting it would add up to
+    // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
+    let wants_update_check = match &cli.command {
+        Commands::Search { pretty, .. }
+        | Commands::Fetch { pretty, .. }
+        | Commands::Feedback { pretty, .. } => *pretty,
+        Commands::Daemon => false,
+        _ => true,
+    };
+    let update_handle = wants_update_check.then(|| {
+        tokio::spawn(async { update::check_for_update().await })
     });
 
     match cli.command {
@@ -362,13 +370,15 @@ async fn main() {
     }
 
     // Show update notification if available
-    if let Ok(Some(version)) = update_handle.await {
-        use colored::Colorize;
-        eprintln!(
-            "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
-            "Update:".yellow().bold(),
-            version,
-            update::install_hint().cyan()
-        );
+    if let Some(handle) = update_handle {
+        if let Ok(Some(version)) = handle.await {
+            use colored::Colorize;
+            eprintln!(
+                "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
+                "Update:".yellow().bold(),
+                version,
+                update::install_hint().cyan()
+            );
+        }
     }
 }

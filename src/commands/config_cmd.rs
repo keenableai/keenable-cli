@@ -43,8 +43,10 @@ pub fn config_get(key: &str) {
     }
 
     let cfg = config::get_config();
-    if let Some(val) = cfg[key].as_str() {
-        println!("{}", val);
+    match cfg[key].as_str() {
+        Some(val) => println!("{}", val),
+        // Distinguishable from an empty value for scripts.
+        None => std::process::exit(1),
     }
 }
 
