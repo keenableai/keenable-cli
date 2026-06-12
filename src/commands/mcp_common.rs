@@ -63,9 +63,6 @@ pub fn keenable_product() -> McpProduct {
         check_legacy_npx: true,
         clean_codex_cache: true,
         show_recommendations: |ide| {
-            if ide.name == "Claude Desktop" {
-                ui::sub_hint("Disable built-in web search manually (+ button near the chat text field)");
-            }
             if ide.name == "Cursor" {
                 ui::sub_hint("We recommend disabling standard search & fetch tools in Cursor Settings → Tools");
                 ui::sub_hint("We recommend setting a custom rule to use Keenable search");
@@ -445,7 +442,7 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> b
                 }
             }
             if product.check_legacy_npx && entry["command"].as_str() == Some("npx") {
-                ui::sub_warning("Replacing npx mcp-remote with built-in stdio bridge (no Node.js needed)");
+                ui::sub_warning("Replacing npx mcp-remote with a direct HTTP entry (no Node.js needed)");
             }
             if uses_webql_token_auth(entry) {
                 ui::sub_warning("Migrating from token-in-URL to header-based auth");
@@ -725,7 +722,7 @@ fn show_configure_status(
 fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus) {
     if status.uses_legacy_npx {
         ui::sub_warning(&format!(
-            "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to built-in bridge",
+            "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to a direct HTTP entry",
             product.configure_cmd
         ));
     }

@@ -40,8 +40,6 @@ pub enum McpEntryStyle {
         url_key: &'static str,
         transport_type: Option<&'static str>,
     },
-    /// Stdio bridge via `keenable mcp-stdio` (needed by Claude Desktop).
-    Stdio,
     /// TOML-based config (Codex CLI): `[mcp_servers.name] url = "..." `
     Toml,
 }
@@ -79,18 +77,6 @@ pub fn all_ides() -> Vec<IDEDef> {
             // config_path's parent is $HOME, which always exists — without
             // this, Claude Code is "detected" on every machine.
             detect_path: Some(home.join(".claude")),
-        },
-        IDEDef {
-            name: "Claude Desktop",
-            flag: "claude-desktop",
-            // macOS: ~/Library/Application Support, Windows: %APPDATA%
-            config_path: dirs::config_dir()
-                .unwrap_or_else(|| home.join(".config"))
-                .join("Claude/claude_desktop_config.json"),
-            servers_key: "mcpServers",
-            entry_style: McpEntryStyle::Stdio,
-            has_standard_tools: false,
-            detect_path: None,
         },
         IDEDef {
             name: "Cursor",
@@ -214,17 +200,6 @@ pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
             }
             entry
         }
-        McpEntryStyle::Stdio => {
-            let mut args = vec![json!("mcp-stdio")];
-            if let Some(key) = api_key {
-                args.push(json!("--api-key"));
-                args.push(json!(key));
-            }
-            json!({
-                "command": "keenable",
-                "args": args
-            })
-        }
         McpEntryStyle::Toml => {
             let mut entry = json!({ "url": mcp_url });
             if let Some(key) = api_key {
@@ -244,26 +219,12 @@ pub fn extract_url(entry: &Value) -> Option<String> {
         return Some(url.to_string());
     }
     if let Some(args) = entry["args"].as_array() {
-        let cmd = entry["command"].as_str().unwrap_or("");
         let first_arg = args.first().and_then(|v| v.as_str()).unwrap_or("");
         // Legacy npx mcp-remote format
         if first_arg == "mcp-remote" {
             if let Some(url) = args.get(1).and_then(|v| v.as_str()) {
                 return Some(url.to_string());
             }
-        }
-        // New keenable mcp-stdio format
-        if cmd == "keenable" && first_arg == "mcp-stdio" {
-            // Check for explicit --url arg (used by WebQL)
-            for (i, arg) in args.iter().enumerate() {
-                if arg.as_str() == Some("--url") {
-                    if let Some(url) = args.get(i + 1).and_then(|v| v.as_str()) {
-                        return Some(url.to_string());
-                    }
-                }
-            }
-            // Default: infer URL from API_BASE_URL
-            return Some(format!("{}/mcp", API_BASE_URL));
         }
     }
     None
@@ -302,17 +263,6 @@ pub fn build_webql_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
                 entry["type"] = json!(*transport);
             }
             entry
-        }
-        McpEntryStyle::Stdio => {
-            let mut args = vec![json!("mcp-stdio"), json!("--url"), json!(&mcp_url)];
-            if let Some(key) = api_key {
-                args.push(json!("--api-key"));
-                args.push(json!(key));
-            }
-            json!({
-                "command": "keenable",
-                "args": args
-            })
         }
         McpEntryStyle::Toml => {
             let mut entry = json!({ "url": mcp_url });
@@ -354,15 +304,8 @@ pub fn extract_entry_api_key(entry: &Value) -> Option<String> {
     }
     if let Some(args) = entry["args"].as_array() {
         for (i, arg) in args.iter().enumerate() {
-            let s = arg.as_str().unwrap_or("");
-            // New format: --api-key <KEY>
-            if s == "--api-key" {
-                if let Some(key) = args.get(i + 1).and_then(|v| v.as_str()) {
-                    return Some(key.to_string());
-                }
-            }
-            // Legacy format: --header X-API-Key:<KEY>
-            if s == "--header" {
+            // Legacy npx mcp-remote format: --header X-API-Key:<KEY>
+            if arg.as_str() == Some("--header") {
                 if let Some(header_val) = args.get(i + 1).and_then(|v| v.as_str()) {
                     if let Some(key) = header_val.strip_prefix("X-API-Key:") {
                         return Some(key.to_string());

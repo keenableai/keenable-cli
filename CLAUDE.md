@@ -200,11 +200,11 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 2. API key is valid (pings search API) → `ui::error()` + `ui::sub_info()` if invalid
 
 **Client detection:**
-- Supported: Claude Code, Claude Desktop, Cursor, Windsurf, Codex, OpenCode
+- Supported: Claude Code, Cursor, Windsurf, Codex, OpenCode
 - Detection: parent directory of config file exists
 
 **Client-specific flags:**
-`--claude-code`, `--claude-desktop`, `--cursor`, `--windsurf`, `--codex`, `--opencode`, `--all`
+`--claude-code`, `--cursor`, `--windsurf`, `--codex`, `--opencode`, `--all`
 
 **Status mode per-client display:**
 - **✓ green**: fully configured, no issues. May show dimmed `sub_hint` recommendations.
@@ -212,7 +212,6 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 - **✗ red**: not configured. Shows dimmed hint with configure-mcp command.
 
 **Client-specific recommendations** (shown as `sub_hint` under configured clients):
-- **Claude Desktop**: "Disable built-in web search manually (+ button near the chat text field)"
 - **Cursor**: "We recommend disabling standard search & fetch tools in Cursor Settings → Tools" and "We recommend setting a custom rule to use Keenable search"
 
 **Per-client configuration (when a flag is set):**

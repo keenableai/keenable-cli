@@ -96,7 +96,7 @@ keenable configure-mcp --cursor         # Configure a specific client
 keenable reset --all                    # Remove Keenable from all clients
 ```
 
-Supported clients: Claude Code, Claude Desktop, Cursor, Windsurf, Codex, OpenCode.
+Supported clients: Claude Code, Cursor, Windsurf, Codex, OpenCode.
 
 ### WebQL MCP setup
 
