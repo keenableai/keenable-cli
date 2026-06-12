@@ -40,8 +40,6 @@ pub enum McpEntryStyle {
         url_key: &'static str,
         transport_type: Option<&'static str>,
     },
-    /// Stdio bridge via `keenable mcp-stdio` (needed by Claude Desktop).
-    Stdio,
     /// TOML-based config (Codex CLI): `[mcp_servers.name] url = "..." `
     Toml,
 }
@@ -79,18 +77,6 @@ pub fn all_ides() -> Vec<IDEDef> {
             // config_path's parent is $HOME, which always exists — without
             // this, Claude Code is "detected" on every machine.
             detect_path: Some(home.join(".claude")),
-        },
-        IDEDef {
-            name: "Claude Desktop",
-            flag: "claude-desktop",
-            // macOS: ~/Library/Application Support, Windows: %APPDATA%
-            config_path: dirs::config_dir()
-                .unwrap_or_else(|| home.join(".config"))
-                .join("Claude/claude_desktop_config.json"),
-            servers_key: "mcpServers",
-            entry_style: McpEntryStyle::Stdio,
-            has_standard_tools: false,
-            detect_path: None,
         },
         IDEDef {
             name: "Cursor",
@@ -186,16 +172,111 @@ pub fn read_config_lenient(path: &PathBuf) -> Value {
 
 pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error> {
     let content = if is_toml(path) {
-        let toml_val: toml::Value = serde_json::from_value(config.clone())
-            .map_err(|e| std::io::Error::other(format!("TOML conversion failed: {}", e)))?;
-        toml::to_string_pretty(&toml_val)
-            .map_err(|e| std::io::Error::other(format!("TOML serialization failed: {}", e)))?
+        toml_patch(path, config)?
     } else {
         serde_json::to_string_pretty(config).map_err(std::io::Error::other)?
     };
     // Atomic: a crash mid-write must not leave a truncated config
     // (e.g. ~/.claude.json holds all of Claude Code's state).
     crate::config::atomic_write(path, &content, false)
+}
+
+/// Render `desired` as TOML by minimally patching the existing file.
+/// A full JSON→TOML re-serialization would destroy comments and formatting
+/// and turn datetime literals into strings (hand-maintained
+/// ~/.codex/config.toml); instead, subtrees whose JSON form is unchanged
+/// keep their original text and only changed/removed keys are rewritten.
+fn toml_patch(path: &PathBuf, desired: &Value) -> Result<String, std::io::Error> {
+    let original_text = if path.exists() {
+        fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+    let mut doc: toml_edit::DocumentMut = original_text
+        .parse()
+        .map_err(|e| std::io::Error::other(format!("invalid TOML: {}", e)))?;
+    // JSON view of the original for change detection — must be the same
+    // conversion `read_config` used to produce `desired`.
+    let original_json: Value = toml::from_str::<toml::Table>(&original_text)
+        .ok()
+        .and_then(|t| serde_json::to_value(&t).ok())
+        .unwrap_or_else(|| json!({}));
+
+    let empty = serde_json::Map::new();
+    sync_toml_table(
+        doc.as_table_mut(),
+        original_json.as_object(),
+        desired.as_object().unwrap_or(&empty),
+    );
+    Ok(doc.to_string())
+}
+
+fn sync_toml_table(
+    table: &mut toml_edit::Table,
+    original: Option<&serde_json::Map<String, Value>>,
+    desired: &serde_json::Map<String, Value>,
+) {
+    let existing: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for k in existing {
+        if !desired.contains_key(&k) {
+            table.remove(&k);
+        }
+    }
+    for (k, dv) in desired {
+        let ov = original.and_then(|o| o.get(k));
+        if ov == Some(dv) {
+            continue; // unchanged — keep original formatting verbatim
+        }
+        // Descend into existing tables so sibling entries keep their text.
+        let descend = matches!(table.get(k), Some(toml_edit::Item::Table(_))) && dv.is_object();
+        if descend {
+            if let Some(toml_edit::Item::Table(t)) = table.get_mut(k) {
+                sync_toml_table(t, ov.and_then(|v| v.as_object()), dv.as_object().unwrap());
+            }
+        } else {
+            table.insert(k, json_to_toml_item(dv));
+        }
+    }
+}
+
+fn json_to_toml_item(v: &Value) -> toml_edit::Item {
+    match v {
+        Value::Object(map) => {
+            let mut t = toml_edit::Table::new();
+            for (k, val) in map {
+                t.insert(k, json_to_toml_item(val));
+            }
+            toml_edit::Item::Table(t)
+        }
+        other => toml_edit::Item::Value(json_to_toml_value(other)),
+    }
+}
+
+fn json_to_toml_value(v: &Value) -> toml_edit::Value {
+    match v {
+        Value::String(s) => s.as_str().into(),
+        Value::Bool(b) => (*b).into(),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => i.into(),
+            None => n.as_f64().unwrap_or(0.0).into(),
+        },
+        Value::Array(arr) => {
+            let mut a = toml_edit::Array::new();
+            for x in arr {
+                a.push(json_to_toml_value(x));
+            }
+            toml_edit::Value::Array(a)
+        }
+        Value::Object(map) => {
+            let mut t = toml_edit::InlineTable::new();
+            for (k, val) in map {
+                t.insert(k, json_to_toml_value(val));
+            }
+            toml_edit::Value::InlineTable(t)
+        }
+        // TOML has no null; our entries never produce one.
+        Value::Null => "".into(),
+    }
 }
 
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
@@ -213,17 +294,6 @@ pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
                 entry["type"] = json!(*transport);
             }
             entry
-        }
-        McpEntryStyle::Stdio => {
-            let mut args = vec![json!("mcp-stdio")];
-            if let Some(key) = api_key {
-                args.push(json!("--api-key"));
-                args.push(json!(key));
-            }
-            json!({
-                "command": "keenable",
-                "args": args
-            })
         }
         McpEntryStyle::Toml => {
             let mut entry = json!({ "url": mcp_url });
@@ -244,26 +314,12 @@ pub fn extract_url(entry: &Value) -> Option<String> {
         return Some(url.to_string());
     }
     if let Some(args) = entry["args"].as_array() {
-        let cmd = entry["command"].as_str().unwrap_or("");
         let first_arg = args.first().and_then(|v| v.as_str()).unwrap_or("");
         // Legacy npx mcp-remote format
         if first_arg == "mcp-remote" {
             if let Some(url) = args.get(1).and_then(|v| v.as_str()) {
                 return Some(url.to_string());
             }
-        }
-        // New keenable mcp-stdio format
-        if cmd == "keenable" && first_arg == "mcp-stdio" {
-            // Check for explicit --url arg (used by WebQL)
-            for (i, arg) in args.iter().enumerate() {
-                if arg.as_str() == Some("--url") {
-                    if let Some(url) = args.get(i + 1).and_then(|v| v.as_str()) {
-                        return Some(url.to_string());
-                    }
-                }
-            }
-            // Default: infer URL from API_BASE_URL
-            return Some(format!("{}/mcp", API_BASE_URL));
         }
     }
     None
@@ -303,17 +359,6 @@ pub fn build_webql_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
             }
             entry
         }
-        McpEntryStyle::Stdio => {
-            let mut args = vec![json!("mcp-stdio"), json!("--url"), json!(&mcp_url)];
-            if let Some(key) = api_key {
-                args.push(json!("--api-key"));
-                args.push(json!(key));
-            }
-            json!({
-                "command": "keenable",
-                "args": args
-            })
-        }
         McpEntryStyle::Toml => {
             let mut entry = json!({ "url": mcp_url });
             if let Some(key) = api_key {
@@ -331,17 +376,21 @@ pub fn extract_webql_key(entry: &Value) -> Option<String> {
     if let Some(key) = extract_entry_api_key(entry) {
         return Some(key);
     }
-    // Legacy format: ?token= query parameter in URL
+    // Legacy format: ?token= query parameter in URL. Match the parameter
+    // boundary — a bare "token=" search would also hit e.g. "access_token=".
     let url = extract_url(entry)?;
-    url.split("token=")
-        .nth(1)
-        .map(|t| t.split('&').next().unwrap_or(t).to_string())
+    let start = url
+        .find("?token=")
+        .or_else(|| url.find("&token="))
+        .map(|i| i + "?token=".len())?;
+    let t = &url[start..];
+    Some(t.split('&').next().unwrap_or(t).to_string())
 }
 
 /// Check if a WebQL MCP entry uses the legacy `?token=` URL auth.
 pub fn uses_webql_token_auth(entry: &Value) -> bool {
     let url = extract_url(entry).unwrap_or_default();
-    url.contains("token=")
+    url.contains("?token=") || url.contains("&token=")
 }
 
 /// Extract the API key from a Keenable MCP entry's headers or mcp-remote args.
@@ -354,15 +403,8 @@ pub fn extract_entry_api_key(entry: &Value) -> Option<String> {
     }
     if let Some(args) = entry["args"].as_array() {
         for (i, arg) in args.iter().enumerate() {
-            let s = arg.as_str().unwrap_or("");
-            // New format: --api-key <KEY>
-            if s == "--api-key" {
-                if let Some(key) = args.get(i + 1).and_then(|v| v.as_str()) {
-                    return Some(key.to_string());
-                }
-            }
-            // Legacy format: --header X-API-Key:<KEY>
-            if s == "--header" {
+            // Legacy npx mcp-remote format: --header X-API-Key:<KEY>
+            if arg.as_str() == Some("--header") {
                 if let Some(header_val) = args.get(i + 1).and_then(|v| v.as_str()) {
                     if let Some(key) = header_val.strip_prefix("X-API-Key:") {
                         return Some(key.to_string());

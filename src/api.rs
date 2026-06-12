@@ -55,6 +55,30 @@ impl ApiError {
     }
 }
 
+pub enum KeyCheck {
+    Valid,
+    /// The server rejected the key (401/403).
+    Invalid,
+    /// Network failure or server error — validity unknown.
+    Unreachable,
+}
+
+/// Ping the auth endpoint with a short timeout — this is a pre-flight check,
+/// not worth stalling a command for the full 60s client timeout.
+pub async fn validate_api_key(api_key: &str) -> KeyCheck {
+    let client = api_key_client(api_key);
+    let resp = client
+        .get(api_url("/v1/auth/user"))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+    match resp {
+        Ok(resp) if resp.status().is_success() => KeyCheck::Valid,
+        Ok(resp) if resp.status() == 401 || resp.status() == 403 => KeyCheck::Invalid,
+        _ => KeyCheck::Unreachable,
+    }
+}
+
 pub fn api_key_client(api_key: &str) -> Client {
     let mut headers = reqwest::header::HeaderMap::new();
     // Keys from --api-key or a hand-edited config may carry stray whitespace

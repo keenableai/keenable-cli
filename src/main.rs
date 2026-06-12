@@ -56,7 +56,7 @@ enum Commands {
     Logout,
 
     /// Configure Keenable MCP in your AI clients
-    #[command(name = "configure-mcp", after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --cursor   Configure specific clients\n  keenable configure-mcp --all --yes      Configure without confirmation (CI, agents)")]
+    #[command(name = "configure-mcp", after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --cursor   Configure specific clients\n  keenable configure-mcp --all --yes      Configure without confirmation (CI, agents)")]
     ConfigureMcp {
         /// Configure all detected clients
         #[arg(long)]
@@ -69,10 +69,6 @@ enum Commands {
         /// Configure Claude Code
         #[arg(long)]
         claude_code: bool,
-
-        /// Configure Claude Desktop
-        #[arg(long)]
-        claude_desktop: bool,
 
         /// Configure Cursor
         #[arg(long)]
@@ -92,7 +88,7 @@ enum Commands {
     },
 
     /// Configure Keenable WebQL MCP in your AI clients
-    #[command(name = "configure-webql", after_help = "Without flags, shows which clients are detected and configured for WebQL.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable configure-webql                  Show status of all detected clients\n  keenable configure-webql --cursor         Configure Cursor only\n  keenable configure-webql --all            Configure all detected clients\n  keenable configure-webql --all --yes      Configure without confirmation (CI, agents)")]
+    #[command(name = "configure-webql", after_help = "Without flags, shows which clients are detected and configured for WebQL.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable configure-webql                  Show status of all detected clients\n  keenable configure-webql --cursor         Configure Cursor only\n  keenable configure-webql --all            Configure all detected clients\n  keenable configure-webql --all --yes      Configure without confirmation (CI, agents)")]
     ConfigureWebql {
         /// Configure all detected clients
         #[arg(long)]
@@ -105,10 +101,6 @@ enum Commands {
         /// Configure Claude Code
         #[arg(long)]
         claude_code: bool,
-
-        /// Configure Claude Desktop
-        #[arg(long)]
-        claude_desktop: bool,
 
         /// Configure Cursor
         #[arg(long)]
@@ -128,7 +120,7 @@ enum Commands {
     },
 
     /// Remove Keenable WebQL MCP from your AI clients
-    #[command(name = "reset-webql", after_help = "Without flags, shows which clients have WebQL configured.\nWith client flags, removes WebQL MCP entries.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset-webql                  Show which clients can be reset\n  keenable reset-webql --cursor         Reset Cursor only\n  keenable reset-webql --all            Reset all configured clients\n  keenable reset-webql --all --yes      Reset without confirmation (CI, agents)")]
+    #[command(name = "reset-webql", after_help = "Without flags, shows which clients have WebQL configured.\nWith client flags, removes WebQL MCP entries.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset-webql                  Show which clients can be reset\n  keenable reset-webql --cursor         Reset Cursor only\n  keenable reset-webql --all            Reset all configured clients\n  keenable reset-webql --all --yes      Reset without confirmation (CI, agents)")]
     ResetWebql {
         /// Reset all configured clients
         #[arg(long)]
@@ -141,10 +133,6 @@ enum Commands {
         /// Reset Claude Code
         #[arg(long)]
         claude_code: bool,
-
-        /// Reset Claude Desktop
-        #[arg(long)]
-        claude_desktop: bool,
 
         /// Reset Cursor
         #[arg(long)]
@@ -164,7 +152,7 @@ enum Commands {
     },
 
     /// Remove Keenable MCP from your AI clients and restore defaults
-    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --claude-desktop, --cursor,\n  --windsurf, --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)")]
+    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)")]
     Reset {
         /// Reset all configured clients
         #[arg(long)]
@@ -177,10 +165,6 @@ enum Commands {
         /// Reset Claude Code
         #[arg(long)]
         claude_code: bool,
-
-        /// Reset Claude Desktop
-        #[arg(long)]
-        claude_desktop: bool,
 
         /// Reset Cursor
         #[arg(long)]
@@ -278,18 +262,6 @@ enum Commands {
         api_key: Option<String>,
     },
 
-    /// Stdio-to-HTTP bridge for MCP (used by Claude Desktop)
-    #[command(name = "mcp-stdio", hide = true)]
-    McpStdio {
-        /// API key (overrides stored key)
-        #[arg(long = "api-key")]
-        api_key: Option<String>,
-
-        /// Full MCP URL to proxy (used for WebQL)
-        #[arg(long = "url")]
-        url: Option<String>,
-    },
-
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
@@ -299,7 +271,6 @@ enum Commands {
 fn collect_client_flags(
     all: bool,
     claude_code: bool,
-    claude_desktop: bool,
     cursor: bool,
     windsurf: bool,
     codex: bool,
@@ -308,7 +279,6 @@ fn collect_client_flags(
     let pairs: &[(bool, &str)] = &[
         (all, "all"),
         (claude_code, "claude-code"),
-        (claude_desktop, "claude-desktop"),
         (cursor, "cursor"),
         (windsurf, "windsurf"),
         (codex, "codex"),
@@ -325,9 +295,17 @@ fn collect_client_flags(
 async fn main() {
     let cli = Cli::parse();
 
-    // Non-blocking update check (fire and forget for most commands)
-    let update_handle = tokio::spawn(async {
-        update::check_for_update().await
+    // Update check only for human-facing output: awaiting it would add up to
+    // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
+    let wants_update_check = match &cli.command {
+        Commands::Search { pretty, .. }
+        | Commands::Fetch { pretty, .. }
+        | Commands::Feedback { pretty, .. } => *pretty,
+        Commands::Daemon => false,
+        _ => true,
+    };
+    let update_handle = wants_update_check.then(|| {
+        tokio::spawn(async { update::check_for_update().await })
     });
 
     match cli.command {
@@ -338,27 +316,27 @@ async fn main() {
             commands::login::logout();
         }
         Commands::ConfigureMcp {
-            all, yes, claude_code, claude_desktop, cursor, windsurf, codex, opencode,
+            all, yes, claude_code, cursor, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
+            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::configure_mcp::configure_mcp(flags, yes).await;
         }
         Commands::ConfigureWebql {
-            all, yes, claude_code, claude_desktop, cursor, windsurf, codex, opencode,
+            all, yes, claude_code, cursor, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
+            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::configure_webql::configure_webql(flags, yes).await;
         }
         Commands::ResetWebql {
-            all, yes, claude_code, claude_desktop, cursor, windsurf, codex, opencode,
+            all, yes, claude_code, cursor, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
+            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::reset_webql::reset_webql(flags, yes);
         }
         Commands::Reset {
-            all, yes, claude_code, claude_desktop, cursor, windsurf, codex, opencode,
+            all, yes, claude_code, cursor, windsurf, codex, opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, claude_desktop, cursor, windsurf, codex, opencode);
+            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::reset::reset(flags, yes);
         }
         Commands::Config { action } => {
@@ -386,22 +364,21 @@ async fn main() {
         } => {
             commands::search::feedback(&query, &scores, pretty, api_key.as_deref()).await;
         }
-        Commands::McpStdio { api_key, url } => {
-            commands::mcp_stdio::run(api_key.as_deref(), url.as_deref()).await;
-        }
         Commands::Daemon => {
             daemon::run_daemon().await;
         }
     }
 
     // Show update notification if available
-    if let Ok(Some(version)) = update_handle.await {
-        use colored::Colorize;
-        eprintln!(
-            "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
-            "Update:".yellow().bold(),
-            version,
-            update::install_hint().cyan()
-        );
+    if let Some(handle) = update_handle {
+        if let Ok(Some(version)) = handle.await {
+            use colored::Colorize;
+            eprintln!(
+                "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
+                "Update:".yellow().bold(),
+                version,
+                update::install_hint().cyan()
+            );
+        }
     }
 }

@@ -2,7 +2,6 @@ pub mod config_cmd;
 pub mod ide;
 pub mod login;
 pub mod mcp_common;
-pub mod mcp_stdio;
 pub mod reset;
 pub mod reset_webql;
 pub mod search;

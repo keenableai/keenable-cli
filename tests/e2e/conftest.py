@@ -58,6 +58,9 @@ class Runner:
             assert API_KEY, "KEENABLE_API_KEY must be set for API tests"
             cmd += ["--api-key", API_KEY]
         env = {**os.environ, "HOME": self.home}
+        # The CLI honors KEENABLE_API_KEY; tests control auth explicitly via
+        # the --api-key flag, so keep the suite's own key out of the env.
+        env.pop("KEENABLE_API_KEY", None)
         return Result(subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout))
 
 

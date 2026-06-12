@@ -141,3 +141,29 @@ pub fn set_skip_setup_confirmation(value: bool) {
 pub fn update_check_file() -> PathBuf {
     config_dir().join(".update_check")
 }
+
+// Tools that configure-mcp itself added to Claude Code's deny list. Reset
+// uses this to restore only what we changed, not denies the user set
+// independently. None = no record (configs from older versions).
+
+pub fn get_managed_deny_tools() -> Option<Vec<String>> {
+    get_config()["managed_deny_tools"].as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    })
+}
+
+pub fn add_managed_deny_tools(tools: &[String]) {
+    let mut all = get_managed_deny_tools().unwrap_or_default();
+    for t in tools {
+        if !all.contains(t) {
+            all.push(t.clone());
+        }
+    }
+    set_config_value("managed_deny_tools", Value::from(all));
+}
+
+pub fn clear_managed_deny_tools() {
+    remove_config_value("managed_deny_tools");
+}

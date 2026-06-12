@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::IsTerminal;
 
-use crate::api::{api_key_client, api_url};
+use crate::api::{validate_api_key, KeyCheck};
 use crate::config;
 use crate::ui;
 
@@ -39,6 +39,8 @@ pub struct McpProduct {
     pub is_product_url: fn(&str) -> bool,
     /// Whether to check for conflicting search MCPs.
     pub check_conflicts: bool,
+    /// Whether to check for legacy `?token=` URL auth (WebQL only).
+    pub check_token_auth: bool,
     /// Whether to disable/restore standard tools (WebSearch, WebFetch).
     pub manage_standard_tools: bool,
     /// Whether to check for legacy npx mcp-remote entries.
@@ -59,13 +61,11 @@ pub fn keenable_product() -> McpProduct {
         extract_key: extract_entry_api_key,
         is_product_url: is_keenable_url,
         check_conflicts: true,
+        check_token_auth: false,
         manage_standard_tools: true,
         check_legacy_npx: true,
         clean_codex_cache: true,
         show_recommendations: |ide| {
-            if ide.name == "Claude Desktop" {
-                ui::sub_hint("Disable built-in web search manually (+ button near the chat text field)");
-            }
             if ide.name == "Cursor" {
                 ui::sub_hint("We recommend disabling standard search & fetch tools in Cursor Settings → Tools");
                 ui::sub_hint("We recommend setting a custom rule to use Keenable search");
@@ -84,6 +84,7 @@ pub fn webql_product() -> McpProduct {
         extract_key: extract_webql_key,
         is_product_url: is_webql_url,
         check_conflicts: false,
+        check_token_auth: true,
         manage_standard_tools: false,
         check_legacy_npx: false,
         clean_codex_cache: false,
@@ -98,6 +99,9 @@ pub struct ProductStatus {
     pub wrong_api_key: bool,
     /// Entry exists without API key but user now has one configured.
     pub missing_api_key: bool,
+    /// Entry has an API key but no key is stored locally — re-running
+    /// configure would strip it.
+    pub entry_key_without_login: bool,
     pub uses_legacy_npx: bool,
     pub uses_token_auth: bool,
     pub standard_tools_disabled: bool,
@@ -128,6 +132,8 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
         && existing_key.is_none()
         && desired_key.is_some();
 
+    let entry_key_without_login = existing_key.is_some() && desired_key.is_none();
+
     let uses_legacy_npx = if product.check_legacy_npx {
         existing
             .as_ref()
@@ -137,9 +143,10 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
         false
     };
 
-    let uses_token_auth = existing
-        .as_ref()
-        .map_or(false, |e| uses_webql_token_auth(e));
+    let uses_token_auth = product.check_token_auth
+        && existing
+            .as_ref()
+            .map_or(false, |e| uses_webql_token_auth(e));
 
     let (standard_tools_disabled, has_legacy_deny_only) = if product.manage_standard_tools && ide.has_standard_tools {
         if ide.flag == "opencode" {
@@ -254,6 +261,7 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
         has_entry,
         wrong_api_key,
         missing_api_key,
+        entry_key_without_login,
         uses_legacy_npx,
         uses_token_auth,
         standard_tools_disabled,
@@ -320,6 +328,9 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
                 .collect()
         };
 
+        if is_all && selected_flags.len() > 1 {
+            ui::warning("--all selects every detected client; individual client flags are ignored");
+        }
         if !is_all {
             warn_unmatched_flags(&selected_flags, &all, &detected);
         }
@@ -445,9 +456,9 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> b
                 }
             }
             if product.check_legacy_npx && entry["command"].as_str() == Some("npx") {
-                ui::sub_warning("Replacing npx mcp-remote with built-in stdio bridge (no Node.js needed)");
+                ui::sub_warning("Replacing npx mcp-remote with a direct HTTP entry (no Node.js needed)");
             }
-            if uses_webql_token_auth(entry) {
+            if product.check_token_auth && uses_webql_token_auth(entry) {
                 ui::sub_warning("Migrating from token-in-URL to header-based auth");
             }
             config[ide.servers_key][product.entry_name] = desired;
@@ -516,6 +527,9 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
                 .collect()
         };
 
+        if is_all && selected_flags.len() > 1 {
+            ui::warning("--all selects every configured client; individual client flags are ignored");
+        }
         if !is_all {
             for flag in &selected_flags {
                 let matched = all.iter().any(|ide| ide.flag == flag.as_str());
@@ -677,6 +691,7 @@ fn show_configure_status(
 
         let has_issues = status.wrong_api_key
             || status.missing_api_key
+            || status.entry_key_without_login
             || status.uses_legacy_npx
             || status.uses_token_auth
             || !status.duplicate_entries.is_empty()
@@ -725,7 +740,7 @@ fn show_configure_status(
 fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus) {
     if status.uses_legacy_npx {
         ui::sub_warning(&format!(
-            "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to built-in bridge",
+            "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to a direct HTTP entry",
             product.configure_cmd
         ));
     }
@@ -740,6 +755,12 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
     }
     if status.missing_api_key {
         ui::sub_warning("Missing API key (configured for free tier)");
+    }
+    if status.entry_key_without_login {
+        ui::sub_warning(&format!(
+            "Configured with an API key, but none is stored locally — re-running {} would remove it",
+            product.configure_cmd
+        ));
     }
     if !status.duplicate_entries.is_empty() {
         ui::sub_warning(&format!(
@@ -842,23 +863,6 @@ fn warn_unmatched_flags(selected_flags: &[String], all: &[IDEDef], detected: &[&
     }
 }
 
-enum KeyCheck {
-    Valid,
-    /// The server rejected the key (401/403).
-    Invalid,
-    /// Network failure or server error — validity unknown.
-    Unreachable,
-}
-
-async fn validate_api_key(api_key: &str) -> KeyCheck {
-    let client = api_key_client(api_key);
-    match client.get(api_url("/v1/auth/user")).send().await {
-        Ok(resp) if resp.status().is_success() => KeyCheck::Valid,
-        Ok(resp) if resp.status() == 401 || resp.status() == 403 => KeyCheck::Invalid,
-        _ => KeyCheck::Unreachable,
-    }
-}
-
 // dialoguer reads keys from stdin; with piped stdin it errors and we'd
 // silently treat that as "Cancel". Fail loudly with the fix instead.
 fn require_terminal() {
@@ -891,6 +895,10 @@ fn confirm_configure(product: &McpProduct, ide_names: &[&str], yes: bool) -> boo
             "   This will add {} to {} and disable\n   built-in search tools where applicable.",
             product.display_name,
             target.bold()
+        );
+        eprintln!(
+            "   It also removes {} from allow lists in project-level\n   .claude/settings.local.json files under common dev directories.",
+            CLAUDE_CODE_STANDARD_TOOLS.join("/")
         );
     } else {
         eprintln!(
@@ -954,9 +962,10 @@ fn confirm_reset(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
 
     let choices = &["Proceed", "Cancel"];
 
+    // Destructive op: Enter must not proceed by accident.
     let selection = Select::new()
         .items(choices)
-        .default(0)
+        .default(1)
         .interact_opt();
 
     match selection {
@@ -972,57 +981,38 @@ fn confirm_reset(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
 // ── Standard tools ──────────────────────────────────────────────────
 
 fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
-    let deny_list = config
-        .pointer("/permissions/deny")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let missing: Vec<&&str> = CLAUDE_CODE_STANDARD_TOOLS
-        .iter()
-        .filter(|tool| !deny_list.iter().any(|d| d == **tool))
-        .collect();
-
-    if missing.is_empty() {
-        ui::sub_done(&format!(
-            "Standard tools already disabled: {}",
-            CLAUDE_CODE_STANDARD_TOOLS.join(", ")
-        ));
-    } else {
-        let missing_names: Vec<&str> = missing.iter().map(|s| **s).collect();
-        let mut new_deny: Vec<String> = deny_list;
-        for tool in &missing_names {
-            new_deny.push(tool.to_string());
-        }
-        ensure_object(config, "permissions");
-        config["permissions"]["deny"] = json!(new_deny);
+    // Claude Code reads permissions from ~/.claude/settings.json — denies in
+    // ~/.claude.json are ignored. Migrate legacy entries out instead of
+    // adding more.
+    let mut legacy_changed = false;
+    remove_from_deny_list(config, &mut legacy_changed, CLAUDE_CODE_STANDARD_TOOLS);
+    if legacy_changed {
         *changed = true;
-        ui::sub_success(&format!(
-            "Disabled standard tools: {}",
-            missing_names.join(", ")
-        ));
+        ui::sub_success("Removed legacy deny entries from .claude.json (Claude Code reads settings.json)");
     }
 
     // Remove from allow list in .claude.json
     remove_from_allow_list(config, changed);
 
-    // Also add deny + remove from allow list in ~/.claude/settings.json
+    // Add deny + remove from allow list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path() {
         if let Some(mut settings) =
             read_config_for_write(&settings_path, "Standard tools may still be enabled")
         {
             let mut settings_changed = false;
-            let deny_msg = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
+            let deny_result = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
             let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
             if settings_changed {
                 match write_config(&settings_path, &settings) {
                     Ok(()) => {
-                        if let Some(msg) = deny_msg {
-                            ui::sub_success(&msg);
+                        match deny_result {
+                            Some((msg, added)) => {
+                                // Record what we added so reset restores only
+                                // that, not denies the user set themselves.
+                                config::add_managed_deny_tools(&added);
+                                ui::sub_success(&msg);
+                            }
+                            None => config::add_managed_deny_tools(&[]),
                         }
                         if let Some(msg) = allow_msg {
                             ui::sub_success(&msg);
@@ -1036,6 +1026,12 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
                         ));
                     }
                 }
+            } else {
+                config::add_managed_deny_tools(&[]);
+                ui::sub_done(&format!(
+                    "Standard tools already disabled: {}",
+                    CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+                ));
             }
         }
     }
@@ -1089,8 +1085,9 @@ fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
 }
 
 /// Add standard tools to the `permissions.deny` list in a settings file.
-/// Returns a success message if changes were made (caller prints after write).
-fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<String> {
+/// Returns a success message and the tools added, if changes were made
+/// (caller prints and records after a successful write).
+fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<(String, Vec<String>)> {
     let deny_list = config
         .pointer("/permissions/deny")
         .and_then(|v| v.as_array())
@@ -1101,24 +1098,20 @@ fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<
         })
         .unwrap_or_default();
 
-    let missing: Vec<&&str> = CLAUDE_CODE_STANDARD_TOOLS
+    let added: Vec<String> = CLAUDE_CODE_STANDARD_TOOLS
         .iter()
         .filter(|tool| !deny_list.iter().any(|d| d == **tool))
+        .map(|s| s.to_string())
         .collect();
 
-    if !missing.is_empty() {
-        let msg = format!(
-            "Added {} to settings.json deny list",
-            missing.iter().map(|s| **s).collect::<Vec<_>>().join(", ")
-        );
+    if !added.is_empty() {
+        let msg = format!("Added {} to settings.json deny list", added.join(", "));
         let mut new_deny = deny_list;
-        for tool in &missing {
-            new_deny.push(tool.to_string());
-        }
+        new_deny.extend(added.iter().cloned());
         ensure_object(config, "permissions");
         config["permissions"]["deny"] = json!(new_deny);
         *changed = true;
-        Some(msg)
+        Some((msg, added))
     } else {
         None
     }
@@ -1285,65 +1278,38 @@ fn disable_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
 }
 
 fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
-    let deny_list = config
-        .pointer("/permissions/deny")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let filtered: Vec<String> = deny_list
-        .into_iter()
-        .filter(|d| !CLAUDE_CODE_STANDARD_TOOLS.contains(&d.as_str()))
-        .collect();
-
-    let had_tools = CLAUDE_CODE_STANDARD_TOOLS.iter().any(|tool| {
-        config
-            .pointer("/permissions/deny")
-            .and_then(|v| v.as_array())
-            .map_or(false, |arr| arr.iter().any(|v| v.as_str() == Some(tool)))
-    });
-
-    if had_tools {
-        if filtered.is_empty() {
-            if let Some(perms) = config.get_mut("permissions").and_then(|v| v.as_object_mut()) {
-                perms.remove("deny");
-                if perms.is_empty() {
-                    if let Some(obj) = config.as_object_mut() {
-                        obj.remove("permissions");
-                    }
-                }
-            }
-        } else {
-            config["permissions"]["deny"] = json!(filtered);
-        }
+    // Legacy cleanup: old versions wrote denies into ~/.claude.json too.
+    let mut legacy_changed = false;
+    remove_from_deny_list(config, &mut legacy_changed, CLAUDE_CODE_STANDARD_TOOLS);
+    if legacy_changed {
         *changed = true;
-        ui::sub_success(&format!(
-            "Re-enabled standard tools: {}",
-            CLAUDE_CODE_STANDARD_TOOLS.join(", ")
-        ));
-    } else {
-        ui::sub_done("Standard tools were not disabled");
+        ui::sub_success("Removed legacy deny entries from .claude.json");
     }
 
-    // Also remove from deny list in ~/.claude/settings.json
-    if let Some(settings_path) = claude_code_settings_path() {
+    // settings.json: remove only the denies configure recorded as its own.
+    // No record (pre-record configs) falls back to removing all of them.
+    let managed = config::get_managed_deny_tools();
+    let tools: Vec<&str> = match &managed {
+        Some(list) => list.iter().map(String::as_str).collect(),
+        None => CLAUDE_CODE_STANDARD_TOOLS.to_vec(),
+    };
+
+    if tools.is_empty() {
+        ui::sub_done("Standard tools were not disabled by configure — leaving them as-is");
+    } else if let Some(settings_path) = claude_code_settings_path() {
         let Some(mut settings) =
             read_config_for_write(&settings_path, "Standard tools may still be disabled")
         else {
-            return;
+            return; // keep the record so a re-run can still restore
         };
         let mut settings_changed = false;
-        remove_from_deny_list(&mut settings, &mut settings_changed);
+        remove_from_deny_list(&mut settings, &mut settings_changed, &tools);
         if settings_changed {
             match write_config(&settings_path, &settings) {
                 Ok(()) => {
                     ui::sub_success(&format!(
-                        "Removed {} from settings.json deny list",
-                        CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+                        "Re-enabled standard tools: {}",
+                        tools.join(", ")
                     ));
                 }
                 Err(e) => {
@@ -1352,14 +1318,18 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
                         settings_path.display(),
                         e
                     ));
+                    return; // keep the record
                 }
             }
+        } else {
+            ui::sub_done("Standard tools were not disabled");
         }
     }
+    config::clear_managed_deny_tools();
 }
 
-/// Remove standard tools from a `permissions.deny` list.
-fn remove_from_deny_list(config: &mut Value, changed: &mut bool) {
+/// Remove the given tools from a `permissions.deny` list.
+fn remove_from_deny_list(config: &mut Value, changed: &mut bool, tools: &[&str]) {
     let deny_list = config
         .pointer("/permissions/deny")
         .and_then(|v| v.as_array())
@@ -1370,14 +1340,14 @@ fn remove_from_deny_list(config: &mut Value, changed: &mut bool) {
         })
         .unwrap_or_default();
 
-    let had_tools = CLAUDE_CODE_STANDARD_TOOLS
+    let had_tools = tools
         .iter()
         .any(|tool| deny_list.iter().any(|d| d == *tool));
 
     if had_tools {
         let filtered: Vec<String> = deny_list
             .into_iter()
-            .filter(|d| !CLAUDE_CODE_STANDARD_TOOLS.contains(&d.as_str()))
+            .filter(|d| !tools.contains(&d.as_str()))
             .collect();
         if filtered.is_empty() {
             if let Some(perms) = config.get_mut("permissions").and_then(|v| v.as_object_mut()) {

@@ -73,7 +73,7 @@ async fn poll_for_token(
 ) -> Result<String, String> {
     let client = Client::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(expires_in);
-    let interval = interval.max(1); // a server-sent 0 must not busy-poll
+    let mut interval = interval.max(1); // a server-sent 0 must not busy-poll
 
     loop {
         if std::time::Instant::now() > deadline {
@@ -110,6 +110,11 @@ async fn poll_for_token(
 
         match data["error"].as_str() {
             Some("authorization_pending") => continue,
+            // RFC 8628: the server asks us to poll less often.
+            Some("slow_down") => {
+                interval += 5;
+                continue;
+            }
             Some("access_denied") => return Err("Authorization was denied.".to_string()),
             Some("expired_token") => {
                 return Err("Code expired. Please run `keenable login` again.".to_string());
@@ -127,6 +132,20 @@ pub async fn login(api_key: Option<&str>) {
 
     // Fast path: --api-key provided, skip browser login
     if let Some(key) = api_key {
+        // Catch a typo'd key now rather than at first search; an unreachable
+        // server must not block saving a possibly-good key.
+        match crate::api::validate_api_key(key.trim()).await {
+            crate::api::KeyCheck::Invalid => {
+                ui::error("API key is invalid — not saved");
+                ui::hint("Check the key, or run keenable login for the browser flow");
+                eprintln!();
+                std::process::exit(1);
+            }
+            crate::api::KeyCheck::Unreachable => {
+                ui::warning("Could not verify API key (network error) — saving anyway");
+            }
+            crate::api::KeyCheck::Valid => {}
+        }
         config::set_api_key(key);
         daemon::kill_daemon();
         ui::success("API key saved");
@@ -156,7 +175,7 @@ pub async fn login(api_key: Option<&str>) {
     ));
 
     // Step 3: Poll for approval
-    ui::step("Waiting for approval...");
+    let step_lines = ui::step("Waiting for approval...");
     let api_key = match poll_for_token(&code.agent_code, code.interval, code.expires_in).await {
         Ok(key) => key,
         Err(e) => {
@@ -164,7 +183,7 @@ pub async fn login(api_key: Option<&str>) {
             std::process::exit(1);
         }
     };
-    ui::step_done_replace("Approved");
+    ui::step_done_replace("Approved", step_lines);
 
     // Step 4: Save API key and restart daemon with new credentials
     config::set_api_key(&api_key);
