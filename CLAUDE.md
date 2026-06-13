@@ -35,7 +35,7 @@ src/
   daemon.rs            # Background daemon for connection reuse (auth + unauth)
   commands/
     login.rs           # Device code login + --api-key direct save; also logout
-    config_cmd.rs      # CLI configuration (default_search_mode, forced_search_mode)
+    config_cmd.rs      # CLI configuration settings
     ide.rs             # Shared IDE definitions and config helpers
     configure_mcp.rs   # Client detection, MCP configuration, interactive setup
     reset.rs           # Remove Keenable MCP and restore defaults
@@ -68,20 +68,17 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 
 ### Search Modes
 
-The `search` command supports `--mode realtime` (fast) and `--mode pro` (higher quality, default).
-
-Mode resolution order: `forced_search_mode` config > `--mode` flag > `default_search_mode` config > server default.
+The `search` command supports `--mode pro` (higher quality, default).
 
 ### Config Command (`src/commands/config_cmd.rs`)
 
 `keenable config` manages CLI settings stored in `~/.keenable/config.json`.
 
 ```bash
-keenable config                                     # View all settings
-keenable config set default_search_mode pro          # Set default search mode
-keenable config set forced_search_mode realtime      # Force a mode (overrides --mode flag)
-keenable config get default_search_mode              # Get a single value
-keenable config unset forced_search_mode             # Remove a setting
+keenable config                          # View all settings
+keenable config set <key> <value>        # Set a value
+keenable config get <key>                # Get a single value
+keenable config unset <key>              # Remove a setting
 ```
 
 Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`. Adding a new config key only requires adding an entry there.
@@ -229,9 +226,9 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 **Interactive confirmation:**
 Before modifying configs, shows a prompt with three options: "Proceed", "Proceed and don't ask again", "Cancel". The "don't ask again" preference is stored in `~/.keenable/config.json` as `skip_setup_confirmation: true`.
 
-**Non-interactive use:** `configure-mcp`, `configure-webql`, `reset`, and `reset-webql` accept `-y`/`--yes` to skip the confirmation prompt (CI, headless agents). Without `--yes`, a non-TTY stdin exits 1 with a hint instead of hanging on the prompt.
+**Non-interactive use:** `configure-mcp` and `reset` accept `-y`/`--yes` to skip the confirmation prompt (CI, headless agents). Without `--yes`, a non-TTY stdin exits 1 with a hint instead of hanging on the prompt.
 
-**Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `ConfigureMcp` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_client_recommendations()` in `configure_mcp.rs`.
+**Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `ConfigureMcp` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_recommendations()` in `mcp_common.rs`.
 
 ### Reset Command (`src/commands/reset.rs`)
 
