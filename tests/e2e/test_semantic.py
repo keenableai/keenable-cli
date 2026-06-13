@@ -6,12 +6,13 @@ quality dashboards, not a smoke suite).
 """
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from conftest import host_of, host_under, search_results
+from conftest import host_of, host_under, results_of, search_results
 
 pytestmark = pytest.mark.semantic
 
@@ -80,6 +81,24 @@ def test_entity_navigational(kn):
         f"keenable.ai not in top-5 hosts: {top5}"
 
 
+def _recall_search(kn, query, attempts=4):
+    """Run one recall query, retrying on rate-limit throttling.
+
+    Recall measures whether real queries return results, not whether the
+    pooled fan-out below stays under the API's per-second budget. A throttled
+    query is a transient 429, not a recall miss, so back off and retry a few
+    times before letting `search_results` assert on a non-zero exit.
+    """
+    for i in range(attempts - 1):
+        res = kn("search", query)
+        if res.code == 0:
+            return results_of(res.yaml())
+        if "rate limit" not in (res.out + res.err).lower():
+            break
+        time.sleep(0.5 * (i + 1))
+    return search_results(kn, query)
+
+
 def test_non_empty_recall_rate(kn):
     seed_file = Path(os.environ.get("KEENABLE_SEED_QUERIES",
                                     Path(__file__).parent / "seed_queries.txt"))
@@ -87,8 +106,10 @@ def test_non_empty_recall_rate(kn):
                if q.strip() and not q.startswith("#")]
     assert len(queries) >= 10, "seed corpus too small to be meaningful"
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        non_empty = sum(1 for results in pool.map(lambda q: search_results(kn, q), queries) if results)
+    # Modest fan-out: a wide burst trips the API's per-second rate limit, and
+    # _recall_search backs off on the throttling that slips through.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        non_empty = sum(1 for results in pool.map(lambda q: _recall_search(kn, q), queries) if results)
     rate = non_empty / len(queries)
     print(f"\nNon-empty recall: {non_empty}/{len(queries)} = {rate:.0%}")
     assert rate >= 0.9, f"recall rate {rate:.0%} below 90% (n={len(queries)})"
