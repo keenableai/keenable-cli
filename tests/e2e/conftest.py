@@ -32,6 +32,13 @@ write_feedback = pytest.mark.skipif(
     reason="persists synthetic feedback to the live API — opt in with KEENABLE_E2E_WRITE_FEEDBACK=1",
 )
 
+# Tests that rely on Unix-only behavior — the Unix-domain-socket daemon and the
+# POSIX shell installer. On Windows the CLI stubs the daemon out and ships a
+# PowerShell installer instead, so these self-skip there.
+requires_posix = pytest.mark.skipif(
+    os.name != "posix", reason="requires a POSIX platform (Unix daemon / shell installer)"
+)
+
 
 class Result:
     def __init__(self, proc: subprocess.CompletedProcess):

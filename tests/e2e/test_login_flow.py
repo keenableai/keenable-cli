@@ -15,14 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from conftest import API_KEY, SEARCH_QUERY as QUERY, Runner, search_results, write_feedback
-
-# The background daemon is Unix-only (Unix-domain socket); on Windows the CLI
-# stubs it out and every command goes direct. Tests that assert on daemon
-# socket/pid state therefore only make sense on Unix. The stored-key resolution
-# they also cover is exercised by the other tests here, which run everywhere.
-requires_daemon = pytest.mark.skipif(
-    os.name != "posix", reason="daemon (Unix socket) is not supported on Windows"
+from conftest import (
+    API_KEY,
+    SEARCH_QUERY as QUERY,
+    Runner,
+    requires_posix,
+    search_results,
+    write_feedback,
 )
 
 
@@ -43,7 +42,7 @@ def logged_in(tmp_path):
     _kill_daemon(kn.home)
 
 
-@requires_daemon
+@requires_posix
 def test_login_then_search_via_daemon(logged_in):
     assert search_results(logged_in, QUERY, key=False)
 

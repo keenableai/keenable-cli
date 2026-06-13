@@ -36,7 +36,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          # Linux runs the whole suite, including the semantic-relevance and
+          # latency checks against the live index.
+          - os: ubuntu-latest
+          # macOS and Windows verify the binary on their platform; the
+          # semantic/latency checks are OS-independent, so skip them here
+          # rather than hammering the live index on every matrix leg.
+          - os: macos-latest
+            markers: "not semantic and not latency"
+          - os: windows-latest
+            markers: "not semantic and not latency"
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -107,10 +117,15 @@ jobs:
         shell: bash
         env:
           KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          # Empty on Linux (full suite); "not semantic and not latency" on the
+          # macOS/Windows legs so the OS-independent live-index checks run once.
+          MARKERS: ${{ matrix.markers }}
           # KEENABLE_E2E_WRITE_FEEDBACK is deliberately NOT set: the
           # success-path feedback tests persist synthetic relevance data and
           # are opt-in only (run them locally or on a staging tenant).
         run: |
           # The shell-installer test and daemon tests self-skip on Windows via
           # pytest skipif, so the same invocation works on every platform.
-          uv run --project tests/e2e pytest tests/e2e -v -ra --color=yes
+          args=(-v -ra --color=yes)
+          [ -n "$MARKERS" ] && args+=(-m "$MARKERS")
+          uv run --project tests/e2e pytest tests/e2e "${args[@]}"
