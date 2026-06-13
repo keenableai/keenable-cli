@@ -21,53 +21,19 @@ fn claude_code_settings_path() -> Option<PathBuf> {
 
 // ── Product definition ──────────────────────────────────────────────
 
-/// Describes an MCP product that can be configured/reset in IDE clients.
-pub struct McpProduct {
-    /// Entry name in IDE config (e.g. "keenable").
-    pub entry_name: &'static str,
-    /// Human-readable name (e.g. "Keenable MCP").
-    pub display_name: &'static str,
-    /// CLI command for configure (e.g. "configure-mcp").
-    pub configure_cmd: &'static str,
-    /// CLI command for reset (e.g. "reset").
-    pub reset_cmd: &'static str,
-    /// Build the MCP entry JSON for this product.
-    pub build_entry: fn(&IDEDef, Option<&str>) -> Value,
-    /// Extract the API key/token from an existing entry.
-    pub extract_key: fn(&Value) -> Option<String>,
-    /// Check if a URL belongs to this product.
-    pub is_product_url: fn(&str) -> bool,
-    /// Whether to check for conflicting search MCPs.
-    pub check_conflicts: bool,
-    /// Whether to disable/restore standard tools (WebSearch, WebFetch).
-    pub manage_standard_tools: bool,
-    /// Whether to check for legacy npx mcp-remote entries.
-    pub check_legacy_npx: bool,
-    /// Whether to clean Codex Apps cache on reset.
-    pub clean_codex_cache: bool,
-    /// Show client-specific recommendations after configure.
-    pub show_recommendations: fn(&IDEDef),
-}
+/// Entry name in IDE config.
+const ENTRY_NAME: &str = "keenable";
+/// Human-readable name shown in output.
+const DISPLAY_NAME: &str = "Keenable MCP";
+/// CLI command names, used in hints.
+const CONFIGURE_CMD: &str = "configure-mcp";
+const RESET_CMD: &str = "reset";
 
-pub fn keenable_product() -> McpProduct {
-    McpProduct {
-        entry_name: "keenable",
-        display_name: "Keenable MCP",
-        configure_cmd: "configure-mcp",
-        reset_cmd: "reset",
-        build_entry: build_keenable_entry,
-        extract_key: extract_entry_api_key,
-        is_product_url: is_keenable_url,
-        check_conflicts: true,
-        manage_standard_tools: true,
-        check_legacy_npx: true,
-        clean_codex_cache: true,
-        show_recommendations: |ide| {
-            if ide.name == "Cursor" {
-                ui::sub_hint("We recommend disabling standard search & fetch tools in Cursor Settings → Tools");
-                ui::sub_hint("We recommend setting a custom rule to use Keenable search");
-            }
-        },
+/// Client-specific recommendations shown after configure.
+fn show_recommendations(ide: &IDEDef) {
+    if ide.name == "Cursor" {
+        ui::sub_hint("We recommend disabling standard search & fetch tools in Cursor Settings → Tools");
+        ui::sub_hint("We recommend setting a custom rule to use Keenable search");
     }
 }
 
@@ -89,16 +55,16 @@ pub struct ProductStatus {
     pub conflicting_mcps: Vec<String>,
 }
 
-pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> ProductStatus {
+pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus {
     let config = read_config_lenient(&ide.config_path);
     let existing = config
-        .pointer(&format!("/{}/{}", ide.servers_key, product.entry_name))
+        .pointer(&format!("/{}/{}", ide.servers_key, ENTRY_NAME))
         .cloned();
 
     let has_entry = existing.is_some();
 
     let desired_key = api_key.map(|k| k.to_string());
-    let existing_key = existing.as_ref().and_then(|e| (product.extract_key)(e));
+    let existing_key = existing.as_ref().and_then(extract_entry_api_key);
 
     // wrong_api_key: both have keys but they differ
     let wrong_api_key = existing_key.is_some()
@@ -112,16 +78,12 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
 
     let entry_key_without_login = existing_key.is_some() && desired_key.is_none();
 
-    let uses_legacy_npx = if product.check_legacy_npx {
-        existing
-            .as_ref()
-            .and_then(|e| e["command"].as_str())
-            .map_or(false, |cmd| cmd == "npx")
-    } else {
-        false
-    };
+    let uses_legacy_npx = existing
+        .as_ref()
+        .and_then(|e| e["command"].as_str())
+        .map_or(false, |cmd| cmd == "npx");
 
-    let (standard_tools_disabled, has_legacy_deny_only) = if product.manage_standard_tools && ide.has_standard_tools {
+    let (standard_tools_disabled, has_legacy_deny_only) = if ide.has_standard_tools {
         if ide.flag == "opencode" {
             let disabled = OPENCODE_STANDARD_TOOLS.iter().all(|tool| {
                 config
@@ -216,16 +178,16 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
     let mut conflicting_mcps = Vec::new();
 
     for (name, entry) in &servers {
-        if name == product.entry_name {
+        if name == ENTRY_NAME {
             continue;
         }
         if let Some(url) = extract_url(entry) {
-            if (product.is_product_url)(&url) {
+            if is_keenable_url(&url) {
                 duplicate_entries.push(name.clone());
                 continue;
             }
         }
-        if product.check_conflicts && is_conflicting_name(name) {
+        if is_conflicting_name(name) {
             conflicting_mcps.push(name.clone());
         }
     }
@@ -245,8 +207,8 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
 
 // ── Configure flow ──────────────────────────────────────────────────
 
-pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
-    ui::header(&format!("keenable {}", product.configure_cmd));
+pub async fn configure(selected_flags: Vec<String>, yes: bool) {
+    ui::header(&format!("keenable {}", CONFIGURE_CMD));
 
     // Pre-flight: validate API key (optional — unauth flow works without one)
     ui::label("Keenable CLI");
@@ -286,7 +248,7 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
     let not_detected: Vec<&IDEDef> = all.iter().filter(|ide| !is_detected(ide)).collect();
 
     if selected_flags.is_empty() {
-        show_configure_status(product, &detected, &not_detected, api_key.as_deref());
+        show_configure_status(&detected, &not_detected, api_key.as_deref());
     } else {
         let is_all = selected_flags.contains(&"all".to_string());
 
@@ -311,7 +273,7 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
             ui::error("No matching clients found to configure");
             ui::hint(&format!(
                 "Run `keenable {}` to see available clients",
-                product.configure_cmd
+                CONFIGURE_CMD
             ));
             eprintln!();
             std::process::exit(1);
@@ -319,7 +281,7 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
 
         let target_names: Vec<&str> = targets.iter().map(|ide| ide.name).collect();
 
-        if !confirm_configure(product, &target_names, yes) {
+        if !confirm_configure(&target_names, yes) {
             eprintln!();
             return;
         }
@@ -327,8 +289,8 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
         let mut all_ok = true;
         for ide in &targets {
             ui::label(ide.name);
-            all_ok &= configure_ide(product, ide, api_key.as_deref());
-            (product.show_recommendations)(ide);
+            all_ok &= configure_ide(ide, api_key.as_deref());
+            show_recommendations(ide);
         }
 
         eprintln!();
@@ -344,14 +306,14 @@ pub async fn configure(product: &McpProduct, selected_flags: Vec<String>, yes: b
     eprintln!();
 }
 
-fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> bool {
+fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
     let Some(mut config) = read_config_for_write(&ide.config_path, "Fix the file and re-run.")
     else {
         return false;
     };
     let mut config_changed = false;
 
-    // Step 1: Remove duplicate entries (other names pointing at this product's URL)
+    // Step 1: Remove duplicate entries (other names pointing at Keenable's URL)
     let servers = config
         .get(ide.servers_key)
         .and_then(|v| v.as_object())
@@ -362,16 +324,16 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> b
     let mut conflicts: Vec<String> = Vec::new();
 
     for (name, entry) in &servers {
-        if name == product.entry_name {
+        if name == ENTRY_NAME {
             continue;
         }
         if let Some(url) = extract_url(entry) {
-            if (product.is_product_url)(&url) {
+            if is_keenable_url(&url) {
                 duplicate_entries.push(name.clone());
                 continue;
             }
         }
-        if product.check_conflicts && is_conflicting_name(name) {
+        if is_conflicting_name(name) {
             conflicts.push(name.clone());
         }
     }
@@ -396,54 +358,54 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> b
         ));
     }
 
-    // Step 2: Add/update product MCP entry
-    let desired = (product.build_entry)(ide, api_key);
+    // Step 2: Add/update the Keenable MCP entry
+    let desired = build_keenable_entry(ide, api_key);
     let existing = config
-        .pointer(&format!("/{}/{}", ide.servers_key, product.entry_name))
+        .pointer(&format!("/{}/{}", ide.servers_key, ENTRY_NAME))
         .cloned();
 
     match existing {
         Some(ref entry) if *entry == desired => {
-            ui::sub_done(&format!("{} already configured", product.display_name));
+            ui::sub_done(&format!("{} already configured", DISPLAY_NAME));
         }
         Some(ref entry) => {
-            let existing_key = (product.extract_key)(entry);
+            let existing_key = extract_entry_api_key(entry);
             let desired_key = api_key.map(|k| k.to_string());
             if existing_key != desired_key {
                 if existing_key.is_some() && desired_key.is_some() {
                     ui::sub_warning(&format!(
                         "Updating API key in {} entry",
-                        product.display_name
+                        DISPLAY_NAME
                     ));
                 } else if existing_key.is_none() && desired_key.is_some() {
                     ui::sub_warning(&format!(
                         "Adding API key to {} entry",
-                        product.display_name
+                        DISPLAY_NAME
                     ));
                 } else if existing_key.is_some() && desired_key.is_none() {
                     ui::sub_warning(&format!(
                         "Removing API key from {} entry (switching to free tier)",
-                        product.display_name
+                        DISPLAY_NAME
                     ));
                 }
             }
-            if product.check_legacy_npx && entry["command"].as_str() == Some("npx") {
+            if entry["command"].as_str() == Some("npx") {
                 ui::sub_warning("Replacing npx mcp-remote with a direct HTTP entry (no Node.js needed)");
             }
-            config[ide.servers_key][product.entry_name] = desired;
+            config[ide.servers_key][ENTRY_NAME] = desired;
             config_changed = true;
-            ui::sub_success(&format!("{} updated", product.display_name));
+            ui::sub_success(&format!("{} updated", DISPLAY_NAME));
         }
         None => {
             ensure_object(&mut config, ide.servers_key);
-            config[ide.servers_key][product.entry_name] = desired;
+            config[ide.servers_key][ENTRY_NAME] = desired;
             config_changed = true;
-            ui::sub_success(&format!("{} added", product.display_name));
+            ui::sub_success(&format!("{} added", DISPLAY_NAME));
         }
     }
 
-    // Step 3: Disable standard tools (only for products that manage them)
-    if product.manage_standard_tools && ide.has_standard_tools {
+    // Step 3: Disable standard tools where the client has them
+    if ide.has_standard_tools {
         if ide.flag == "opencode" {
             disable_opencode_standard_tools(&mut config, &mut config_changed);
         } else {
@@ -466,8 +428,8 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> b
 
 // ── Reset flow ──────────────────────────────────────────────────────
 
-pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
-    ui::header(&format!("keenable {}", product.reset_cmd));
+pub fn reset(selected_flags: Vec<String>, yes: bool) {
+    ui::header(&format!("keenable {}", RESET_CMD));
 
     let all = all_ides();
     let detected: Vec<&IDEDef> = all.iter().filter(|ide| is_detected(ide)).collect();
@@ -475,14 +437,14 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
     let configured: Vec<&IDEDef> = detected
         .iter()
         .filter(|ide| {
-            has_product_entry(product, ide)
-                || (product.clean_codex_cache && ide.flag == "codex" && has_codex_apps_cache())
+            has_product_entry(ide)
+                || (ide.flag == "codex" && has_codex_apps_cache())
         })
         .copied()
         .collect();
 
     if selected_flags.is_empty() {
-        show_reset_status(product, &configured);
+        show_reset_status(&configured);
     } else {
         let is_all = selected_flags.contains(&"all".to_string());
 
@@ -513,7 +475,7 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
                     } else {
                         ui::warning(&format!(
                             "{} doesn't have {} configured",
-                            ide_name, product.display_name
+                            ide_name, DISPLAY_NAME
                         ));
                     }
                 }
@@ -523,7 +485,7 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
         if targets.is_empty() {
             ui::info(&format!(
                 "No clients with {} configuration found to reset.",
-                product.display_name
+                DISPLAY_NAME
             ));
             eprintln!();
             return;
@@ -532,7 +494,7 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
         let target_names: Vec<&str> = targets.iter().map(|ide| ide.name).collect();
 
         ui::save_cursor();
-        if !confirm_reset(product, &target_names, yes) {
+        if !confirm_reset(&target_names, yes) {
             eprintln!();
             return;
         }
@@ -546,7 +508,7 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
         let mut all_ok = true;
         for ide in &targets {
             ui::label(ide.name);
-            all_ok &= reset_ide(product, ide);
+            all_ok &= reset_ide(ide);
         }
 
         eprintln!();
@@ -562,26 +524,26 @@ pub fn reset(product: &McpProduct, selected_flags: Vec<String>, yes: bool) {
     eprintln!();
 }
 
-fn reset_ide(product: &McpProduct, ide: &IDEDef) -> bool {
+fn reset_ide(ide: &IDEDef) -> bool {
     let Some(mut config) = read_config_for_write(&ide.config_path, "Fix the file and re-run.")
     else {
         return false;
     };
     let mut config_changed = false;
 
-    // Step 1: Remove the product's MCP entry
+    // Step 1: Remove the Keenable MCP entry
     if let Some(servers) = config.get_mut(ide.servers_key).and_then(|v| v.as_object_mut()) {
-        if servers.remove(product.entry_name).is_some() {
+        if servers.remove(ENTRY_NAME).is_some() {
             config_changed = true;
-            ui::sub_success(&format!("Removed {} entry", product.display_name));
+            ui::sub_success(&format!("Removed {} entry", DISPLAY_NAME));
         } else {
-            ui::sub_done(&format!("No {} entry to remove", product.display_name));
+            ui::sub_done(&format!("No {} entry to remove", DISPLAY_NAME));
         }
     } else {
-        ui::sub_done(&format!("No {} entry to remove", product.display_name));
+        ui::sub_done(&format!("No {} entry to remove", DISPLAY_NAME));
     }
 
-    // Step 2: Remove any other entries pointing at this product's URL
+    // Step 2: Remove any other entries pointing at Keenable's URL
     let servers = config
         .get(ide.servers_key)
         .and_then(|v| v.as_object())
@@ -591,7 +553,7 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) -> bool {
     let mut other_entries: Vec<String> = Vec::new();
     for (name, entry) in &servers {
         if let Some(url) = extract_url(entry) {
-            if (product.is_product_url)(&url) {
+            if is_keenable_url(&url) {
                 other_entries.push(name.clone());
             }
         }
@@ -606,13 +568,13 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) -> bool {
         config_changed = true;
         ui::sub_success(&format!(
             "Removed additional {} entries: {}",
-            product.display_name,
+            DISPLAY_NAME,
             other_entries.join(", ")
         ));
     }
 
-    // Step 3: Restore standard tools (only for products that manage them)
-    if product.manage_standard_tools && ide.has_standard_tools {
+    // Step 3: Restore standard tools where the client has them
+    if ide.has_standard_tools {
         if ide.flag == "opencode" {
             restore_opencode_standard_tools(&mut config, &mut config_changed);
         } else {
@@ -621,7 +583,7 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) -> bool {
     }
 
     // Step 4: Clean Codex Apps cache if applicable
-    if product.clean_codex_cache && ide.flag == "codex" {
+    if ide.flag == "codex" {
         clean_codex_apps_cache();
     }
 
@@ -641,7 +603,6 @@ fn reset_ide(product: &McpProduct, ide: &IDEDef) -> bool {
 // ── Status display ──────────────────────────────────────────────────
 
 fn show_configure_status(
-    product: &McpProduct,
     detected: &[&IDEDef],
     not_detected: &[&IDEDef],
     api_key: Option<&str>,
@@ -656,7 +617,7 @@ fn show_configure_status(
     let mut any_unconfigured = false;
 
     for ide in detected {
-        let status = get_product_status(product, ide, api_key);
+        let status = get_product_status(ide, api_key);
 
         let has_issues = status.wrong_api_key
             || status.missing_api_key
@@ -664,9 +625,7 @@ fn show_configure_status(
             || status.uses_legacy_npx
             || !status.duplicate_entries.is_empty()
             || !status.conflicting_mcps.is_empty()
-            || (product.manage_standard_tools
-                && ide.has_standard_tools
-                && !status.standard_tools_disabled)
+            || (ide.has_standard_tools && !status.standard_tools_disabled)
             || status.has_legacy_deny_only;
 
         if !status.has_entry {
@@ -674,16 +633,16 @@ fn show_configure_status(
             eprintln!("   {} {}", "✗".red(), ide.name);
             eprintln!(
                 "      {}",
-                format!("- Run keenable {} --{}", product.configure_cmd, ide.flag).dimmed()
+                format!("- Run keenable {} --{}", CONFIGURE_CMD, ide.flag).dimmed()
             );
         } else if has_issues {
             any_unconfigured = true;
             eprintln!("   {} {}", "⚠".yellow(), ide.name.yellow());
-            show_status_issues(product, ide, &status);
-            (product.show_recommendations)(ide);
+            show_status_issues(ide, &status);
+            show_recommendations(ide);
         } else {
             eprintln!("   {} {}", "✓".green(), ide.name.green());
-            (product.show_recommendations)(ide);
+            show_recommendations(ide);
         }
     }
 
@@ -700,16 +659,16 @@ fn show_configure_status(
     if any_unconfigured {
         ui::hint(&format!(
             "Run {} to configure all detected clients at once",
-            format!("keenable {} --all", product.configure_cmd).cyan()
+            format!("keenable {} --all", CONFIGURE_CMD).cyan()
         ));
     }
 }
 
-fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus) {
+fn show_status_issues(ide: &IDEDef, status: &ProductStatus) {
     if status.uses_legacy_npx {
         ui::sub_warning(&format!(
             "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to a direct HTTP entry",
-            product.configure_cmd
+            CONFIGURE_CMD
         ));
     }
     if status.wrong_api_key {
@@ -721,7 +680,7 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
     if status.entry_key_without_login {
         ui::sub_warning(&format!(
             "Configured with an API key, but none is stored locally — re-running {} would remove it",
-            product.configure_cmd
+            CONFIGURE_CMD
         ));
     }
     if !status.duplicate_entries.is_empty() {
@@ -736,7 +695,7 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
             status.conflicting_mcps.join(", ")
         ));
     }
-    if product.manage_standard_tools && ide.has_standard_tools && !status.standard_tools_disabled {
+    if ide.has_standard_tools && !status.standard_tools_disabled {
         let tools = if ide.flag == "opencode" {
             OPENCODE_STANDARD_TOOLS.join(", ")
         } else {
@@ -747,18 +706,18 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
     if status.has_legacy_deny_only {
         ui::sub_warning(&format!(
             "Legacy deny found in .claude.json (ignored by Claude Code). Re-run {} to migrate",
-            product.configure_cmd
+            CONFIGURE_CMD
         ));
     }
 }
 
-fn show_reset_status(product: &McpProduct, configured: &[&IDEDef]) {
+fn show_reset_status(configured: &[&IDEDef]) {
     ui::label("Your Clients");
 
     if configured.is_empty() {
         ui::info(&format!(
             "No clients have {} configured. Nothing to reset.",
-            product.display_name
+            DISPLAY_NAME
         ));
         return;
     }
@@ -767,13 +726,13 @@ fn show_reset_status(product: &McpProduct, configured: &[&IDEDef]) {
         eprintln!("   {} {}", "✓".green(), ide.name.green());
         eprintln!(
             "      {}",
-            format!("- Run keenable {} --{}", product.reset_cmd, ide.flag).dimmed()
+            format!("- Run keenable {} --{}", RESET_CMD, ide.flag).dimmed()
         );
     }
 
     ui::hint(&format!(
         "Run {} to reset all at once",
-        format!("keenable {} --all", product.reset_cmd).cyan()
+        format!("keenable {} --all", RESET_CMD).cyan()
     ));
 }
 
@@ -805,10 +764,10 @@ fn ensure_object(config: &mut Value, key: &str) {
     }
 }
 
-fn has_product_entry(product: &McpProduct, ide: &IDEDef) -> bool {
+fn has_product_entry(ide: &IDEDef) -> bool {
     let config = read_config_lenient(&ide.config_path);
     config
-        .pointer(&format!("/{}/{}", ide.servers_key, product.entry_name))
+        .pointer(&format!("/{}/{}", ide.servers_key, ENTRY_NAME))
         .is_some()
 }
 
@@ -839,7 +798,7 @@ fn require_terminal() {
     }
 }
 
-fn confirm_configure(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
+fn confirm_configure(ide_names: &[&str], yes: bool) -> bool {
     if yes || config::get_skip_setup_confirmation() {
         return true;
     }
@@ -852,23 +811,15 @@ fn confirm_configure(product: &McpProduct, ide_names: &[&str], yes: bool) -> boo
         format!("{} clients", ide_names.len())
     };
 
-    if product.manage_standard_tools {
-        eprintln!(
-            "   This will add {} to {} and disable\n   built-in search tools where applicable.",
-            product.display_name,
-            target.bold()
-        );
-        eprintln!(
-            "   It also removes {} from allow lists in project-level\n   .claude/settings.local.json files under common dev directories.",
-            CLAUDE_CODE_STANDARD_TOOLS.join("/")
-        );
-    } else {
-        eprintln!(
-            "   This will add {} to {}.",
-            product.display_name,
-            target.bold()
-        );
-    }
+    eprintln!(
+        "   This will add {} to {} and disable\n   built-in search tools where applicable.",
+        DISPLAY_NAME,
+        target.bold()
+    );
+    eprintln!(
+        "   It also removes {} from allow lists in project-level\n   .claude/settings.local.json files under common dev directories.",
+        CLAUDE_CODE_STANDARD_TOOLS.join("/")
+    );
     eprintln!();
 
     let choices = &["Proceed", "Proceed and don't ask again", "Cancel"];
@@ -892,7 +843,7 @@ fn confirm_configure(product: &McpProduct, ide_names: &[&str], yes: bool) -> boo
     }
 }
 
-fn confirm_reset(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
+fn confirm_reset(ide_names: &[&str], yes: bool) -> bool {
     // Unlike configure, the stored skip_setup_confirmation does not apply:
     // reset is destructive, so only an explicit --yes skips the prompt.
     if yes {
@@ -907,19 +858,11 @@ fn confirm_reset(product: &McpProduct, ide_names: &[&str], yes: bool) -> bool {
         format!("{} clients", ide_names.len())
     };
 
-    if product.manage_standard_tools {
-        eprintln!(
-            "   This will remove {} from {} and re-enable\n   built-in search tools where applicable.",
-            product.display_name,
-            target.bold()
-        );
-    } else {
-        eprintln!(
-            "   This will remove {} from {}.",
-            product.display_name,
-            target.bold()
-        );
-    }
+    eprintln!(
+        "   This will remove {} from {} and re-enable\n   built-in search tools where applicable.",
+        DISPLAY_NAME,
+        target.bold()
+    );
     eprintln!();
 
     let choices = &["Proceed", "Cancel"];

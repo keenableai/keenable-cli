@@ -222,7 +222,7 @@ Before modifying configs, shows a prompt with three options: "Proceed", "Proceed
 
 **Non-interactive use:** `configure-mcp` and `reset` accept `-y`/`--yes` to skip the confirmation prompt (CI, headless agents). Without `--yes`, a non-TTY stdin exits 1 with a hint instead of hanging on the prompt.
 
-**Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `ConfigureMcp` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_client_recommendations()` in `configure_mcp.rs`.
+**Adding a new client:** Add an `IDEDef` entry to `all_ides()` in `ide.rs` with `flag`, config path, `servers_key`, and `entry_style`. Also add the corresponding `--flag` to both `ConfigureMcp` and `Reset` commands in `main.rs`. If the client needs recommendations, add them to `show_recommendations()` in `mcp_common.rs`.
 
 ### Reset Command (`src/commands/reset.rs`)
 
