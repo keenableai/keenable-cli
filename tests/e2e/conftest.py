@@ -32,6 +32,13 @@ write_feedback = pytest.mark.skipif(
     reason="persists synthetic feedback to the live API — opt in with KEENABLE_E2E_WRITE_FEEDBACK=1",
 )
 
+# Tests that rely on Unix-only behavior — the Unix-domain-socket daemon and the
+# POSIX shell installer. On Windows the CLI stubs the daemon out and ships a
+# PowerShell installer instead, so these self-skip there.
+requires_posix = pytest.mark.skipif(
+    os.name != "posix", reason="requires a POSIX platform (Unix daemon / shell installer)"
+)
+
 
 class Result:
     def __init__(self, proc: subprocess.CompletedProcess):
@@ -57,7 +64,11 @@ class Runner:
         if key:
             assert API_KEY, "KEENABLE_API_KEY must be set for API tests"
             cmd += ["--api-key", API_KEY]
-        env = {**os.environ, "HOME": self.home}
+        # KEENABLE_HOME redirects every keenable file path (config, daemon,
+        # MCP client configs) under this temp dir. HOME is set too, but on
+        # Windows `dirs::home_dir()` ignores it and queries the real profile —
+        # KEENABLE_HOME is what actually isolates the run on every platform.
+        env = {**os.environ, "HOME": self.home, "KEENABLE_HOME": self.home}
         # The CLI honors KEENABLE_API_KEY; tests control auth explicitly via
         # the --api-key flag, so keep the suite's own key out of the env.
         env.pop("KEENABLE_API_KEY", None)

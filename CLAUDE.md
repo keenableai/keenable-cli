@@ -20,6 +20,8 @@ uv run --project tests/e2e pytest tests/e2e -v
 
 Markers: `-m "not latency"` / `-m "not semantic"` / `-m "not install"` to skip the slow/live-index/download groups. Success-path feedback tests persist synthetic relevance data in the live API and are skipped unless `KEENABLE_E2E_WRITE_FEEDBACK=1` — never enable that on a schedule. CI (`.github/workflows/e2e.yml`) installs the latest released binary via the installer script and runs the full suite nightly and on manual dispatch (with an optional version input). Requires the `KEENABLE_API_KEY` repo secret.
 
+The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Config & path resolution" below). CI runs the matrix across **Linux, macOS, and Windows**. Unix installs the binary via the shell installer; Windows via the PowerShell installer (`keenable-cli-installer.ps1`). The Unix-only daemon tests and the shell-installer test self-skip on Windows (`os.name != "posix"`), so the same `pytest tests/e2e` invocation works on every platform.
+
 ## Project Structure
 
 ```
@@ -90,6 +92,10 @@ All tool commands (`search`, `fetch`, `feedback`) work without login. When no AP
 - Requests go to `/v1/{search,fetch,feedback}/public` endpoints (IP-based rate limits)
 - The daemon starts with a bare HTTP client (no `X-API-Key` header)
 - Rate limit errors include a hint to run `keenable login` for higher limits
+
+### Config & Path Resolution
+
+Every path the CLI touches (config, credentials, daemon socket, MCP client configs) is resolved against `config::home_dir()`, which returns the `KEENABLE_HOME` env var when set and falls back to `dirs::home_dir()` otherwise. Set `KEENABLE_HOME` to relocate the entire `.keenable` tree — this is how the e2e suite isolates runs per-test (and the only reliable way on Windows, where `dirs::home_dir()` queries the real user profile and ignores `HOME`). Always go through `config::home_dir()`, never `dirs::home_dir()` directly.
 
 ### Daemon
 

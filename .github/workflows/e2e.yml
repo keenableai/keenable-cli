@@ -2,6 +2,14 @@
 # users run) and exercises every subcommand against the live API, plus
 # semantic-relevance and latency checks. See tests/e2e/.
 #
+# Runs across Linux, macOS, and Windows so the released binary is exercised on
+# every platform dist builds for. Unix installs via the shell installer;
+# Windows installs via the PowerShell installer. The suite isolates each run
+# under a temp dir via KEENABLE_HOME (HOME alone does not isolate on Windows,
+# where dirs::home_dir() queries the real profile). The background daemon is
+# Unix-only, so its tests self-skip on Windows; the shell-installer test does
+# too (Windows installs via .ps1 in the matching CI step below).
+#
 # Not triggered by `release: published` — releases are created with
 # GITHUB_TOKEN, which never triggers other workflows. Run it manually after a
 # release, or wait for the nightly schedule.
@@ -23,7 +31,25 @@ permissions:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # Run one OS at a time: all legs share a single KEENABLE_API_KEY, and
+      # three jobs hammering the live API in parallel trips its rate limit.
+      max-parallel: 1
+      matrix:
+        include:
+          # Linux runs the whole suite, including the semantic-relevance and
+          # latency checks against the live index.
+          - os: ubuntu-latest
+          # macOS and Windows verify the binary on their platform; the
+          # semantic/latency checks are OS-independent, so skip them here
+          # rather than hammering the live index on every matrix leg.
+          - os: macos-latest
+            markers: "not semantic and not latency"
+          - os: windows-latest
+            markers: "not semantic and not latency"
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -31,13 +57,15 @@ jobs:
           persist-credentials: false
 
       - name: Check API key secret
+        shell: bash
         run: |
           if [ -z "${{ secrets.KEENABLE_API_KEY }}" ]; then
             echo "::error::KEENABLE_API_KEY secret is not set"
             exit 1
           fi
 
-      - name: Install keenable CLI from GitHub Releases
+      - name: Install keenable CLI from GitHub Releases (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         env:
           # Via env, never interpolated into the script — a crafted dispatch
@@ -59,6 +87,29 @@ jobs:
           curl --proto '=https' --tlsv1.2 -LsSf --retry 3 "$URL" | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Install keenable CLI from GitHub Releases (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # Via env, never interpolated into the script — a crafted dispatch
+          # input must not be able to execute in a job that holds the API key.
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "https://github.com/keenableai/keenable-cli/releases"
+          if ($env:VERSION) {
+            if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+              Write-Output "::error::version must be plain semver (e.g. 0.1.16), got: $env:VERSION"
+              exit 1
+            }
+            $url = "$base/download/v$($env:VERSION)/keenable-cli-installer.ps1"
+          } else {
+            $url = "$base/latest/download/keenable-cli-installer.ps1"
+          }
+          irm $url | iex
+          # install-path = CARGO_HOME, so the binary lands in ~\.cargo\bin.
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Verify installed binary
         run: keenable --version
 
@@ -66,9 +117,18 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Run e2e suite
+        shell: bash
         env:
           KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          # Empty on Linux (full suite); "not semantic and not latency" on the
+          # macOS/Windows legs so the OS-independent live-index checks run once.
+          MARKERS: ${{ matrix.markers }}
           # KEENABLE_E2E_WRITE_FEEDBACK is deliberately NOT set: the
           # success-path feedback tests persist synthetic relevance data and
           # are opt-in only (run them locally or on a staging tenant).
-        run: uv run --project tests/e2e pytest tests/e2e -v -ra --color=yes
+        run: |
+          # The shell-installer test and daemon tests self-skip on Windows via
+          # pytest skipif, so the same invocation works on every platform.
+          args=(-v -ra --color=yes)
+          [ -n "$MARKERS" ] && args+=(-m "$MARKERS")
+          uv run --project tests/e2e pytest tests/e2e "${args[@]}"

@@ -16,7 +16,7 @@ use super::ide::*;
 
 /// Path to Claude Code's user-level settings file.
 fn claude_code_settings_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude/settings.json"))
+    crate::config::home_dir().map(|h| h.join(".claude/settings.json"))
 }
 
 // ── Product definition ──────────────────────────────────────────────
@@ -1121,7 +1121,7 @@ fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<
 /// tools from their allow lists. Walks common project directories to find these
 /// files.
 fn remove_from_project_allow_lists() {
-    let home = match dirs::home_dir() {
+    let home = match crate::config::home_dir() {
         Some(h) => h,
         None => return,
     };
@@ -1397,7 +1397,7 @@ fn restore_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
 // ── Codex Apps cache ────────────────────────────────────────────────
 
 fn has_codex_apps_cache() -> bool {
-    let cache_dir = match dirs::home_dir() {
+    let cache_dir = match crate::config::home_dir() {
         Some(h) => h.join(".codex/cache/codex_apps_tools"),
         None => return false,
     };
@@ -1421,7 +1421,7 @@ fn has_codex_apps_cache() -> bool {
 }
 
 fn clean_codex_apps_cache() {
-    let cache_dir = match dirs::home_dir() {
+    let cache_dir = match crate::config::home_dir() {
         Some(h) => h.join(".codex/cache/codex_apps_tools"),
         None => return,
     };

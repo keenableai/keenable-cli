@@ -57,13 +57,13 @@ mod platform {
     const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
     fn socket_path() -> PathBuf {
-        dirs::home_dir()
+        config::home_dir()
             .expect("cannot determine home directory")
             .join(".keenable/daemon.sock")
     }
 
     fn pid_path() -> PathBuf {
-        dirs::home_dir()
+        config::home_dir()
             .expect("cannot determine home directory")
             .join(".keenable/daemon.pid")
     }
