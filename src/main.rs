@@ -87,70 +87,6 @@ enum Commands {
         opencode: bool,
     },
 
-    /// Configure Keenable WebQL MCP in your AI clients
-    #[command(name = "configure-webql", after_help = "Without flags, shows which clients are detected and configured for WebQL.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable configure-webql                  Show status of all detected clients\n  keenable configure-webql --cursor         Configure Cursor only\n  keenable configure-webql --all            Configure all detected clients\n  keenable configure-webql --all --yes      Configure without confirmation (CI, agents)")]
-    ConfigureWebql {
-        /// Configure all detected clients
-        #[arg(long)]
-        all: bool,
-
-        /// Skip the confirmation prompt (for CI and non-interactive use)
-        #[arg(short, long)]
-        yes: bool,
-
-        /// Configure Claude Code
-        #[arg(long)]
-        claude_code: bool,
-
-        /// Configure Cursor
-        #[arg(long)]
-        cursor: bool,
-
-        /// Configure Windsurf
-        #[arg(long)]
-        windsurf: bool,
-
-        /// Configure Codex
-        #[arg(long)]
-        codex: bool,
-
-        /// Configure OpenCode
-        #[arg(long)]
-        opencode: bool,
-    },
-
-    /// Remove Keenable WebQL MCP from your AI clients
-    #[command(name = "reset-webql", after_help = "Without flags, shows which clients have WebQL configured.\nWith client flags, removes WebQL MCP entries.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset-webql                  Show which clients can be reset\n  keenable reset-webql --cursor         Reset Cursor only\n  keenable reset-webql --all            Reset all configured clients\n  keenable reset-webql --all --yes      Reset without confirmation (CI, agents)")]
-    ResetWebql {
-        /// Reset all configured clients
-        #[arg(long)]
-        all: bool,
-
-        /// Skip the confirmation prompt (for CI and non-interactive use)
-        #[arg(short, long)]
-        yes: bool,
-
-        /// Reset Claude Code
-        #[arg(long)]
-        claude_code: bool,
-
-        /// Reset Cursor
-        #[arg(long)]
-        cursor: bool,
-
-        /// Reset Windsurf
-        #[arg(long)]
-        windsurf: bool,
-
-        /// Reset Codex
-        #[arg(long)]
-        codex: bool,
-
-        /// Reset OpenCode
-        #[arg(long)]
-        opencode: bool,
-    },
-
     /// Remove Keenable MCP from your AI clients and restore defaults
     #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)")]
     Reset {
@@ -184,19 +120,19 @@ enum Commands {
     },
 
     /// View or modify CLI configuration
-    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set default_search_mode pro\n  keenable config set forced_search_mode realtime\n\nGet a single value:\n  keenable config get default_search_mode\n\nRemove a value:\n  keenable config unset forced_search_mode\n\nSupported keys:\n  default_search_mode   Search mode when --mode is not specified (realtime, pro)\n  forced_search_mode    Always use this mode, ignoring --mode (realtime, pro)")]
+    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set <key> <value>\n\nGet a single value:\n  keenable config get <key>\n\nRemove a value:\n  keenable config unset <key>\n\nRun `keenable config` to see the available keys and their allowed values.")]
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nModes:\n  --mode realtime   Fast results\n  --mode pro        Higher quality (default)\n\nSet a default: keenable config set default_search_mode realtime\nForce a mode:  keenable config set forced_search_mode realtime\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
+    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"rust async\" --mode pro                         Use pro mode (higher quality)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
     Search {
         /// Search query
         query: String,
 
-        /// Search mode: "realtime" (fast) or "pro" (higher quality, default)
+        /// Search mode: "pro" (higher quality, default)
         #[arg(long)]
         mode: Option<String>,
 
@@ -320,18 +256,6 @@ async fn main() {
         } => {
             let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::configure_mcp::configure_mcp(flags, yes).await;
-        }
-        Commands::ConfigureWebql {
-            all, yes, claude_code, cursor, windsurf, codex, opencode,
-        } => {
-            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
-            commands::configure_webql::configure_webql(flags, yes).await;
-        }
-        Commands::ResetWebql {
-            all, yes, claude_code, cursor, windsurf, codex, opencode,
-        } => {
-            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
-            commands::reset_webql::reset_webql(flags, yes);
         }
         Commands::Reset {
             all, yes, claude_code, cursor, windsurf, codex, opencode,

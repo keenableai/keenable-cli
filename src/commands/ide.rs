@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::constants::{API_BASE_URL, WEBQL_BASE_URL};
+use crate::constants::API_BASE_URL;
 
 // ── Known conflicting search MCP server names ───────────────────────
 
@@ -21,9 +21,6 @@ pub const CONFLICTING_NAMES: &[&str] = &[
 
 /// URLs that indicate a Keenable-related MCP entry (prod or test).
 pub const KEENABLE_URLS: &[&str] = &["api.keenable.ai", "api-test.keenable.ai"];
-
-/// URLs that indicate a WebQL MCP entry (prod or test).
-pub const WEBQL_URLS: &[&str] = &["webql.keenable.ai", "webql-test.keenable.ai"];
 
 /// Claude Code built-in tools that overlap with Keenable.
 pub const CLAUDE_CODE_STANDARD_TOOLS: &[&str] = &["WebSearch", "WebFetch"];
@@ -334,63 +331,6 @@ pub fn is_keenable_url(url: &str) -> bool {
 pub fn is_conflicting_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     CONFLICTING_NAMES.iter().any(|c| lower.contains(c))
-}
-
-/// Check if a URL points to WebQL (prod or test).
-pub fn is_webql_url(url: &str) -> bool {
-    WEBQL_URLS.iter().any(|k| url.contains(k))
-}
-
-/// Build the `keenable-webql` MCP entry for a given IDE.
-/// Auth is via `X-API-Key` header (same as Keenable MCP).
-pub fn build_webql_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
-    let mcp_url = format!("{}/mcp", WEBQL_BASE_URL);
-    match &ide.entry_style {
-        McpEntryStyle::Http {
-            url_key,
-            transport_type,
-        } => {
-            let mut entry = json!({ *url_key: mcp_url });
-            if let Some(key) = api_key {
-                entry["headers"] = json!({ "X-API-Key": key });
-            }
-            if let Some(transport) = transport_type {
-                entry["type"] = json!(*transport);
-            }
-            entry
-        }
-        McpEntryStyle::Toml => {
-            let mut entry = json!({ "url": mcp_url });
-            if let Some(key) = api_key {
-                entry["http_headers"] = json!({ "X-API-Key": key });
-            }
-            entry
-        }
-    }
-}
-
-/// Extract the API key from a WebQL MCP entry.
-/// Checks header-based auth first, then falls back to legacy `?token=` in URL.
-pub fn extract_webql_key(entry: &Value) -> Option<String> {
-    // New format: X-API-Key header (same as Keenable MCP)
-    if let Some(key) = extract_entry_api_key(entry) {
-        return Some(key);
-    }
-    // Legacy format: ?token= query parameter in URL. Match the parameter
-    // boundary — a bare "token=" search would also hit e.g. "access_token=".
-    let url = extract_url(entry)?;
-    let start = url
-        .find("?token=")
-        .or_else(|| url.find("&token="))
-        .map(|i| i + "?token=".len())?;
-    let t = &url[start..];
-    Some(t.split('&').next().unwrap_or(t).to_string())
-}
-
-/// Check if a WebQL MCP entry uses the legacy `?token=` URL auth.
-pub fn uses_webql_token_auth(entry: &Value) -> bool {
-    let url = extract_url(entry).unwrap_or_default();
-    url.contains("?token=") || url.contains("&token=")
 }
 
 /// Extract the API key from a Keenable MCP entry's headers or mcp-remote args.

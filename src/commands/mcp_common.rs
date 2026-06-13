@@ -1,4 +1,4 @@
-//! Shared configure/reset logic for MCP products (Keenable, WebQL).
+//! Shared configure/reset logic for the Keenable MCP product.
 
 use colored::Colorize;
 use dialoguer::Select;
@@ -23,13 +23,13 @@ fn claude_code_settings_path() -> Option<PathBuf> {
 
 /// Describes an MCP product that can be configured/reset in IDE clients.
 pub struct McpProduct {
-    /// Entry name in IDE config (e.g. "keenable", "keenable-webql").
+    /// Entry name in IDE config (e.g. "keenable").
     pub entry_name: &'static str,
-    /// Human-readable name (e.g. "Keenable MCP", "WebQL MCP").
+    /// Human-readable name (e.g. "Keenable MCP").
     pub display_name: &'static str,
-    /// CLI command for configure (e.g. "configure-mcp", "configure-webql").
+    /// CLI command for configure (e.g. "configure-mcp").
     pub configure_cmd: &'static str,
-    /// CLI command for reset (e.g. "reset", "reset-webql").
+    /// CLI command for reset (e.g. "reset").
     pub reset_cmd: &'static str,
     /// Build the MCP entry JSON for this product.
     pub build_entry: fn(&IDEDef, Option<&str>) -> Value,
@@ -39,8 +39,6 @@ pub struct McpProduct {
     pub is_product_url: fn(&str) -> bool,
     /// Whether to check for conflicting search MCPs.
     pub check_conflicts: bool,
-    /// Whether to check for legacy `?token=` URL auth (WebQL only).
-    pub check_token_auth: bool,
     /// Whether to disable/restore standard tools (WebSearch, WebFetch).
     pub manage_standard_tools: bool,
     /// Whether to check for legacy npx mcp-remote entries.
@@ -61,7 +59,6 @@ pub fn keenable_product() -> McpProduct {
         extract_key: extract_entry_api_key,
         is_product_url: is_keenable_url,
         check_conflicts: true,
-        check_token_auth: false,
         manage_standard_tools: true,
         check_legacy_npx: true,
         clean_codex_cache: true,
@@ -71,24 +68,6 @@ pub fn keenable_product() -> McpProduct {
                 ui::sub_hint("We recommend setting a custom rule to use Keenable search");
             }
         },
-    }
-}
-
-pub fn webql_product() -> McpProduct {
-    McpProduct {
-        entry_name: "keenable-webql",
-        display_name: "WebQL MCP",
-        configure_cmd: "configure-webql",
-        reset_cmd: "reset-webql",
-        build_entry: build_webql_entry,
-        extract_key: extract_webql_key,
-        is_product_url: is_webql_url,
-        check_conflicts: false,
-        check_token_auth: true,
-        manage_standard_tools: false,
-        check_legacy_npx: false,
-        clean_codex_cache: false,
-        show_recommendations: |_| {},
     }
 }
 
@@ -103,7 +82,6 @@ pub struct ProductStatus {
     /// configure would strip it.
     pub entry_key_without_login: bool,
     pub uses_legacy_npx: bool,
-    pub uses_token_auth: bool,
     pub standard_tools_disabled: bool,
     /// Denies exist in ~/.claude.json but not in ~/.claude/settings.json.
     pub has_legacy_deny_only: bool,
@@ -142,11 +120,6 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
     } else {
         false
     };
-
-    let uses_token_auth = product.check_token_auth
-        && existing
-            .as_ref()
-            .map_or(false, |e| uses_webql_token_auth(e));
 
     let (standard_tools_disabled, has_legacy_deny_only) = if product.manage_standard_tools && ide.has_standard_tools {
         if ide.flag == "opencode" {
@@ -263,7 +236,6 @@ pub fn get_product_status(product: &McpProduct, ide: &IDEDef, api_key: Option<&s
         missing_api_key,
         entry_key_without_login,
         uses_legacy_npx,
-        uses_token_auth,
         standard_tools_disabled,
         has_legacy_deny_only,
         duplicate_entries,
@@ -457,9 +429,6 @@ fn configure_ide(product: &McpProduct, ide: &IDEDef, api_key: Option<&str>) -> b
             }
             if product.check_legacy_npx && entry["command"].as_str() == Some("npx") {
                 ui::sub_warning("Replacing npx mcp-remote with a direct HTTP entry (no Node.js needed)");
-            }
-            if product.check_token_auth && uses_webql_token_auth(entry) {
-                ui::sub_warning("Migrating from token-in-URL to header-based auth");
             }
             config[ide.servers_key][product.entry_name] = desired;
             config_changed = true;
@@ -693,7 +662,6 @@ fn show_configure_status(
             || status.missing_api_key
             || status.entry_key_without_login
             || status.uses_legacy_npx
-            || status.uses_token_auth
             || !status.duplicate_entries.is_empty()
             || !status.conflicting_mcps.is_empty()
             || (product.manage_standard_tools
@@ -741,12 +709,6 @@ fn show_status_issues(product: &McpProduct, ide: &IDEDef, status: &ProductStatus
     if status.uses_legacy_npx {
         ui::sub_warning(&format!(
             "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to a direct HTTP entry",
-            product.configure_cmd
-        ));
-    }
-    if status.uses_token_auth {
-        ui::sub_warning(&format!(
-            "Uses legacy token-in-URL auth. Re-run {} to switch to header-based auth",
             product.configure_cmd
         ));
     }
