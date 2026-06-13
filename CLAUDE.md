@@ -57,16 +57,12 @@ Use `-p` / `--pretty` flag for pretty-printed human-readable output.
 Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct.
 
 ```bash
-keenable search "query" --mode pro             # YAML output (for agents)
-keenable search "query" --mode pro -p          # Pretty output (for humans)
+keenable search "query"                        # YAML output (for agents)
+keenable search "query" -p                     # Pretty output (for humans)
 keenable search "query" --api-key keen_***_*****    # Use specific API key
 ```
 
 Management commands (`login`, `logout`, `configure-mcp`, `config`) always output human-readable text.
-
-### Search Modes
-
-The `search` command supports `--mode pro` (higher quality, default).
 
 ### Config Command (`src/commands/config_cmd.rs`)
 
