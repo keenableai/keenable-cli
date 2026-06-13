@@ -12,7 +12,15 @@ import pytest
 
 from conftest import Runner, search_results
 
-pytestmark = pytest.mark.install
+# This downloads and runs the POSIX shell installer (curl | sh). Windows ships
+# a separate PowerShell installer (keenable-cli-installer.ps1); the CI workflow
+# installs the binary via that script on Windows, so we skip this test there.
+pytestmark = [
+    pytest.mark.install,
+    pytest.mark.skipif(
+        os.name != "posix", reason="shell installer is POSIX-only; Windows uses the .ps1 installer"
+    ),
+]
 
 # `or` so an empty env var (CI without a version input) falls back to latest.
 INSTALLER_URL = os.environ.get("KEENABLE_INSTALLER_URL") or \

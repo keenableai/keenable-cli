@@ -57,7 +57,11 @@ class Runner:
         if key:
             assert API_KEY, "KEENABLE_API_KEY must be set for API tests"
             cmd += ["--api-key", API_KEY]
-        env = {**os.environ, "HOME": self.home}
+        # KEENABLE_HOME redirects every keenable file path (config, daemon,
+        # MCP client configs) under this temp dir. HOME is set too, but on
+        # Windows `dirs::home_dir()` ignores it and queries the real profile —
+        # KEENABLE_HOME is what actually isolates the run on every platform.
+        env = {**os.environ, "HOME": self.home, "KEENABLE_HOME": self.home}
         # The CLI honors KEENABLE_API_KEY; tests control auth explicitly via
         # the --api-key flag, so keep the suite's own key out of the env.
         env.pop("KEENABLE_API_KEY", None)

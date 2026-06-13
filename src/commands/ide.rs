@@ -61,7 +61,7 @@ pub struct IDEDef {
 }
 
 pub fn all_ides() -> Vec<IDEDef> {
-    let home = dirs::home_dir().expect("cannot determine home directory");
+    let home = crate::config::home_dir().expect("cannot determine home directory");
 
     vec![
         IDEDef {

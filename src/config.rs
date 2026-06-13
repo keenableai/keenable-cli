@@ -3,8 +3,23 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+/// Home directory keenable resolves all of its file paths against.
+///
+/// Honors the `KEENABLE_HOME` environment variable when set, falling back to
+/// the OS home directory otherwise. The override is what lets the e2e suite
+/// isolate each run under a temp dir on every platform — notably Windows,
+/// where `dirs::home_dir()` queries the real user profile and ignores `HOME`.
+/// Every place that needs the user's home goes through here so the override is
+/// honored consistently across config, daemon, and MCP client paths.
+pub fn home_dir() -> Option<PathBuf> {
+    match std::env::var_os("KEENABLE_HOME") {
+        Some(p) if !p.is_empty() => Some(PathBuf::from(p)),
+        _ => dirs::home_dir(),
+    }
+}
+
 fn config_dir() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .expect("cannot determine home directory")
         .join(".keenable")
 }
