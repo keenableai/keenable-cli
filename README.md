@@ -32,7 +32,7 @@ cargo install --git https://github.com/keenableai/keenable-cli
 
 ```bash
 # Search the web (works without login)
-keenable search "rust async patterns" --mode pro -p
+keenable search "rust async patterns" -p
 
 # Login for higher rate limits
 keenable login
@@ -46,8 +46,8 @@ keenable configure-mcp --all
 ### Search
 
 ```bash
-keenable search "query" --mode pro                         # YAML output (for agents)
-keenable search "query" --mode pro -p                      # Pretty output (for humans)
+keenable search "query"                                    # YAML output (for agents)
+keenable search "query" -p                                 # Pretty output (for humans)
 keenable search "AI news" --site techcrunch.com            # Restrict to site
 keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
