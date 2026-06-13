@@ -35,6 +35,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Run one OS at a time: all legs share a single KEENABLE_API_KEY, and
+      # three jobs hammering the live API in parallel trips its rate limit.
+      max-parallel: 1
       matrix:
         include:
           # Linux runs the whole suite, including the semantic-relevance and

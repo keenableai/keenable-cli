@@ -10,7 +10,9 @@ commands to the public (free-tier) endpoints.
 import contextlib
 import json
 import os
+import shutil
 import signal
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,8 +35,29 @@ def _kill_daemon(home: str):
 
 
 @pytest.fixture
-def logged_in(tmp_path):
-    kn = Runner(str(tmp_path))
+def short_home(tmp_path):
+    """A home dir under a short base path.
+
+    The daemon's Unix-domain socket lives at `<home>/.keenable/daemon.sock`,
+    and macOS caps `sun_path` at 104 bytes. pytest's default tmp dir on macOS
+    (`/private/var/folders/...`) blows past that, so the daemon can't bind and
+    silently falls back to direct HTTP — failing the "daemon started" asserts.
+    Anchor the home under `/tmp` on POSIX to keep the socket path short.
+    Windows has no daemon, so the default `tmp_path` is fine there.
+    """
+    if os.name != "posix":
+        yield str(tmp_path)
+        return
+    home = tempfile.mkdtemp(prefix="kn-e2e-", dir="/tmp")
+    try:
+        yield home
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+@pytest.fixture
+def logged_in(short_home):
+    kn = Runner(short_home)
     res = kn("login", "--api-key", API_KEY, key=False)
     assert res.code == 0, res.err
     assert "API key saved" in res.err
