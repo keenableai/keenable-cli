@@ -12,7 +12,9 @@ already fixed the 0.1.15 quirks the spec guards (exit codes, single-URL fetch).
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -97,6 +99,27 @@ def kn(tmp_path_factory) -> Runner:
 def kn_fresh(tmp_path) -> Runner:
     """Per-test HOME for tests that mutate config."""
     return Runner(str(tmp_path))
+
+
+@pytest.fixture
+def short_home(tmp_path):
+    """A home dir under a short base path, for tests that exercise the daemon.
+
+    The daemon's Unix-domain socket lives at `<home>/.keenable/daemon.sock`,
+    and macOS caps `sun_path` at 104 bytes. pytest's default tmp dir on macOS
+    (`/private/var/folders/...`) blows past that, so the daemon can't bind and
+    silently falls back to direct HTTP — failing any "daemon started" assert.
+    Anchor the home under `/tmp` on POSIX to keep the socket path short.
+    Windows has no daemon, so the default `tmp_path` is fine there.
+    """
+    if os.name != "posix":
+        yield str(tmp_path)
+        return
+    home = tempfile.mkdtemp(prefix="kn-e2e-", dir="/tmp")
+    try:
+        yield home
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
 # The MCP endpoint configure-mcp writes into client configs ({API_BASE}/mcp).
