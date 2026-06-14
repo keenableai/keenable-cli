@@ -72,7 +72,15 @@ class Runner:
         # The CLI honors KEENABLE_API_KEY; tests control auth explicitly via
         # the --api-key flag, so keep the suite's own key out of the env.
         env.pop("KEENABLE_API_KEY", None)
-        return Result(subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout))
+        # The CLI always emits UTF-8 (YAML results, the 👀 brand mark). Decode
+        # as UTF-8 explicitly: `text=True` alone uses the locale encoding, which
+        # on Windows is cp1252 and chokes on any non-Latin-1 byte (e.g. the
+        # continuation bytes of a “smart quote” in a result), killing the
+        # reader thread and leaving stdout as None.
+        return Result(subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            env=env, timeout=timeout,
+        ))
 
 
 @pytest.fixture(scope="session")
