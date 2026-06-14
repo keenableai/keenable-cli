@@ -10,8 +10,10 @@ https://paste.keenable.ai/keenable-cli-test-suite — updated where 0.1.16
 already fixed the 0.1.15 quirks the spec guards (exit codes, single-URL fetch).
 """
 
+import json
 import os
 import subprocess
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -79,7 +81,10 @@ class Runner:
         # reader thread and leaving stdout as None.
         return Result(subprocess.run(
             cmd, capture_output=True, text=True, encoding="utf-8",
-            env=env, timeout=timeout,
+            # No stdin: an interactive prompt reached by mistake (e.g. a
+            # configure/reset run that forgot --yes) must fail fast on a
+            # non-terminal rather than hang the suite.
+            stdin=subprocess.DEVNULL, env=env, timeout=timeout,
         ))
 
 
@@ -91,6 +96,28 @@ def kn(tmp_path_factory) -> Runner:
 @pytest.fixture
 def kn_fresh(tmp_path) -> Runner:
     """Per-test HOME for tests that mutate config."""
+    return Runner(str(tmp_path))
+
+
+# The MCP endpoint configure-mcp writes into client configs ({API_BASE}/mcp).
+MCP_URL = "https://api.keenable.ai/mcp"
+
+
+@pytest.fixture
+def mcp(tmp_path) -> Runner:
+    """Per-test HOME for configure-mcp / reset tests.
+
+    Pre-seeds the update-check cache so these commands (which trigger a version
+    check) don't make a cache-miss GitHub call on every run — keeping the
+    configure/reset suite offline and fast. The client config files they read
+    and write all live under this home via KEENABLE_HOME.
+    """
+    keen = tmp_path / ".keenable"
+    keen.mkdir(parents=True, exist_ok=True)
+    (keen / ".update_check").write_text(json.dumps({
+        "last_check": int(time.time()),
+        "latest_version": "0.0.0",  # never newer than the installed build → no notice, no fetch
+    }))
     return Runner(str(tmp_path))
 
 
