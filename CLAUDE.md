@@ -10,7 +10,7 @@ cargo build --release
 
 ## Tests
 
-End-to-end suite in `tests/e2e/` (pytest, run with UV) exercises the real binary against the live API: every subcommand/flag/error path, the stored-login + daemon path (`login --api-key` → commands without the flag → `logout`), installer download + smoke test, semantic-relevance checks (gold facts, authority domains, `site:` parity), and wall-clock latency checks.
+End-to-end suite in `tests/e2e/` (pytest, run with UV) exercises the real binary against the live API: every subcommand/flag/error path, the stored-login + daemon path (`login --api-key` → commands without the flag → `logout`), `configure-mcp`/`reset` against fake client configs (entry shapes per IDE, dedup, Claude Code deny-list, TOML for Codex, reset round-trips — local file work, no API), installer download + smoke test, semantic-relevance checks (gold facts, authority domains, `site:` parity), and wall-clock latency checks.
 
 ```bash
 export KEENABLE_API_KEY=keen_...                 # required
