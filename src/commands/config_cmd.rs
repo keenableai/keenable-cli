@@ -24,7 +24,11 @@ pub fn config_view() {
             eprintln!("   {} = {}", key.bold(), val.green());
             found = true;
         } else {
-            eprintln!("   {} {}", key.dimmed(), format!("(not set, allowed: {})", allowed.join(", ")).dimmed());
+            eprintln!(
+                "   {} {}",
+                key.dimmed(),
+                format!("(not set, allowed: {})", allowed.join(", ")).dimmed()
+            );
         }
     }
     if !found {
@@ -36,8 +40,15 @@ pub fn config_view() {
 
 pub fn config_get(key: &str) {
     if find_key(key).is_none() {
-        ui::error(&format!("Unknown config key \"{}\". Known keys: {}", key,
-            KNOWN_KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")));
+        ui::error(&format!(
+            "Unknown config key \"{}\". Known keys: {}",
+            key,
+            KNOWN_KEYS
+                .iter()
+                .map(|(k, _)| *k)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
         eprintln!();
         std::process::exit(1);
     }
@@ -54,8 +65,15 @@ pub fn config_set(key: &str, value: &str) {
     let entry = match find_key(key) {
         Some(e) => e,
         None => {
-            ui::error(&format!("Unknown config key \"{}\". Known keys: {}", key,
-                KNOWN_KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")));
+            ui::error(&format!(
+                "Unknown config key \"{}\". Known keys: {}",
+                key,
+                KNOWN_KEYS
+                    .iter()
+                    .map(|(k, _)| *k)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
             eprintln!();
             std::process::exit(1);
         }
@@ -63,7 +81,12 @@ pub fn config_set(key: &str, value: &str) {
 
     let (_, allowed) = entry;
     if !allowed.contains(&value) {
-        ui::error(&format!("Invalid value \"{}\" for {}. Allowed: {}", value, key, allowed.join(", ")));
+        ui::error(&format!(
+            "Invalid value \"{}\" for {}. Allowed: {}",
+            value,
+            key,
+            allowed.join(", ")
+        ));
         eprintln!();
         std::process::exit(1);
     }
@@ -75,8 +98,15 @@ pub fn config_set(key: &str, value: &str) {
 
 pub fn config_unset(key: &str) {
     if find_key(key).is_none() {
-        ui::error(&format!("Unknown config key \"{}\". Known keys: {}", key,
-            KNOWN_KEYS.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ")));
+        ui::error(&format!(
+            "Unknown config key \"{}\". Known keys: {}",
+            key,
+            KNOWN_KEYS
+                .iter()
+                .map(|(k, _)| *k)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
         eprintln!();
         std::process::exit(1);
     }

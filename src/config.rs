@@ -67,10 +67,8 @@ pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Resu
             f.write_all(content.as_bytes())?;
         }
         #[cfg(unix)]
-        if !restrict {
-            if let Ok(meta) = fs::metadata(path) {
-                fs::set_permissions(&tmp, meta.permissions()).ok();
-            }
+        if !restrict && let Ok(meta) = fs::metadata(path) {
+            fs::set_permissions(&tmp, meta.permissions()).ok();
         }
         let renamed = fs::rename(&tmp, path);
         // Windows refuses to replace a destination that's locked or
@@ -88,7 +86,7 @@ pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Resu
     result
 }
 
-fn write_json(path: &PathBuf, data: &Value) {
+fn write_json(path: &Path, data: &Value) {
     let content = serde_json::to_string_pretty(data).unwrap();
     // restrict: the config holds API keys — never world-readable, even briefly
     if let Err(e) = atomic_write(path, &content, true) {

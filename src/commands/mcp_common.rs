@@ -2,11 +2,11 @@
 
 use colored::Colorize;
 use dialoguer::Select;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::IsTerminal;
 
-use crate::api::{validate_api_key, KeyCheck};
+use crate::api::{KeyCheck, validate_api_key};
 use crate::config;
 use crate::ui;
 
@@ -32,7 +32,9 @@ const RESET_CMD: &str = "reset";
 /// Client-specific recommendations shown after configure.
 fn show_recommendations(ide: &IDEDef) {
     if ide.name == "Cursor" {
-        ui::sub_hint("We recommend disabling standard search & fetch tools in Cursor Settings → Tools");
+        ui::sub_hint(
+            "We recommend disabling standard search & fetch tools in Cursor Settings → Tools",
+        );
         ui::sub_hint("We recommend setting a custom rule to use Keenable search");
     }
 }
@@ -67,21 +69,15 @@ pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus 
     let existing_key = existing.as_ref().and_then(extract_entry_api_key);
 
     // wrong_api_key: both have keys but they differ
-    let wrong_api_key = existing_key.is_some()
-        && desired_key.is_some()
-        && existing_key != desired_key;
+    let wrong_api_key =
+        existing_key.is_some() && desired_key.is_some() && existing_key != desired_key;
 
     // missing_api_key: user has a key but the entry doesn't
-    let missing_api_key = has_entry
-        && existing_key.is_none()
-        && desired_key.is_some();
+    let missing_api_key = has_entry && existing_key.is_none() && desired_key.is_some();
 
     let entry_key_without_login = existing_key.is_some() && desired_key.is_none();
 
-    let uses_legacy_npx = existing
-        .as_ref()
-        .and_then(|e| e["command"].as_str())
-        .map_or(false, |cmd| cmd == "npx");
+    let uses_legacy_npx = existing.as_ref().and_then(|e| e["command"].as_str()) == Some("npx");
 
     let (standard_tools_disabled, has_legacy_deny_only) = if ide.has_standard_tools {
         if ide.flag == "opencode" {
@@ -123,12 +119,10 @@ pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus 
                 })
                 .unwrap_or_default();
             let has_legacy_only = !all_denied
-                && CLAUDE_CODE_STANDARD_TOOLS
-                    .iter()
-                    .any(|tool| {
-                        legacy_deny_list.iter().any(|d| d == *tool)
-                            && !settings_deny_list.iter().any(|d| d == *tool)
-                    });
+                && CLAUDE_CODE_STANDARD_TOOLS.iter().any(|tool| {
+                    legacy_deny_list.iter().any(|d| d == *tool)
+                        && !settings_deny_list.iter().any(|d| d == *tool)
+                });
 
             // Also check that tools are not in allow lists (either file)
             let allow_list = config
@@ -162,7 +156,10 @@ pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus 
                 })
                 .unwrap_or(true);
 
-            (all_denied && none_allowed_in_config && none_allowed_in_settings, has_legacy_only)
+            (
+                all_denied && none_allowed_in_config && none_allowed_in_settings,
+                has_legacy_only,
+            )
         }
     } else {
         (true, false) // not applicable = no issue
@@ -181,11 +178,11 @@ pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus 
         if name == ENTRY_NAME {
             continue;
         }
-        if let Some(url) = extract_url(entry) {
-            if is_keenable_url(&url) {
-                duplicate_entries.push(name.clone());
-                continue;
-            }
+        if let Some(url) = extract_url(entry)
+            && is_keenable_url(&url)
+        {
+            duplicate_entries.push(name.clone());
+            continue;
         }
         if is_conflicting_name(name) {
             conflicting_mcps.push(name.clone());
@@ -219,11 +216,10 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
                 Some(key)
             }
             KeyCheck::Invalid => {
-                ui::warning("Stored API key is invalid — configuring for free tier (IP-based rate limits)");
-                ui::sub_info(&format!(
-                    "Run {} to fix it",
-                    "keenable login".cyan()
-                ));
+                ui::warning(
+                    "Stored API key is invalid — configuring for free tier (IP-based rate limits)",
+                );
+                ui::sub_info(&format!("Run {} to fix it", "keenable login".cyan()));
                 None
             }
             // Can't verify ≠ invalid: silently stripping the key from client
@@ -327,11 +323,11 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
         if name == ENTRY_NAME {
             continue;
         }
-        if let Some(url) = extract_url(entry) {
-            if is_keenable_url(&url) {
-                duplicate_entries.push(name.clone());
-                continue;
-            }
+        if let Some(url) = extract_url(entry)
+            && is_keenable_url(&url)
+        {
+            duplicate_entries.push(name.clone());
+            continue;
         }
         if is_conflicting_name(name) {
             conflicts.push(name.clone());
@@ -340,7 +336,10 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
 
     if !duplicate_entries.is_empty() {
         for name in &duplicate_entries {
-            if let Some(obj) = config.get_mut(ide.servers_key).and_then(|v| v.as_object_mut()) {
+            if let Some(obj) = config
+                .get_mut(ide.servers_key)
+                .and_then(|v| v.as_object_mut())
+            {
                 obj.remove(name.as_str());
             }
         }
@@ -373,15 +372,9 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
             let desired_key = api_key.map(|k| k.to_string());
             if existing_key != desired_key {
                 if existing_key.is_some() && desired_key.is_some() {
-                    ui::sub_warning(&format!(
-                        "Updating API key in {} entry",
-                        DISPLAY_NAME
-                    ));
+                    ui::sub_warning(&format!("Updating API key in {} entry", DISPLAY_NAME));
                 } else if existing_key.is_none() && desired_key.is_some() {
-                    ui::sub_warning(&format!(
-                        "Adding API key to {} entry",
-                        DISPLAY_NAME
-                    ));
+                    ui::sub_warning(&format!("Adding API key to {} entry", DISPLAY_NAME));
                 } else if existing_key.is_some() && desired_key.is_none() {
                     ui::sub_warning(&format!(
                         "Removing API key from {} entry (switching to free tier)",
@@ -390,7 +383,9 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
                 }
             }
             if entry["command"].as_str() == Some("npx") {
-                ui::sub_warning("Replacing npx mcp-remote with a direct HTTP entry (no Node.js needed)");
+                ui::sub_warning(
+                    "Replacing npx mcp-remote with a direct HTTP entry (no Node.js needed)",
+                );
             }
             config[ide.servers_key][ENTRY_NAME] = desired;
             config_changed = true;
@@ -413,15 +408,13 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
         }
     }
 
-    if config_changed {
-        if let Err(e) = write_config(&ide.config_path, &config) {
-            ui::sub_error(&format!(
-                "Failed to write {}: {}",
-                ide.config_path.display(),
-                e
-            ));
-            return false;
-        }
+    if config_changed && let Err(e) = write_config(&ide.config_path, &config) {
+        ui::sub_error(&format!(
+            "Failed to write {}: {}",
+            ide.config_path.display(),
+            e
+        ));
+        return false;
     }
     true
 }
@@ -436,10 +429,7 @@ pub fn reset(selected_flags: Vec<String>, yes: bool) {
 
     let configured: Vec<&IDEDef> = detected
         .iter()
-        .filter(|ide| {
-            has_product_entry(ide)
-                || (ide.flag == "codex" && has_codex_apps_cache())
-        })
+        .filter(|ide| has_product_entry(ide) || (ide.flag == "codex" && has_codex_apps_cache()))
         .copied()
         .collect();
 
@@ -459,7 +449,9 @@ pub fn reset(selected_flags: Vec<String>, yes: bool) {
         };
 
         if is_all && selected_flags.len() > 1 {
-            ui::warning("--all selects every configured client; individual client flags are ignored");
+            ui::warning(
+                "--all selects every configured client; individual client flags are ignored",
+            );
         }
         if !is_all {
             for flag in &selected_flags {
@@ -468,7 +460,11 @@ pub fn reset(selected_flags: Vec<String>, yes: bool) {
                 if !matched {
                     ui::warning(&format!("Unknown client: --{}", flag));
                 } else if !configured_match {
-                    let ide_name = all.iter().find(|ide| ide.flag == flag.as_str()).unwrap().name;
+                    let ide_name = all
+                        .iter()
+                        .find(|ide| ide.flag == flag.as_str())
+                        .unwrap()
+                        .name;
                     let is_installed = detected.iter().any(|ide| ide.flag == flag.as_str());
                     if !is_installed {
                         ui::warning(&format!("{} is not installed", ide_name));
@@ -532,7 +528,10 @@ fn reset_ide(ide: &IDEDef) -> bool {
     let mut config_changed = false;
 
     // Step 1: Remove the Keenable MCP entry
-    if let Some(servers) = config.get_mut(ide.servers_key).and_then(|v| v.as_object_mut()) {
+    if let Some(servers) = config
+        .get_mut(ide.servers_key)
+        .and_then(|v| v.as_object_mut())
+    {
         if servers.remove(ENTRY_NAME).is_some() {
             config_changed = true;
             ui::sub_success(&format!("Removed {} entry", DISPLAY_NAME));
@@ -552,16 +551,19 @@ fn reset_ide(ide: &IDEDef) -> bool {
 
     let mut other_entries: Vec<String> = Vec::new();
     for (name, entry) in &servers {
-        if let Some(url) = extract_url(entry) {
-            if is_keenable_url(&url) {
-                other_entries.push(name.clone());
-            }
+        if let Some(url) = extract_url(entry)
+            && is_keenable_url(&url)
+        {
+            other_entries.push(name.clone());
         }
     }
 
     if !other_entries.is_empty() {
         for name in &other_entries {
-            if let Some(obj) = config.get_mut(ide.servers_key).and_then(|v| v.as_object_mut()) {
+            if let Some(obj) = config
+                .get_mut(ide.servers_key)
+                .and_then(|v| v.as_object_mut())
+            {
                 obj.remove(name.as_str());
             }
         }
@@ -587,26 +589,20 @@ fn reset_ide(ide: &IDEDef) -> bool {
         clean_codex_apps_cache();
     }
 
-    if config_changed {
-        if let Err(e) = write_config(&ide.config_path, &config) {
-            ui::sub_error(&format!(
-                "Failed to write {}: {}",
-                ide.config_path.display(),
-                e
-            ));
-            return false;
-        }
+    if config_changed && let Err(e) = write_config(&ide.config_path, &config) {
+        ui::sub_error(&format!(
+            "Failed to write {}: {}",
+            ide.config_path.display(),
+            e
+        ));
+        return false;
     }
     true
 }
 
 // ── Status display ──────────────────────────────────────────────────
 
-fn show_configure_status(
-    detected: &[&IDEDef],
-    not_detected: &[&IDEDef],
-    api_key: Option<&str>,
-) {
+fn show_configure_status(detected: &[&IDEDef], not_detected: &[&IDEDef], api_key: Option<&str>) {
     ui::label("Your Clients");
 
     if detected.is_empty() {
@@ -778,7 +774,11 @@ fn warn_unmatched_flags(selected_flags: &[String], all: &[IDEDef], detected: &[&
         if !matched {
             ui::warning(&format!("Unknown client: --{}", flag));
         } else if !detected_match {
-            let ide_name = all.iter().find(|ide| ide.flag == flag.as_str()).unwrap().name;
+            let ide_name = all
+                .iter()
+                .find(|ide| ide.flag == flag.as_str())
+                .unwrap()
+                .name;
             ui::warning(&format!("{} is not installed", ide_name));
         }
     }
@@ -824,10 +824,7 @@ fn confirm_configure(ide_names: &[&str], yes: bool) -> bool {
 
     let choices = &["Proceed", "Proceed and don't ask again", "Cancel"];
 
-    let selection = Select::new()
-        .items(choices)
-        .default(0)
-        .interact_opt();
+    let selection = Select::new().items(choices).default(0).interact_opt();
 
     match selection {
         Ok(Some(0)) => true,
@@ -868,10 +865,7 @@ fn confirm_reset(ide_names: &[&str], yes: bool) -> bool {
     let choices = &["Proceed", "Cancel"];
 
     // Destructive op: Enter must not proceed by accident.
-    let selection = Select::new()
-        .items(choices)
-        .default(1)
-        .interact_opt();
+    let selection = Select::new().items(choices).default(1).interact_opt();
 
     match selection {
         Ok(Some(0)) => true,
@@ -893,51 +887,52 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
     remove_from_deny_list(config, &mut legacy_changed, CLAUDE_CODE_STANDARD_TOOLS);
     if legacy_changed {
         *changed = true;
-        ui::sub_success("Removed legacy deny entries from .claude.json (Claude Code reads settings.json)");
+        ui::sub_success(
+            "Removed legacy deny entries from .claude.json (Claude Code reads settings.json)",
+        );
     }
 
     // Remove from allow list in .claude.json
     remove_from_allow_list(config, changed);
 
     // Add deny + remove from allow list in ~/.claude/settings.json
-    if let Some(settings_path) = claude_code_settings_path() {
-        if let Some(mut settings) =
+    if let Some(settings_path) = claude_code_settings_path()
+        && let Some(mut settings) =
             read_config_for_write(&settings_path, "Standard tools may still be enabled")
-        {
-            let mut settings_changed = false;
-            let deny_result = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
-            let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
-            if settings_changed {
-                match write_config(&settings_path, &settings) {
-                    Ok(()) => {
-                        match deny_result {
-                            Some((msg, added)) => {
-                                // Record what we added so reset restores only
-                                // that, not denies the user set themselves.
-                                config::add_managed_deny_tools(&added);
-                                ui::sub_success(&msg);
-                            }
-                            None => config::add_managed_deny_tools(&[]),
-                        }
-                        if let Some(msg) = allow_msg {
+    {
+        let mut settings_changed = false;
+        let deny_result = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
+        let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
+        if settings_changed {
+            match write_config(&settings_path, &settings) {
+                Ok(()) => {
+                    match deny_result {
+                        Some((msg, added)) => {
+                            // Record what we added so reset restores only
+                            // that, not denies the user set themselves.
+                            config::add_managed_deny_tools(&added);
                             ui::sub_success(&msg);
                         }
+                        None => config::add_managed_deny_tools(&[]),
                     }
-                    Err(e) => {
-                        ui::sub_error(&format!(
-                            "Failed to write {}: {}. Standard tools may still be enabled",
-                            settings_path.display(),
-                            e
-                        ));
+                    if let Some(msg) = allow_msg {
+                        ui::sub_success(&msg);
                     }
                 }
-            } else {
-                config::add_managed_deny_tools(&[]);
-                ui::sub_done(&format!(
-                    "Standard tools already disabled: {}",
-                    CLAUDE_CODE_STANDARD_TOOLS.join(", ")
-                ));
+                Err(e) => {
+                    ui::sub_error(&format!(
+                        "Failed to write {}: {}. Standard tools may still be enabled",
+                        settings_path.display(),
+                        e
+                    ));
+                }
             }
+        } else {
+            config::add_managed_deny_tools(&[]);
+            ui::sub_done(&format!(
+                "Standard tools already disabled: {}",
+                CLAUDE_CODE_STANDARD_TOOLS.join(", ")
+            ));
         }
     }
 
@@ -970,29 +965,32 @@ fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
             .filter(|a| !CLAUDE_CODE_STANDARD_TOOLS.contains(&a.as_str()))
             .collect();
         if filtered.is_empty() {
-            if let Some(perms) = config.get_mut("permissions").and_then(|v| v.as_object_mut()) {
+            if let Some(perms) = config
+                .get_mut("permissions")
+                .and_then(|v| v.as_object_mut())
+            {
                 perms.remove("allow");
-                if perms.is_empty() {
-                    if let Some(obj) = config.as_object_mut() {
-                        obj.remove("permissions");
-                    }
+                if perms.is_empty()
+                    && let Some(obj) = config.as_object_mut()
+                {
+                    obj.remove("permissions");
                 }
             }
         } else {
             config["permissions"]["allow"] = json!(filtered);
         }
         *changed = true;
-        ui::sub_success(&format!(
-            "Removed {} from allow list",
-            found.join(", ")
-        ));
+        ui::sub_success(&format!("Removed {} from allow list", found.join(", ")));
     }
 }
 
 /// Add standard tools to the `permissions.deny` list in a settings file.
 /// Returns a success message and the tools added, if changes were made
 /// (caller prints and records after a successful write).
-fn add_deny_to_settings_quiet(config: &mut Value, changed: &mut bool) -> Option<(String, Vec<String>)> {
+fn add_deny_to_settings_quiet(
+    config: &mut Value,
+    changed: &mut bool,
+) -> Option<(String, Vec<String>)> {
     let deny_list = config
         .pointer("/permissions/deny")
         .and_then(|v| v.as_array())
@@ -1052,7 +1050,8 @@ fn remove_from_project_allow_lists() {
         let mut changed = false;
         let removed_msg = remove_from_allow_list_quiet(&mut config, &mut changed);
         if changed {
-            let display_path = path.strip_prefix(&home)
+            let display_path = path
+                .strip_prefix(&home)
                 .map(|p| format!("~/{}", p.display()))
                 .unwrap_or_else(|_| path.display().to_string());
             match write_config(&path, &config) {
@@ -1064,11 +1063,7 @@ fn remove_from_project_allow_lists() {
                     ));
                 }
                 Err(e) => {
-                    ui::sub_error(&format!(
-                        "Failed to write {}: {}",
-                        display_path,
-                        e
-                    ));
+                    ui::sub_error(&format!("Failed to write {}: {}", display_path, e));
                 }
             }
         }
@@ -1076,7 +1071,12 @@ fn remove_from_project_allow_lists() {
 }
 
 /// Recursively find `.claude/settings.local.json` files.
-fn find_claude_settings(dir: &std::path::Path, results: &mut Vec<PathBuf>, depth: usize, max_depth: usize) {
+fn find_claude_settings(
+    dir: &std::path::Path,
+    results: &mut Vec<PathBuf>,
+    depth: usize,
+    max_depth: usize,
+) {
     if depth > max_depth {
         return;
     }
@@ -1084,20 +1084,24 @@ fn find_claude_settings(dir: &std::path::Path, results: &mut Vec<PathBuf>, depth
     if candidate.is_file() {
         results.push(candidate);
     }
-    if depth < max_depth {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    // Skip hidden dirs (except .claude which we handle above),
-                    // node_modules, and other noise
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if name_str.starts_with('.') || name_str == "node_modules" || name_str == "target" || name_str == "vendor" {
-                        continue;
-                    }
-                    find_claude_settings(&path, results, depth + 1, max_depth);
+    if depth < max_depth
+        && let Ok(entries) = fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip hidden dirs (except .claude which we handle above),
+                // node_modules, and other noise
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with('.')
+                    || name_str == "node_modules"
+                    || name_str == "target"
+                    || name_str == "vendor"
+                {
+                    continue;
                 }
+                find_claude_settings(&path, results, depth + 1, max_depth);
             }
         }
     }
@@ -1128,12 +1132,15 @@ fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) -> Optio
             .filter(|a| !CLAUDE_CODE_STANDARD_TOOLS.contains(&a.as_str()))
             .collect();
         if filtered.is_empty() {
-            if let Some(perms) = config.get_mut("permissions").and_then(|v| v.as_object_mut()) {
+            if let Some(perms) = config
+                .get_mut("permissions")
+                .and_then(|v| v.as_object_mut())
+            {
                 perms.remove("allow");
-                if perms.is_empty() {
-                    if let Some(obj) = config.as_object_mut() {
-                        obj.remove("permissions");
-                    }
+                if perms.is_empty()
+                    && let Some(obj) = config.as_object_mut()
+                {
+                    obj.remove("permissions");
                 }
             }
         } else {
@@ -1175,10 +1182,7 @@ fn disable_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
             }
         }
         *changed = true;
-        ui::sub_success(&format!(
-            "Disabled standard tools: {}",
-            missing.join(", ")
-        ));
+        ui::sub_success(&format!("Disabled standard tools: {}", missing.join(", ")));
     }
 }
 
@@ -1212,10 +1216,7 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
         if settings_changed {
             match write_config(&settings_path, &settings) {
                 Ok(()) => {
-                    ui::sub_success(&format!(
-                        "Re-enabled standard tools: {}",
-                        tools.join(", ")
-                    ));
+                    ui::sub_success(&format!("Re-enabled standard tools: {}", tools.join(", ")));
                 }
                 Err(e) => {
                     ui::sub_error(&format!(
@@ -1255,12 +1256,15 @@ fn remove_from_deny_list(config: &mut Value, changed: &mut bool, tools: &[&str])
             .filter(|d| !tools.contains(&d.as_str()))
             .collect();
         if filtered.is_empty() {
-            if let Some(perms) = config.get_mut("permissions").and_then(|v| v.as_object_mut()) {
+            if let Some(perms) = config
+                .get_mut("permissions")
+                .and_then(|v| v.as_object_mut())
+            {
                 perms.remove("deny");
-                if perms.is_empty() {
-                    if let Some(obj) = config.as_object_mut() {
-                        obj.remove("permissions");
-                    }
+                if perms.is_empty()
+                    && let Some(obj) = config.as_object_mut()
+                {
+                    obj.remove("permissions");
                 }
             }
         } else {
@@ -1282,10 +1286,10 @@ fn restore_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
         for tool in OPENCODE_STANDARD_TOOLS {
             if let Some(perms) = config.get_mut("permission").and_then(|v| v.as_object_mut()) {
                 perms.remove(*tool);
-                if perms.is_empty() {
-                    if let Some(obj) = config.as_object_mut() {
-                        obj.remove("permission");
-                    }
+                if perms.is_empty()
+                    && let Some(obj) = config.as_object_mut()
+                {
+                    obj.remove("permission");
                 }
             }
         }
@@ -1315,10 +1319,10 @@ fn has_codex_apps_cache() -> bool {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(content) = fs::read_to_string(&path) {
-                if content.to_lowercase().contains("keenable") {
-                    return true;
-                }
+            if let Ok(content) = fs::read_to_string(&path)
+                && content.to_lowercase().contains("keenable")
+            {
+                return true;
             }
         }
     }
@@ -1341,12 +1345,11 @@ fn clean_codex_apps_cache() {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(content) = fs::read_to_string(&path) {
-                if content.to_lowercase().contains("keenable") {
-                    if fs::remove_file(&path).is_ok() {
-                        removed += 1;
-                    }
-                }
+            if let Ok(content) = fs::read_to_string(&path)
+                && content.to_lowercase().contains("keenable")
+                && fs::remove_file(&path).is_ok()
+            {
+                removed += 1;
             }
         }
     }

@@ -1,7 +1,7 @@
 use colored::Colorize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::api::{api_key_client, api_url, bare_client, handle_response, ApiError};
+use crate::api::{ApiError, api_key_client, api_url, bare_client, handle_response};
 use crate::config;
 use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
@@ -18,11 +18,21 @@ pub struct SearchFilters {
 impl SearchFilters {
     fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
-        if let Some(v) = &self.site { map.insert("site".into(), json!(v)); }
-        if let Some(v) = &self.acquired_after { map.insert("acquired_after".into(), json!(v)); }
-        if let Some(v) = &self.acquired_before { map.insert("acquired_before".into(), json!(v)); }
-        if let Some(v) = &self.published_after { map.insert("published_after".into(), json!(v)); }
-        if let Some(v) = &self.published_before { map.insert("published_before".into(), json!(v)); }
+        if let Some(v) = &self.site {
+            map.insert("site".into(), json!(v));
+        }
+        if let Some(v) = &self.acquired_after {
+            map.insert("acquired_after".into(), json!(v));
+        }
+        if let Some(v) = &self.acquired_before {
+            map.insert("acquired_before".into(), json!(v));
+        }
+        if let Some(v) = &self.published_after {
+            map.insert("published_after".into(), json!(v));
+        }
+        if let Some(v) = &self.published_before {
+            map.insert("published_before".into(), json!(v));
+        }
         Value::Object(map)
     }
 }
@@ -64,18 +74,16 @@ fn print_yaml(data: &Value) {
 /// Otherwise try daemon first, fall back to direct HTTP.
 async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, ApiError> {
     // If no override, try daemon first
-    if api_key_override.is_none() {
-        if daemon::ensure_daemon().is_ok() {
-            match daemon::daemon_request(req).await {
-                Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
-                Ok(resp) => return Err(daemon_response_to_api_error(resp)),
-                // If a non-idempotent request may already have reached the
-                // API, surface the failure instead of re-sending.
-                Err(daemon::DaemonError::AfterSend(e)) if !req.idempotent() => {
-                    return Err(ApiError::request_failed(e));
-                }
-                Err(_) => {} // Fall through to direct
+    if api_key_override.is_none() && daemon::ensure_daemon().is_ok() {
+        match daemon::daemon_request(req).await {
+            Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
+            Ok(resp) => return Err(daemon_response_to_api_error(resp)),
+            // If a non-idempotent request may already have reached the
+            // API, surface the failure instead of re-sending.
+            Err(daemon::DaemonError::AfterSend(e)) if !req.idempotent() => {
+                return Err(ApiError::request_failed(e));
             }
+            Err(_) => {} // Fall through to direct
         }
     }
 
@@ -140,11 +148,19 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
 fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
     if let Some(data) = &resp.data {
         // Daemon forwards the structured error from handle_response
-        let error = data["error"].as_str().unwrap_or("Request failed").to_string();
+        let error = data["error"]
+            .as_str()
+            .unwrap_or("Request failed")
+            .to_string();
         let message = data["message"].as_str().map(|s| s.to_string());
         let retry_after = data["retry_after"].as_u64();
         let status = data["status"].as_u64().unwrap_or(0) as u16;
-        return ApiError { status, error, message, retry_after };
+        return ApiError {
+            status,
+            error,
+            message,
+            retry_after,
+        };
     }
     // Fallback: use the plain error string
     ApiError {
@@ -184,10 +200,11 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
 
     if human {
         ui::error(&err.display());
-        if err.is_rate_limit() && !authenticated {
-            if let Some(secs) = err.retry_after {
-                ui::hint(&format!("Retry after {}s.", secs));
-            }
+        if err.is_rate_limit()
+            && !authenticated
+            && let Some(secs) = err.retry_after
+        {
+            ui::hint(&format!("Retry after {}s.", secs));
         }
         if let Some(hint) = &login_hint {
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
@@ -241,19 +258,34 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
-pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, human: bool, api_key: Option<&str>) {
+pub async fn search(
+    query: &str,
+    mode: Option<&str>,
+    filters: SearchFilters,
+    human: bool,
+    api_key: Option<&str>,
+) {
     // Validate --mode flag if provided ("standard" is a legacy alias for "realtime")
-    if let Some(m) = mode {
-        if !SEARCH_MODES.contains(&m) && m != "standard" {
-            ui::error(&format!("Invalid mode \"{}\". Must be \"{}\".", m, SEARCH_MODES.join("\" or \"")));
-            eprintln!();
-            std::process::exit(1);
-        }
+    if let Some(m) = mode
+        && !SEARCH_MODES.contains(&m)
+        && m != "standard"
+    {
+        ui::error(&format!(
+            "Invalid mode \"{}\". Must be \"{}\".",
+            m,
+            SEARCH_MODES.join("\" or \"")
+        ));
+        eprintln!();
+        std::process::exit(1);
     }
 
     let effective_mode = resolve_mode(mode).map(|m| {
         // Graceful fallback: "standard" → "realtime"
-        if m == "standard" { "realtime".to_string() } else { m }
+        if m == "standard" {
+            "realtime".to_string()
+        } else {
+            m
+        }
     });
 
     let mut body = json!({ "query": query });
@@ -261,10 +293,10 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
         body["mode"] = json!(m);
     }
     // Merge filter fields into body
-    if let Value::Object(filter_map) = filters.to_json() {
-        if let Value::Object(ref mut body_map) = body {
-            body_map.extend(filter_map);
-        }
+    if let Value::Object(filter_map) = filters.to_json()
+        && let Value::Object(ref mut body_map) = body
+    {
+        body_map.extend(filter_map);
     }
 
     let req = DaemonRequest {
@@ -301,8 +333,12 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
                         }
                         if !published.is_empty() || !acquired.is_empty() {
                             let mut dates = Vec::new();
-                            if !published.is_empty() { dates.push(format!("published: {}", published)); }
-                            if !acquired.is_empty() { dates.push(format!("acquired: {}", acquired)); }
+                            if !published.is_empty() {
+                                dates.push(format!("published: {}", published));
+                            }
+                            if !acquired.is_empty() {
+                                dates.push(format!("acquired: {}", acquired));
+                            }
                             eprintln!("      {}", dates.join("  ").dimmed());
                         }
                         eprintln!();
@@ -360,7 +396,10 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
         let parts: Vec<&str> = entry.rsplitn(3, '=').collect();
         // rsplitn reverses: [comment, score, url]
         if parts.len() < 3 || parts[0].is_empty() || parts[2].is_empty() {
-            ui::error(&format!("Invalid format: {}. Expected url=score=comment (comment is required).", entry));
+            ui::error(&format!(
+                "Invalid format: {}. Expected url=score=comment (comment is required).",
+                entry
+            ));
             eprintln!();
             std::process::exit(1);
         }
@@ -369,7 +408,10 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
         let score: u32 = match score_str.parse() {
             Ok(s) if s <= 5 => s,
             _ => {
-                ui::error(&format!("Invalid score in '{}'. Must be 0-5. Expected url=score=comment — note the comment cannot contain '='.", entry));
+                ui::error(&format!(
+                    "Invalid score in '{}'. Must be 0-5. Expected url=score=comment — note the comment cannot contain '='.",
+                    entry
+                ));
                 eprintln!();
                 std::process::exit(1);
             }

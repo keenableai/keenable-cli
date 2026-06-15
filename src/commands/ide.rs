@@ -1,8 +1,8 @@
 //! Shared IDE definitions and config helpers used by `configure-mcp` and `reset`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::constants::API_BASE_URL;
 
@@ -129,14 +129,12 @@ pub fn is_detected(ide: &IDEDef) -> bool {
     if let Some(p) = &ide.detect_path {
         return p.exists() || ide.config_path.exists();
     }
-    ide.config_path
-        .parent()
-        .map_or(false, |p| p.exists())
+    ide.config_path.parent().is_some_and(|p| p.exists())
 }
 
 // ── Config helpers ──────────────────────────────────────────────────
 
-fn is_toml(path: &PathBuf) -> bool {
+fn is_toml(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some("toml")
 }
 
@@ -313,10 +311,10 @@ pub fn extract_url(entry: &Value) -> Option<String> {
     if let Some(args) = entry["args"].as_array() {
         let first_arg = args.first().and_then(|v| v.as_str()).unwrap_or("");
         // Legacy npx mcp-remote format
-        if first_arg == "mcp-remote" {
-            if let Some(url) = args.get(1).and_then(|v| v.as_str()) {
-                return Some(url.to_string());
-            }
+        if first_arg == "mcp-remote"
+            && let Some(url) = args.get(1).and_then(|v| v.as_str())
+        {
+            return Some(url.to_string());
         }
     }
     None
@@ -344,12 +342,11 @@ pub fn extract_entry_api_key(entry: &Value) -> Option<String> {
     if let Some(args) = entry["args"].as_array() {
         for (i, arg) in args.iter().enumerate() {
             // Legacy npx mcp-remote format: --header X-API-Key:<KEY>
-            if arg.as_str() == Some("--header") {
-                if let Some(header_val) = args.get(i + 1).and_then(|v| v.as_str()) {
-                    if let Some(key) = header_val.strip_prefix("X-API-Key:") {
-                        return Some(key.to_string());
-                    }
-                }
+            if arg.as_str() == Some("--header")
+                && let Some(header_val) = args.get(i + 1).and_then(|v| v.as_str())
+                && let Some(key) = header_val.strip_prefix("X-API-Key:")
+            {
+                return Some(key.to_string());
             }
         }
     }

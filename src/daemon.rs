@@ -165,7 +165,11 @@ mod platform {
                                 // Reply first, then exit — login/logout use this
                                 // to restart the daemon with new auth state.
                                 Ok(req) if req.command == "shutdown" => {
-                                    let resp = DaemonResponse { ok: true, data: None, error: None };
+                                    let resp = DaemonResponse {
+                                        ok: true,
+                                        data: None,
+                                        error: None,
+                                    };
                                     let mut resp_line =
                                         serde_json::to_string(&resp).unwrap_or_default();
                                     resp_line.push('\n');
@@ -207,7 +211,11 @@ mod platform {
     async fn send_api(request: reqwest::RequestBuilder) -> DaemonResponse {
         match request.send().await {
             Ok(r) => match handle_response(r).await {
-                Ok(data) => DaemonResponse { ok: true, data: Some(data), error: None },
+                Ok(data) => DaemonResponse {
+                    ok: true,
+                    data: Some(data),
+                    error: None,
+                },
                 Err(api_err) => {
                     // Forward the structured error so the client can reconstruct ApiError
                     let mut data = api_err.to_yaml_value();
@@ -219,12 +227,20 @@ mod platform {
                     }
                 }
             },
-            Err(e) => DaemonResponse { ok: false, data: None, error: Some(e.to_string()) },
+            Err(e) => DaemonResponse {
+                ok: false,
+                data: None,
+                error: Some(e.to_string()),
+            },
         }
     }
 
     fn err_response(msg: &str) -> DaemonResponse {
-        DaemonResponse { ok: false, data: None, error: Some(msg.to_string()) }
+        DaemonResponse {
+            ok: false,
+            data: None,
+            error: Some(msg.to_string()),
+        }
     }
 
     fn endpoint(path: &str, authenticated: bool) -> String {
@@ -235,7 +251,11 @@ mod platform {
         }
     }
 
-    async fn handle_request(client: &reqwest::Client, authenticated: bool, req: DaemonRequest) -> DaemonResponse {
+    async fn handle_request(
+        client: &reqwest::Client,
+        authenticated: bool,
+        req: DaemonRequest,
+    ) -> DaemonResponse {
         match req.command.as_str() {
             "search" => {
                 let body = match &req.body {
@@ -243,7 +263,9 @@ mod platform {
                     None => return err_response("Missing body"),
                 };
                 send_api(
-                    client.post(endpoint("/v1/search", authenticated)).json(&body),
+                    client
+                        .post(endpoint("/v1/search", authenticated))
+                        .json(&body),
                 )
                 .await
             }
@@ -265,11 +287,17 @@ mod platform {
                     None => return err_response("Missing body"),
                 };
                 send_api(
-                    client.post(endpoint("/v1/feedback", authenticated)).json(&body),
+                    client
+                        .post(endpoint("/v1/feedback", authenticated))
+                        .json(&body),
                 )
                 .await
             }
-            "ping" => DaemonResponse { ok: true, data: None, error: None },
+            "ping" => DaemonResponse {
+                ok: true,
+                data: None,
+                error: None,
+            },
             _ => err_response(&format!("Unknown command: {}", req.command)),
         }
     }
@@ -317,8 +345,7 @@ mod platform {
     }
 
     pub fn start_daemon() -> Result<(), String> {
-        let exe =
-            std::env::current_exe().map_err(|e| format!("Cannot find executable: {}", e))?;
+        let exe = std::env::current_exe().map_err(|e| format!("Cannot find executable: {}", e))?;
 
         let child = std::process::Command::new(exe)
             .arg("daemon")
@@ -334,10 +361,8 @@ mod platform {
         // Wait for daemon to accept connections (up to 3s)
         let sock = socket_path();
         for _ in 0..30 {
-            if sock.exists() {
-                if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
-                    return Ok(());
-                }
+            if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+                return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -373,9 +398,13 @@ mod platform {
         match tokio::time::timeout(Duration::from_secs(75), lines.next_line()).await {
             Ok(Ok(Some(line))) => serde_json::from_str(&line)
                 .map_err(|e| DaemonError::AfterSend(format!("Invalid daemon response: {}", e))),
-            Ok(Ok(None)) => Err(DaemonError::AfterSend("Daemon closed connection".to_string())),
+            Ok(Ok(None)) => Err(DaemonError::AfterSend(
+                "Daemon closed connection".to_string(),
+            )),
             Ok(Err(e)) => Err(DaemonError::AfterSend(format!("Read error: {}", e))),
-            Err(_) => Err(DaemonError::AfterSend("Daemon request timed out".to_string())),
+            Err(_) => Err(DaemonError::AfterSend(
+                "Daemon request timed out".to_string(),
+            )),
         }
     }
 }

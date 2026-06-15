@@ -11,9 +11,7 @@ fn current_version() -> &'static str {
 
 fn parse_version(v: &str) -> Option<Vec<u32>> {
     let v = v.strip_prefix('v').unwrap_or(v);
-    v.split('.')
-        .map(|part| part.parse::<u32>().ok())
-        .collect()
+    v.split('.').map(|part| part.parse::<u32>().ok()).collect()
 }
 
 fn is_newer(latest: &str, current: &str) -> bool {
@@ -73,18 +71,18 @@ pub async fn check_for_update() -> Option<String> {
 
     // Check cache
     let mut cached_version: Option<String> = None;
-    if let Ok(content) = fs::read_to_string(&cache_file) {
-        if let Ok(cache) = serde_json::from_str::<serde_json::Value>(&content) {
-            let last_check = cache["last_check"].as_u64().unwrap_or(0);
-            cached_version = cache["latest_version"].as_str().map(String::from);
-            // saturating: a clock step backwards must not wrap into "stale"
-            if now_epoch().saturating_sub(last_check) < UPDATE_CHECK_INTERVAL_SECONDS {
-                let cached = cached_version?;
-                if is_newer(&cached, current_version()) {
-                    return Some(cached);
-                }
-                return None;
+    if let Ok(content) = fs::read_to_string(&cache_file)
+        && let Ok(cache) = serde_json::from_str::<serde_json::Value>(&content)
+    {
+        let last_check = cache["last_check"].as_u64().unwrap_or(0);
+        cached_version = cache["latest_version"].as_str().map(String::from);
+        // saturating: a clock step backwards must not wrap into "stale"
+        if now_epoch().saturating_sub(last_check) < UPDATE_CHECK_INTERVAL_SECONDS {
+            let cached = cached_version?;
+            if is_newer(&cached, current_version()) {
+                return Some(cached);
             }
+            return None;
         }
     }
 
@@ -99,7 +97,11 @@ pub async fn check_for_update() -> Option<String> {
     if let Some(dir) = cache_file.parent() {
         fs::create_dir_all(dir).ok();
     }
-    fs::write(&cache_file, serde_json::to_string(&cache).unwrap_or_default()).ok();
+    fs::write(
+        &cache_file,
+        serde_json::to_string(&cache).unwrap_or_default(),
+    )
+    .ok();
 
     let latest = latest?;
     if is_newer(&latest, current_version()) {

@@ -128,21 +128,15 @@ pub fn header(msg: &str) {
 
 /// Print a completed intermediate step (dimmed + strikethrough).
 pub fn step_done(msg: &str) {
-    print_wrapped(
-        format!("   {}  ", "✓".dimmed()),
-        msg,
-        |s| s.dimmed().strikethrough(),
-    );
+    print_wrapped(format!("   {}  ", "✓".dimmed()), msg, |s| {
+        s.dimmed().strikethrough()
+    });
 }
 
 /// Print an in-progress step (shows a spinner-like marker).
 /// Returns the number of lines printed, for `step_done_replace`.
 pub fn step(msg: &str) -> usize {
-    print_wrapped(
-        format!("   {}  ", "…".dimmed()),
-        msg,
-        |s| s.dimmed(),
-    )
+    print_wrapped(format!("   {}  ", "…".dimmed()), msg, |s| s.dimmed())
 }
 
 /// Replace the last `step()` output (which printed `lines` lines) with a
@@ -157,103 +151,63 @@ pub fn step_done_replace(msg: &str, lines: usize) {
 
 /// Print the final success line (green, bold).
 pub fn success(msg: &str) {
-    print_wrapped(
-        format!("   {}  ", "✓".green().bold()),
-        msg,
-        |s| s.green(),
-    );
+    print_wrapped(format!("   {}  ", "✓".green().bold()), msg, |s| s.green());
 }
 
 /// Print a failure line (red).
 pub fn error(msg: &str) {
-    print_wrapped(
-        format!("   {}  ", "✗".red().bold()),
-        msg,
-        |s| s.red(),
-    );
+    print_wrapped(format!("   {}  ", "✗".red().bold()), msg, |s| s.red());
 }
 
 /// Print a warning line (yellow).
 pub fn warning(msg: &str) {
-    print_wrapped(
-        format!("   {}  ", "⚠".yellow()),
-        msg,
-        |s| s.yellow(),
-    );
+    print_wrapped(format!("   {}  ", "⚠".yellow()), msg, |s| s.yellow());
 }
 
 /// Print a hint / next-step line.
 pub fn hint(msg: &str) {
-    print_wrapped(
-        "\n    ",
-        msg,
-        |s| s.dimmed(),
-    );
+    print_wrapped("\n    ", msg, |s| s.dimmed());
 }
 
 /// Print an indented info line.
 pub fn info(msg: &str) {
-    print_wrapped(
-        "    ",
-        msg,
-        |s| s.normal(),
-    );
+    print_wrapped("    ", msg, |s| s.normal());
 }
 
 // ── Sub-steps (one extra indent level) ──────────────────────────────
 
 /// Print a completed sub-step (dimmed + strikethrough, extra indent).
 pub fn sub_done(msg: &str) {
-    print_wrapped(
-        format!("      - {}  ", "✓".dimmed()),
-        msg,
-        |s| s.dimmed().strikethrough(),
-    );
+    print_wrapped(format!("      - {}  ", "✓".dimmed()), msg, |s| {
+        s.dimmed().strikethrough()
+    });
 }
 
 /// Print a sub-step success (green, extra indent).
 pub fn sub_success(msg: &str) {
-    print_wrapped(
-        format!("      - {}  ", "✓".green()),
-        msg,
-        |s| s.green(),
-    );
+    print_wrapped(format!("      - {}  ", "✓".green()), msg, |s| s.green());
 }
 
 /// Print a sub-step error (red, extra indent).
 pub fn sub_error(msg: &str) {
-    print_wrapped(
-        format!("      - {}  ", "✗".red().bold()),
-        msg,
-        |s| s.red(),
-    );
+    print_wrapped(format!("      - {}  ", "✗".red().bold()), msg, |s| {
+        s.red()
+    });
 }
 
 /// Print a sub-step warning (yellow, extra indent).
 pub fn sub_warning(msg: &str) {
-    print_wrapped(
-        format!("      - {}  ", "⚠".yellow()),
-        msg,
-        |s| s.yellow(),
-    );
+    print_wrapped(format!("      - {}  ", "⚠".yellow()), msg, |s| s.yellow());
 }
 
 /// Print a sub-step info line (extra indent).
 pub fn sub_info(msg: &str) {
-    print_wrapped(
-        "      - ",
-        msg,
-        |s| s.normal(),
-    );
+    print_wrapped("      - ", msg, |s| s.normal());
 }
 
 /// Print a dimmed sub-step hint with warning icon (extra indent).
 pub fn sub_hint(msg: &str) {
-    print_wrapped(
-        format!("      - {}  ", "⚠".yellow()),
-        msg,
-        |s| s.dimmed(),
-    );
+    print_wrapped(format!("      - {}  ", "⚠".yellow()), msg, |s| s.dimmed());
 }
 
 // ── Section labels ──────────────────────────────────────────────────
