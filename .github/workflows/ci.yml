@@ -1,0 +1,82 @@
+# Fast per-PR gate: format, lint, build, unit tests, and a dependency CVE
+# scan on every push/PR. Complements the slow nightly e2e (which runs the
+# *released* binary against the live API) by validating the *source under
+# review* before it merges. Kept fast — no network/API, no live index.
+#
+# Uses only first-party actions/* plus the Rust toolchain preinstalled on
+# GitHub runners (the repo's Actions policy allowlists actions/* and a few
+# vendors; third-party setup actions would fail at startup).
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes in-flight runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: fmt · clippy · test · audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Add rustfmt + clippy
+        run: rustup component add rustfmt clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      # --locked everywhere: build/lint/test against the committed Cargo.lock
+      # exactly, so a drift between Cargo.toml and Cargo.lock fails CI instead
+      # of silently resolving fresh.
+      - name: clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test --locked --all-features
+      - name: Install cargo-audit
+        # Idempotent: ~/.cargo/bin is cached, and `cargo install` refuses to
+        # overwrite an existing binary — skip when it's already present.
+        run: command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
+      - name: audit
+        run: cargo audit
+
+  # Windows is the only target with its own cfg branch (the daemon stub lives
+  # under #[cfg(not(unix))]); macOS shares the unix path with Linux above, and
+  # the nightly e2e exercises the released macOS/Linux binaries at runtime.
+  windows-build:
+    name: clippy (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Add clippy
+        run: rustup component add clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings

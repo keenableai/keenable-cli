@@ -52,8 +52,7 @@ impl ApiError {
     pub fn is_auth_error(&self) -> bool {
         self.status == 401
             || self.status == 403
-            || (self.status == 400
-                && self.error.to_lowercase().contains("authentication"))
+            || (self.status == 400 && self.error.to_lowercase().contains("authentication"))
     }
 }
 
@@ -143,11 +142,8 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         .map(|s| s.to_string());
 
     // Also check retryAfter in body (backend may include it)
-    let retry_after = retry_after.or_else(|| {
-        body_json
-            .as_ref()
-            .and_then(|v| v["retryAfter"].as_u64())
-    });
+    let retry_after =
+        retry_after.or_else(|| body_json.as_ref().and_then(|v| v["retryAfter"].as_u64()));
 
     Err(ApiError {
         status: status.as_u16(),
