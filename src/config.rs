@@ -45,6 +45,9 @@ fn read_json(path: &PathBuf) -> Value {
 /// created 0600 (for files holding secrets); otherwise the destination's
 /// existing permissions are preserved.
 pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Result<()> {
+    // `restrict` only governs Unix file modes (0o600); Windows has no equivalent.
+    #[cfg(not(unix))]
+    let _ = restrict;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

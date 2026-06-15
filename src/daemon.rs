@@ -34,6 +34,9 @@ pub enum DaemonError {
     /// Failed before delivery — safe to retry directly.
     Unavailable,
     /// The request may have reached the API before the failure.
+    // Only constructed by the Unix daemon implementation; the Windows stub
+    // never reaches a post-send failure.
+    #[cfg_attr(not(unix), allow(dead_code))]
     AfterSend(String),
 }
 
