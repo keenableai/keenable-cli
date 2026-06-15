@@ -13,6 +13,7 @@ free-tier login hint instead of asserting results unconditionally.
 """
 
 import contextlib
+import json
 import os
 import signal
 from pathlib import Path
@@ -55,8 +56,12 @@ def test_free_tier_daemon_starts_unauthenticated(short_home):
         # spun up before the request, so its socket must exist either way.
         assert res.code in (0, 1), res.err
         assert (keenable_dir / "daemon.sock").exists(), "unauthenticated daemon did not start"
-        # No credentials were ever written — the daemon is running bare.
-        assert not (keenable_dir / "credentials.json").exists()
+        # The daemon ran bare: no API key was persisted. The CLI stores the
+        # key in config.json (api_key); credentials.json holds only OAuth
+        # device tokens, so it's the wrong file to prove "no key".
+        config_file = keenable_dir / "config.json"
+        if config_file.exists():
+            assert not json.loads(config_file.read_text()).get("api_key")
     finally:
         pid_file = keenable_dir / "daemon.pid"
         if pid_file.exists():
