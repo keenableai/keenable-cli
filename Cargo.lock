@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "keenable-cli"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "clap",
  "colored",

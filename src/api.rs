@@ -3,6 +3,8 @@ use serde_json::Value;
 
 use crate::constants::API_BASE_URL;
 
+const USER_AGENT: &str = concat!("keenable-cli/", env!("CARGO_PKG_VERSION"));
+
 /// Structured API error matching the backend's `{error, message, retryAfter}` format.
 pub struct ApiError {
     pub status: u16,
@@ -87,6 +89,7 @@ pub fn api_key_client(api_key: &str) -> Client {
         headers.insert("X-API-Key", value);
     }
     Client::builder()
+        .user_agent(USER_AGENT)
         .default_headers(headers)
         .timeout(std::time::Duration::from_secs(60))
         .build()
@@ -95,6 +98,7 @@ pub fn api_key_client(api_key: &str) -> Client {
 
 pub fn bare_client() -> Client {
     Client::builder()
+        .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .unwrap()
