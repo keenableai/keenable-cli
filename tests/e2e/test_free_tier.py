@@ -12,10 +12,7 @@ endpoints are IP-rate-limited, so each test tolerates a 429 carrying the
 free-tier login hint instead of asserting results unconditionally.
 """
 
-import contextlib
 import json
-import os
-import signal
 from pathlib import Path
 
 from conftest import Runner, requires_posix, results_of
@@ -63,7 +60,7 @@ def test_free_tier_daemon_starts_unauthenticated(short_home):
         if config_file.exists():
             assert not json.loads(config_file.read_text()).get("api_key")
     finally:
-        pid_file = keenable_dir / "daemon.pid"
-        if pid_file.exists():
-            with contextlib.suppress(ValueError, OSError):
-                os.kill(int(pid_file.read_text().strip()), signal.SIGTERM)
+        # Shut the daemon down the way the CLI does — a socket handshake via
+        # logout's kill_daemon() (no network) — rather than signaling the
+        # pidfile PID, which the daemon module avoids due to PID reuse.
+        kn("logout", key=False)
