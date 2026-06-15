@@ -110,3 +110,40 @@ pub async fn check_for_update() -> Option<String> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_plain_and_v_prefixed() {
+        assert_eq!(parse_version("1.2.3"), Some(vec![1, 2, 3]));
+        assert_eq!(parse_version("v0.1.20"), Some(vec![0, 1, 20]));
+    }
+
+    #[test]
+    fn rejects_non_numeric() {
+        assert_eq!(parse_version("1.2.x"), None);
+        assert_eq!(parse_version("nightly"), None);
+    }
+
+    #[test]
+    fn newer_only_when_strictly_greater() {
+        assert!(is_newer("0.1.21", "0.1.20"));
+        assert!(is_newer("1.0.0", "0.9.9"));
+        assert!(!is_newer("0.1.20", "0.1.20")); // equal is not newer
+        assert!(!is_newer("0.1.19", "0.1.20")); // older
+    }
+
+    #[test]
+    fn shorter_version_compares_lexicographically() {
+        // [0,2] > [0,1,20]: the minor bump wins regardless of patch length.
+        assert!(is_newer("0.2", "0.1.20"));
+    }
+
+    #[test]
+    fn unparseable_is_never_newer() {
+        assert!(!is_newer("garbage", "0.1.20"));
+        assert!(!is_newer("0.1.21", "garbage"));
+    }
+}
