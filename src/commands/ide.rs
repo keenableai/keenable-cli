@@ -352,3 +352,90 @@ pub fn extract_entry_api_key(entry: &Value) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ide(flag: &str) -> IDEDef {
+        all_ides().into_iter().find(|i| i.flag == flag).unwrap()
+    }
+
+    #[test]
+    fn http_entry_shape_per_ide() {
+        let url = format!("{}/mcp", API_BASE_URL);
+
+        // Cursor: HTTP with streamable-http transport; no key → no headers.
+        let cur = build_keenable_entry(&ide("cursor"), None);
+        assert_eq!(cur["url"], json!(url));
+        assert_eq!(cur["type"], json!("streamable-http"));
+        assert!(cur.get("headers").is_none());
+
+        // With a key, it lands in the X-API-Key header.
+        let cur_keyed = build_keenable_entry(&ide("cursor"), Some("keen_x"));
+        assert_eq!(cur_keyed["headers"]["X-API-Key"], json!("keen_x"));
+
+        // Claude Code uses the "http" transport type.
+        assert_eq!(
+            build_keenable_entry(&ide("claude-code"), None)["type"],
+            json!("http")
+        );
+    }
+
+    #[test]
+    fn codex_toml_entry_uses_http_headers() {
+        let entry = build_keenable_entry(&ide("codex"), Some("keen_x"));
+        assert_eq!(entry["url"], json!(format!("{}/mcp", API_BASE_URL)));
+        // TOML style nests the key under http_headers, not headers.
+        assert_eq!(entry["http_headers"]["X-API-Key"], json!("keen_x"));
+        assert!(entry.get("headers").is_none());
+    }
+
+    #[test]
+    fn extract_url_handles_all_styles() {
+        assert_eq!(extract_url(&json!({"url": "u"})).as_deref(), Some("u"));
+        assert_eq!(
+            extract_url(&json!({"serverUrl": "s"})).as_deref(),
+            Some("s")
+        );
+        // Legacy npx mcp-remote: the URL is the second arg.
+        assert_eq!(
+            extract_url(&json!({"command": "npx", "args": ["mcp-remote", "https://x/mcp"]}))
+                .as_deref(),
+            Some("https://x/mcp"),
+        );
+        assert_eq!(extract_url(&json!({"command": "foo"})), None);
+    }
+
+    #[test]
+    fn keenable_url_matches_prod_and_test() {
+        assert!(is_keenable_url("https://api.keenable.ai/mcp"));
+        assert!(is_keenable_url("https://api-test.keenable.ai/mcp"));
+        assert!(!is_keenable_url("https://example.com/mcp"));
+    }
+
+    #[test]
+    fn conflicting_name_is_substring_and_case_insensitive() {
+        assert!(is_conflicting_name("brave-search"));
+        assert!(is_conflicting_name("my-Tavily-server")); // substring, any case
+        assert!(!is_conflicting_name("keenable"));
+        assert!(!is_conflicting_name("filesystem"));
+    }
+
+    #[test]
+    fn extract_entry_api_key_from_headers_and_legacy_args() {
+        assert_eq!(
+            extract_entry_api_key(&json!({"headers": {"X-API-Key": "k1"}})).as_deref(),
+            Some("k1"),
+        );
+        assert_eq!(
+            extract_entry_api_key(&json!({"http_headers": {"X-API-Key": "k2"}})).as_deref(),
+            Some("k2"),
+        );
+        assert_eq!(
+            extract_entry_api_key(&json!({"args": ["--header", "X-API-Key:k3"]})).as_deref(),
+            Some("k3"),
+        );
+        assert_eq!(extract_entry_api_key(&json!({"url": "u"})), None);
+    }
+}

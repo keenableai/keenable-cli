@@ -152,3 +152,43 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         retry_after,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn err(status: u16, error: &str) -> ApiError {
+        ApiError {
+            status,
+            error: error.into(),
+            message: None,
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn rate_limit_is_429_only() {
+        assert!(err(429, "Too many requests").is_rate_limit());
+        assert!(!err(401, "nope").is_rate_limit());
+        assert!(!err(500, "boom").is_rate_limit());
+    }
+
+    #[test]
+    fn auth_error_covers_401_403_and_400_auth() {
+        assert!(err(401, "unauthorized").is_auth_error());
+        assert!(err(403, "forbidden").is_auth_error());
+        // 400 counts only when the message names authentication (case-insensitive).
+        assert!(err(400, "Authentication failed").is_auth_error());
+        assert!(err(400, "AUTHENTICATION required").is_auth_error());
+        assert!(!err(400, "bad query").is_auth_error());
+        assert!(!err(500, "boom").is_auth_error());
+    }
+
+    #[test]
+    fn display_joins_error_and_message() {
+        let mut e = err(500, "Server error");
+        assert_eq!(e.display(), "Server error");
+        e.message = Some("upstream timeout".into());
+        assert_eq!(e.display(), "Server error: upstream timeout");
+    }
+}

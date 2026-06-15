@@ -449,3 +449,60 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
         Err(e) => handle_api_error(e, human, api_key),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filters() -> SearchFilters {
+        SearchFilters {
+            site: None,
+            acquired_after: None,
+            acquired_before: None,
+            published_after: None,
+            published_before: None,
+        }
+    }
+
+    #[test]
+    fn to_json_omits_unset_filters() {
+        assert!(filters().to_json().as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn to_json_includes_only_set_filters() {
+        let f = SearchFilters {
+            site: Some("docs.rs".into()),
+            published_after: Some("2024-01-01".into()),
+            ..filters()
+        };
+        let v = f.to_json();
+        assert_eq!(v["site"], json!("docs.rs"));
+        assert_eq!(v["published_after"], json!("2024-01-01"));
+        assert!(v.get("acquired_after").is_none());
+        assert!(v.get("published_before").is_none());
+    }
+
+    #[test]
+    fn config_mode_accepts_valid_and_legacy_standard() {
+        assert_eq!(
+            config_mode(&json!({"m": "pro"}), "m").as_deref(),
+            Some("pro")
+        );
+        assert_eq!(
+            config_mode(&json!({"m": "realtime"}), "m").as_deref(),
+            Some("realtime")
+        );
+        // "standard" is the legacy alias and is accepted here (mapped later).
+        assert_eq!(
+            config_mode(&json!({"m": "standard"}), "m").as_deref(),
+            Some("standard")
+        );
+    }
+
+    #[test]
+    fn config_mode_ignores_invalid_or_missing() {
+        assert_eq!(config_mode(&json!({"m": "bogus"}), "m"), None);
+        assert_eq!(config_mode(&json!({}), "m"), None);
+    }
+}
