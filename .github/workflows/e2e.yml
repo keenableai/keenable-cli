@@ -125,6 +125,11 @@ jobs:
         shell: bash
         env:
           KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          # Tag every request from the suite as e2e traffic via the
+          # X-Keenable-Title header (logged as app_title), so first-party CI
+          # calls can be told apart from real CLI users (app_title=keenable-cli)
+          # in Grafana. The CLI reads KEENABLE_APP_TITLE; the daemon inherits it.
+          KEENABLE_APP_TITLE: keenable-cli-e2e
           # Empty on Linux (full suite); "not semantic and not latency" on the
           # macOS/Windows legs so the OS-independent live-index checks run once.
           MARKERS: ${{ matrix.markers }}

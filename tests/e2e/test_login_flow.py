@@ -85,6 +85,9 @@ def test_logout_clears_key_and_falls_back_to_public(logged_in):
     else:
         data = res.yaml()
         assert "error" in data
+        # The CLI still sends X-Keenable-Title after logout, so the public call
+        # must not be rejected for a missing app identifier (see test_free_tier).
+        assert data["error"] != "Missing app identifier", data
         assert "keenable login" in data.get("hint", ""), data
 
 
