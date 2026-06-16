@@ -133,14 +133,17 @@ jobs:
           [ -n "$MARKERS" ] && args+=(-m "$MARKERS")
           uv run --project tests/e2e pytest tests/e2e "${args[@]}"
 
-  # Alert Slack when any e2e leg fails. Runs only on the nightly schedule —
-  # manual dispatch is interactive, so the operator already sees the result.
-  # Needs the SLACK_WEBHOOK_URL repo secret (a Slack Incoming Webhook URL; the
-  # target channel is fixed by the webhook). Self-skips if the secret is unset.
+  # Alert Slack when any e2e leg does not succeed. Runs only on the nightly
+  # schedule — manual dispatch is interactive, so the operator already sees the
+  # result. `result != 'success'` covers both failures and cancellations (the
+  # 30-min job timeout cancels rather than fails), so timed-out nightly runs
+  # still alert. Needs the SLACK_WEBHOOK_URL repo secret (a Slack Incoming
+  # Webhook URL; the target channel is fixed by the webhook). Self-skips if the
+  # secret is unset.
   notify:
     name: notify-slack-on-failure
     needs: e2e
-    if: failure() && github.event_name == 'schedule'
+    if: ${{ always() && github.event_name == 'schedule' && needs.e2e.result != 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Post failure to Slack
