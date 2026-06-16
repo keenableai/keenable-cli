@@ -5,6 +5,38 @@ use crate::constants::API_BASE_URL;
 
 const USER_AGENT: &str = concat!("keenable-cli/", env!("CARGO_PKG_VERSION"));
 
+/// Default `X-Keenable-Title` value. The backend requires this header on
+/// token-less (public) endpoints and records it as `app_title` for
+/// observability. Sending it always keeps the unauthenticated flow working and
+/// makes first-party CLI traffic attributable in dashboards.
+const DEFAULT_APP_TITLE: &str = "keenable-cli";
+
+/// Resolve the app title from an optional env value, falling back to the
+/// default. Override via `KEENABLE_APP_TITLE` to separate first-party
+/// automation (the e2e suite sets `keenable-cli-e2e`) from real CLI users.
+/// Pure so it can be unit-tested without touching the process environment.
+fn resolve_app_title(env_value: Option<String>) -> String {
+    env_value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_APP_TITLE.to_string())
+}
+
+fn app_title() -> String {
+    resolve_app_title(std::env::var("KEENABLE_APP_TITLE").ok())
+}
+
+/// Headers common to every keenable API client. Carries `X-Keenable-Title`,
+/// which is mandatory on public endpoints. A non-parseable override is dropped
+/// rather than panicking — the default is always a valid header value.
+fn base_headers() -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(value) = app_title().parse() {
+        headers.insert("X-Keenable-Title", value);
+    }
+    headers
+}
+
 /// Structured API error matching the backend's `{error, message, retryAfter}` format.
 pub struct ApiError {
     pub status: u16,
@@ -81,7 +113,7 @@ pub async fn validate_api_key(api_key: &str) -> KeyCheck {
 }
 
 pub fn api_key_client(api_key: &str) -> Client {
-    let mut headers = reqwest::header::HeaderMap::new();
+    let mut headers = base_headers();
     // Keys from --api-key or a hand-edited config may carry stray whitespace
     // or control chars; a bad header value must yield a 401, not a panic.
     if let Ok(value) = api_key.trim().parse() {
@@ -98,6 +130,7 @@ pub fn api_key_client(api_key: &str) -> Client {
 pub fn bare_client() -> Client {
     Client::builder()
         .user_agent(USER_AGENT)
+        .default_headers(base_headers())
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .unwrap()
@@ -182,6 +215,25 @@ mod tests {
         assert!(err(400, "AUTHENTICATION required").is_auth_error());
         assert!(!err(400, "bad query").is_auth_error());
         assert!(!err(500, "boom").is_auth_error());
+    }
+
+    #[test]
+    fn app_title_defaults_when_env_absent_or_blank() {
+        assert_eq!(resolve_app_title(None), "keenable-cli");
+        assert_eq!(resolve_app_title(Some("".into())), "keenable-cli");
+        assert_eq!(resolve_app_title(Some("   ".into())), "keenable-cli");
+    }
+
+    #[test]
+    fn app_title_uses_trimmed_override() {
+        assert_eq!(
+            resolve_app_title(Some("keenable-cli-e2e".into())),
+            "keenable-cli-e2e"
+        );
+        assert_eq!(
+            resolve_app_title(Some("  custom-app  ".into())),
+            "custom-app"
+        );
     }
 
     #[test]
