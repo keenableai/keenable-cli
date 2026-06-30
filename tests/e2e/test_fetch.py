@@ -37,7 +37,10 @@ def test_dead_page(kn):
     res = kn("fetch", "https://example.com/nonexistent-xyz-12345")
     assert res.code == 1
     data = res.yaml()
-    assert data["error"] == "Not found"
+    # The backend rejects an unfetchable page with either a 404 ("Not found")
+    # or a 422 ("Unprocessable entity") depending on how far upstream got —
+    # both are valid "this page can't be fetched" outcomes.
+    assert data["error"] in ("Not found", "Unprocessable entity")
 
 
 def test_invalid_key_on_fetch(kn):
