@@ -8,6 +8,7 @@ def test_fetch_single_url(kn):
     assert data["title"] == "Example Domain"
     assert data["url"].startswith("https://example.com")
     assert "# Example Domain" in data["content"]
+    assert "description" not in data
 
 
 def test_pretty_fetch(kn):

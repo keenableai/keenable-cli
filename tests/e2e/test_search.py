@@ -20,6 +20,7 @@ def test_basic_search(basic_search):
     for r in results:
         for field in RESULT_FIELDS:
             assert field in r, f"result missing {field}: {list(r)}"
+        assert "description" not in r
 
 
 def test_pretty_output(kn):

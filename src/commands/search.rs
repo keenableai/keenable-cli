@@ -53,6 +53,20 @@ fn endpoint(path: &str, authenticated: bool) -> String {
     }
 }
 
+/// Older servers still return `description`; fold it into `snippet` when no
+/// snippet exists and drop the field — the CLI never outputs `description`.
+fn fold_description_into_snippet(data: &mut Value) {
+    let Some(results) = data["results"].as_array_mut() else { return };
+    for result in results {
+        let Some(obj) = result.as_object_mut() else { continue };
+        let Some(desc) = obj.remove("description") else { continue };
+        let has_snippet = obj.get("snippet").and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+        if !has_snippet && desc.as_str().is_some_and(|d| !d.is_empty()) {
+            obj.insert("snippet".into(), desc);
+        }
+    }
+}
+
 fn print_yaml(data: &Value) {
     match serde_yaml::to_string(data) {
         Ok(yaml) => print!("{}", yaml),
@@ -276,7 +290,8 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
     let api_key = key_override(api_key);
     let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
-        Ok(data) => {
+        Ok(mut data) => {
+            fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
                 if let Some(results) = data["results"].as_array() {
@@ -330,7 +345,10 @@ pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
     let api_key = key_override(api_key);
     let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
-        Ok(data) => {
+        Ok(mut data) => {
+            if let Some(obj) = data.as_object_mut() {
+                obj.remove("description");
+            }
             if human {
                 ui::header("keenable fetch");
                 let title = data["title"].as_str().unwrap_or("Untitled");
