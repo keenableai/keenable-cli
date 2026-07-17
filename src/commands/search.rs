@@ -66,11 +66,20 @@ fn endpoint(path: &str, authenticated: bool) -> String {
 /// Older servers still return `description`; fold it into `snippet` when no
 /// snippet exists and drop the field — the CLI never outputs `description`.
 fn fold_description_into_snippet(data: &mut Value) {
-    let Some(results) = data["results"].as_array_mut() else { return };
+    let Some(results) = data["results"].as_array_mut() else {
+        return;
+    };
     for result in results {
-        let Some(obj) = result.as_object_mut() else { continue };
-        let Some(desc) = obj.remove("description") else { continue };
-        let has_snippet = obj.get("snippet").and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+        let Some(obj) = result.as_object_mut() else {
+            continue;
+        };
+        let Some(desc) = obj.remove("description") else {
+            continue;
+        };
+        let has_snippet = obj
+            .get("snippet")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
         if !has_snippet && desc.as_str().is_some_and(|d| !d.is_empty()) {
             obj.insert("snippet".into(), desc);
         }
