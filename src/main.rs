@@ -44,7 +44,9 @@ enum ConfigAction {
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
-    #[command(after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY")]
+    #[command(
+        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY"
+    )]
     Login {
         /// API key to save directly (skips browser login)
         #[arg(long = "api-key")]
@@ -56,7 +58,10 @@ enum Commands {
     Logout,
 
     /// Configure Keenable MCP in your AI clients
-    #[command(name = "configure-mcp", after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --cursor   Configure specific clients\n  keenable configure-mcp --all --yes      Configure without confirmation (CI, agents)")]
+    #[command(
+        name = "configure-mcp",
+        after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --cursor   Configure specific clients\n  keenable configure-mcp --all --yes      Configure without confirmation (CI, agents)"
+    )]
     ConfigureMcp {
         /// Configure all detected clients
         #[arg(long)]
@@ -88,7 +93,9 @@ enum Commands {
     },
 
     /// Remove Keenable MCP from your AI clients and restore defaults
-    #[command(after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)")]
+    #[command(
+        after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)"
+    )]
     Reset {
         /// Reset all configured clients
         #[arg(long)]
@@ -120,14 +127,18 @@ enum Commands {
     },
 
     /// View or modify CLI configuration
-    #[command(after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set <key> <value>\n\nGet a single value:\n  keenable config get <key>\n\nRemove a value:\n  keenable config unset <key>\n\nRun `keenable config` to see the available keys and their allowed values.")]
+    #[command(
+        after_help = "View all settings:\n  keenable config\n\nSet a value:\n  keenable config set <key> <value>\n\nGet a single value:\n  keenable config get <key>\n\nRemove a value:\n  keenable config unset <key>\n\nRun `keenable config` to see the available keys and their allowed values."
+    )]
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key")]
+    #[command(
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
+    )]
     Search {
         /// Search query
         query: String,
@@ -166,7 +177,9 @@ enum Commands {
     },
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key")]
+    #[command(
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key"
+    )]
     Fetch {
         /// URL to fetch
         url: String,
@@ -181,7 +194,9 @@ enum Commands {
     },
 
     /// Submit search relevance feedback (outputs YAML by default, use -p for pretty output)
-    #[command(after_help = "Works without login (free tier). Log in for higher rate limits.\n\nScore format: url=score=comment (0=irrelevant, 5=perfect; comment is required)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\"")]
+    #[command(
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nScore format: url=score=comment (0=irrelevant, 5=perfect; comment is required)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\""
+    )]
     Feedback {
         /// Original search query
         query: String,
@@ -201,7 +216,6 @@ enum Commands {
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
-
 }
 
 fn collect_client_flags(
@@ -240,9 +254,8 @@ async fn main() {
         Commands::Daemon => false,
         _ => true,
     };
-    let update_handle = wants_update_check.then(|| {
-        tokio::spawn(async { update::check_for_update().await })
-    });
+    let update_handle =
+        wants_update_check.then(|| tokio::spawn(async { update::check_for_update().await }));
 
     match cli.command {
         Commands::Login { api_key } => {
@@ -252,32 +265,63 @@ async fn main() {
             commands::login::logout();
         }
         Commands::ConfigureMcp {
-            all, yes, claude_code, cursor, windsurf, codex, opencode,
+            all,
+            yes,
+            claude_code,
+            cursor,
+            windsurf,
+            codex,
+            opencode,
         } => {
             let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::configure_mcp::configure_mcp(flags, yes).await;
         }
         Commands::Reset {
-            all, yes, claude_code, cursor, windsurf, codex, opencode,
+            all,
+            yes,
+            claude_code,
+            cursor,
+            windsurf,
+            codex,
+            opencode,
         } => {
             let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
             commands::reset::reset(flags, yes);
         }
-        Commands::Config { action } => {
-            match action {
-                None => commands::config_cmd::config_view(),
-                Some(ConfigAction::Set { key, value }) => commands::config_cmd::config_set(&key, &value),
-                Some(ConfigAction::Get { key }) => commands::config_cmd::config_get(&key),
-                Some(ConfigAction::Unset { key }) => commands::config_cmd::config_unset(&key),
+        Commands::Config { action } => match action {
+            None => commands::config_cmd::config_view(),
+            Some(ConfigAction::Set { key, value }) => {
+                commands::config_cmd::config_set(&key, &value)
             }
-        }
-        Commands::Search { query, mode, site, acquired_after, acquired_before, published_after, published_before, pretty, api_key } => {
+            Some(ConfigAction::Get { key }) => commands::config_cmd::config_get(&key),
+            Some(ConfigAction::Unset { key }) => commands::config_cmd::config_unset(&key),
+        },
+        Commands::Search {
+            query,
+            mode,
+            site,
+            acquired_after,
+            acquired_before,
+            published_after,
+            published_before,
+            pretty,
+            api_key,
+        } => {
             let filters = commands::search::SearchFilters {
-                site, acquired_after, acquired_before, published_after, published_before,
+                site,
+                acquired_after,
+                acquired_before,
+                published_after,
+                published_before,
             };
-            commands::search::search(&query, mode.as_deref(), filters, pretty, api_key.as_deref()).await;
+            commands::search::search(&query, mode.as_deref(), filters, pretty, api_key.as_deref())
+                .await;
         }
-        Commands::Fetch { url, pretty, api_key } => {
+        Commands::Fetch {
+            url,
+            pretty,
+            api_key,
+        } => {
             commands::search::fetch(&url, pretty, api_key.as_deref()).await;
         }
         Commands::Feedback {
@@ -294,15 +338,15 @@ async fn main() {
     }
 
     // Show update notification if available
-    if let Some(handle) = update_handle {
-        if let Ok(Some(version)) = handle.await {
-            use colored::Colorize;
-            eprintln!(
-                "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
-                "Update:".yellow().bold(),
-                version,
-                update::install_hint().cyan()
-            );
-        }
+    if let Some(handle) = update_handle
+        && let Ok(Some(version)) = handle.await
+    {
+        use colored::Colorize;
+        eprintln!(
+            "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
+            "Update:".yellow().bold(),
+            version,
+            update::install_hint().cyan()
+        );
     }
 }

@@ -23,6 +23,11 @@ on:
         description: "CLI version to test (e.g. 0.1.16). Empty = latest release."
         required: false
         default: ""
+      test_alert:
+        description: "Also fire the Slack alert on this manual run if e2e fails (for testing the notify job)."
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: "0 6 * * *"
 
@@ -120,6 +125,11 @@ jobs:
         shell: bash
         env:
           KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          # Tag every request from the suite as e2e traffic via the
+          # X-Keenable-Title header (logged as app_title), so first-party CI
+          # calls can be told apart from real CLI users (app_title=keenable-cli)
+          # in Grafana. The CLI reads KEENABLE_APP_TITLE; the daemon inherits it.
+          KEENABLE_APP_TITLE: keenable-cli-e2e
           # Empty on Linux (full suite); "not semantic and not latency" on the
           # macOS/Windows legs so the OS-independent live-index checks run once.
           MARKERS: ${{ matrix.markers }}
@@ -132,3 +142,37 @@ jobs:
           args=(-v -ra --color=yes)
           [ -n "$MARKERS" ] && args+=(-m "$MARKERS")
           uv run --project tests/e2e pytest tests/e2e "${args[@]}"
+
+  # Alert Slack when any e2e leg does not succeed. Fires on the nightly
+  # schedule (manual dispatch is interactive, so the operator already sees the
+  # result) — or on a manual run started with test_alert=true, to verify the
+  # notify path on demand without waiting for the cron. `result != 'success'`
+  # covers both failures and cancellations (the 30-min job timeout cancels
+  # rather than fails), so timed-out nightly runs still alert. Needs the
+  # SLACK_WEBHOOK_URL repo secret (a Slack Incoming Webhook URL; the target
+  # channel is fixed by the webhook). Self-skips if the secret is unset.
+  notify:
+    name: notify-slack-on-failure
+    needs: e2e
+    if: ${{ always() && needs.e2e.result != 'success' && (github.event_name == 'schedule' || inputs.test_alert) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post failure to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL not set — skipping Slack alert"
+            exit 0
+          fi
+          # Build the payload with jq so RUN_URL/REPO are JSON-escaped, never
+          # interpolated into the shell or the JSON string by hand.
+          payload="$(jq -n \
+            --arg repo "$REPO" \
+            --arg url "$RUN_URL" \
+            '{text: ("🔴 Nightly e2e failed for *" + $repo + "*\n<" + $url + "|View run>")}')"
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 \
+            -X POST -H 'Content-Type: application/json' \
+            -d "$payload" "$SLACK_WEBHOOK_URL"

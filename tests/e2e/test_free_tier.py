@@ -10,6 +10,12 @@ All calls use key=False (the conftest Runner also strips KEENABLE_API_KEY from
 the env), so a fresh home means a genuinely unauthenticated request. Public
 endpoints are IP-rate-limited, so each test tolerates a 429 carrying the
 free-tier login hint instead of asserting results unconditionally.
+
+Public endpoints also require the X-Keenable-Title header (the CLI sends it on
+every request, logged server-side as app_title). A token-less call must
+therefore never fail with "Missing app identifier" — if it does, the CLI has
+stopped sending the header and the free-tier flow is broken, so the tests
+assert against that error explicitly.
 """
 
 import json
@@ -25,6 +31,9 @@ def test_free_tier_search_hits_public_endpoint(kn_fresh):
     else:
         data = res.yaml()
         assert "error" in data
+        # The CLI sends the mandatory X-Keenable-Title header, so the only
+        # tolerated failure is an IP rate-limit — never a missing app identifier.
+        assert data["error"] != "Missing app identifier", data
         # Unauthenticated 429 invites login to raise limits (the authenticated
         # wording is "switch accounts" instead).
         hint = data.get("hint", "")
@@ -39,6 +48,7 @@ def test_free_tier_fetch_hits_public_endpoint(kn_fresh):
     else:
         data = res.yaml()
         assert "error" in data
+        assert data["error"] != "Missing app identifier", data
         assert "keenable login" in data.get("hint", "")
 
 
