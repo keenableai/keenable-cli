@@ -63,6 +63,29 @@ fn endpoint(path: &str, authenticated: bool) -> String {
     }
 }
 
+/// Older servers still return `description`; fold it into `snippet` when no
+/// snippet exists and drop the field — the CLI never outputs `description`.
+fn fold_description_into_snippet(data: &mut Value) {
+    let Some(results) = data["results"].as_array_mut() else {
+        return;
+    };
+    for result in results {
+        let Some(obj) = result.as_object_mut() else {
+            continue;
+        };
+        let Some(desc) = obj.remove("description") else {
+            continue;
+        };
+        let has_snippet = obj
+            .get("snippet")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        if !has_snippet && desc.as_str().is_some_and(|d| !d.is_empty()) {
+            obj.insert("snippet".into(), desc);
+        }
+    }
+}
+
 fn print_yaml(data: &Value) {
     match serde_yaml::to_string(data) {
         Ok(yaml) => print!("{}", yaml),
@@ -308,7 +331,8 @@ pub async fn search(
     let api_key = key_override(api_key);
     let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
-        Ok(data) => {
+        Ok(mut data) => {
+            fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
                 if let Some(results) = data["results"].as_array() {
@@ -320,16 +344,17 @@ pub async fn search(
                     for (i, result) in results.iter().enumerate() {
                         let title = result["title"].as_str().unwrap_or("Untitled");
                         let url = result["url"].as_str().unwrap_or("");
-                        let description = result["description"].as_str().unwrap_or("");
-                        let desc_truncated: String = description.chars().take(200).collect();
+                        let snippet = result["snippet"].as_str().unwrap_or("");
+                        let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let snippet_truncated: String = snippet_flat.chars().take(200).collect();
                         let published = result["published_at"].as_str().unwrap_or("");
                         let acquired = result["acquired_at"].as_str().unwrap_or("");
 
                         let num = format!("{:>2}.", i + 1).dimmed();
                         eprintln!("   {} {}", num, title.bold());
                         eprintln!("      {}", url.cyan());
-                        if !desc_truncated.is_empty() {
-                            eprintln!("      {}", desc_truncated.dimmed());
+                        if !snippet_truncated.is_empty() {
+                            eprintln!("      {}", snippet_truncated.dimmed());
                         }
                         if !published.is_empty() || !acquired.is_empty() {
                             let mut dates = Vec::new();
@@ -365,7 +390,10 @@ pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
     let api_key = key_override(api_key);
     let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
-        Ok(data) => {
+        Ok(mut data) => {
+            if let Some(obj) = data.as_object_mut() {
+                obj.remove("description");
+            }
             if human {
                 ui::header("keenable fetch");
                 let title = data["title"].as_str().unwrap_or("Untitled");

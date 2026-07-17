@@ -7,7 +7,7 @@ import pytest
 from conftest import SEARCH_QUERY, host_of, host_under, parse_ts, results_of, search_results, utc
 
 # published_at is omitted (not nulled) for pages with no known publish date
-RESULT_FIELDS = ("url", "title", "description", "snippet", "acquired_at")
+RESULT_FIELDS = ("url", "title", "snippet", "acquired_at")
 
 
 # --- 2.1 core ---
@@ -20,6 +20,7 @@ def test_basic_search(basic_search):
     for r in results:
         for field in RESULT_FIELDS:
             assert field in r, f"result missing {field}: {list(r)}"
+        assert "description" not in r
 
 
 def test_pretty_output(kn):

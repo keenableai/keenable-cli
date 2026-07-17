@@ -18,7 +18,7 @@ pytestmark = pytest.mark.semantic
 
 
 def blob(result) -> str:
-    return " ".join(str(result.get(f) or "") for f in ("title", "description", "snippet"))
+    return " ".join(str(result.get(f) or "") for f in ("title", "snippet"))
 
 
 def test_gold_fact_mozart(kn):
