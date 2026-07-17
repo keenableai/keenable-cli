@@ -288,17 +288,12 @@ pub async fn search(query: &str, mode: Option<&str>, filters: SearchFilters, hum
                     for (i, result) in results.iter().enumerate() {
                         let title = result["title"].as_str().unwrap_or("Untitled");
                         let url = result["url"].as_str().unwrap_or("");
-                        let description = result["description"].as_str().unwrap_or("");
-                        let desc_truncated: String = description.chars().take(200).collect();
                         let published = result["published_at"].as_str().unwrap_or("");
                         let acquired = result["acquired_at"].as_str().unwrap_or("");
 
                         let num = format!("{:>2}.", i + 1).dimmed();
                         eprintln!("   {} {}", num, title.bold());
                         eprintln!("      {}", url.cyan());
-                        if !desc_truncated.is_empty() {
-                            eprintln!("      {}", desc_truncated.dimmed());
-                        }
                         if !published.is_empty() || !acquired.is_empty() {
                             let mut dates = Vec::new();
                             if !published.is_empty() { dates.push(format!("published: {}", published)); }
