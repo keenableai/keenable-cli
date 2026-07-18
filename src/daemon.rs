@@ -19,6 +19,22 @@ impl DaemonRequest {
     pub fn idempotent(&self) -> bool {
         self.command != "feedback"
     }
+
+    /// Query params for GET /v1/fetch, shared by the daemon and the direct
+    /// HTTP path so fetch params can't drift between them. None when `urls`
+    /// is missing.
+    pub fn fetch_query(&self) -> Option<Vec<(&str, &str)>> {
+        let mut query: Vec<(&str, &str)> = self
+            .urls
+            .as_ref()?
+            .iter()
+            .map(|u| ("url", u.as_str()))
+            .collect();
+        if self.live {
+            query.push(("live", "true"));
+        }
+        Some(query)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -276,15 +292,10 @@ mod platform {
                 .await
             }
             "fetch" => {
-                let urls = match &req.urls {
-                    Some(u) => u,
+                let query = match req.fetch_query() {
+                    Some(q) => q,
                     None => return err_response("Missing urls"),
                 };
-                let mut query: Vec<(&str, &str)> =
-                    urls.iter().map(|u| ("url", u.as_str())).collect();
-                if req.live {
-                    query.push(("live", "true"));
-                }
                 send_api(
                     client
                         .get(endpoint("/v1/fetch", authenticated))
