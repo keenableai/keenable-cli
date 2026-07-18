@@ -11,6 +11,14 @@ def test_fetch_single_url(kn):
     assert "description" not in data
 
 
+def test_fetch_live(kn):
+    res = kn("fetch", "https://example.com", "--live")
+    assert res.code == 0
+    data = res.yaml()
+    assert data["title"] == "Example Domain"
+    assert "# Example Domain" in data["content"]
+
+
 def test_pretty_fetch(kn):
     res = kn("fetch", "https://example.com", "-p")
     assert res.code == 0

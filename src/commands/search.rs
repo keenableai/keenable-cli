@@ -139,9 +139,13 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         }
         "fetch" => {
             let urls = req.urls.as_ref().ok_or_else(|| missing("urls"))?;
+            let mut query: Vec<(&str, &str)> = urls.iter().map(|u| ("url", u.as_str())).collect();
+            if req.live {
+                query.push(("live", "true"));
+            }
             let resp = client
                 .get(endpoint("/v1/fetch", authenticated))
-                .query(&urls.iter().map(|u| ("url", u)).collect::<Vec<_>>())
+                .query(&query)
                 .send()
                 .await
                 .map_err(send_err)?;
@@ -326,6 +330,7 @@ pub async fn search(
         command: "search".to_string(),
         urls: None,
         body: Some(body),
+        live: false,
     };
 
     let api_key = key_override(api_key);
@@ -380,11 +385,12 @@ pub async fn search(
     }
 }
 
-pub async fn fetch(url: &str, human: bool, api_key: Option<&str>) {
+pub async fn fetch(url: &str, live: bool, human: bool, api_key: Option<&str>) {
     let req = DaemonRequest {
         command: "fetch".to_string(),
         urls: Some(vec![url.to_string()]),
         body: None,
+        live,
     };
 
     let api_key = key_override(api_key);
@@ -460,6 +466,7 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
         command: "feedback".to_string(),
         urls: None,
         body: Some(body),
+        live: false,
     };
 
     let api_key = key_override(api_key);

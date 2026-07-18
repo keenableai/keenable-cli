@@ -61,6 +61,7 @@ Works without login (free tier). Log in for higher rate limits.
 ```bash
 keenable fetch https://example.com      # Fetch page content
 keenable fetch https://example.com -p   # Pretty output
+keenable fetch https://example.com --live   # Fetch the live page (skip cache)
 ```
 
 ### Authentication
