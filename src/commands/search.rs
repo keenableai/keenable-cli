@@ -138,11 +138,7 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
             handle_response(resp).await
         }
         "fetch" => {
-            let urls = req.urls.as_ref().ok_or_else(|| missing("urls"))?;
-            let mut query: Vec<(&str, &str)> = urls.iter().map(|u| ("url", u.as_str())).collect();
-            if req.live {
-                query.push(("live", "true"));
-            }
+            let query = req.fetch_query().ok_or_else(|| missing("urls"))?;
             let resp = client
                 .get(endpoint("/v1/fetch", authenticated))
                 .query(&query)
