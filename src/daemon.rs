@@ -8,6 +8,9 @@ pub struct DaemonRequest {
     pub urls: Option<Vec<String>>,
     #[serde(default)]
     pub body: Option<Value>,
+    /// Fetch only: request live content instead of the cached copy.
+    #[serde(default)]
+    pub live: bool,
 }
 
 impl DaemonRequest {
@@ -277,10 +280,15 @@ mod platform {
                     Some(u) => u,
                     None => return err_response("Missing urls"),
                 };
+                let mut query: Vec<(&str, &str)> =
+                    urls.iter().map(|u| ("url", u.as_str())).collect();
+                if req.live {
+                    query.push(("live", "true"));
+                }
                 send_api(
                     client
                         .get(endpoint("/v1/fetch", authenticated))
-                        .query(&urls.iter().map(|u| ("url", u)).collect::<Vec<_>>()),
+                        .query(&query),
                 )
                 .await
             }
