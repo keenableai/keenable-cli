@@ -101,8 +101,11 @@ def test_acquired_after(kn):
 
 
 def test_acquired_before(kn):
+    # A date-only cutoff is inclusive of that whole day (a bare 2026-05-01 keeps
+    # 2026-05-01T14:31Z), so the bound is the start of the next day. Pass a full
+    # timestamp to cut at an exact instant.
     for r in _non_empty_results(kn, "AI news", "--acquired-before", "2026-05-01"):
-        assert parse_ts(r["acquired_at"]) <= utc(2026, 5, 1), r["url"]
+        assert parse_ts(r["acquired_at"]) < utc(2026, 5, 2), r["url"]
 
 
 def test_published_after(kn):
@@ -112,9 +115,10 @@ def test_published_after(kn):
 
 
 def test_published_before(kn):
+    # Same whole-day-inclusive cutoff as test_acquired_before.
     for r in _non_empty_results(kn, "rust async", "--published-before", "2024-01-01"):
         if r.get("published_at") is not None:
-            assert parse_ts(r["published_at"]) <= utc(2024, 1, 1), r["url"]
+            assert parse_ts(r["published_at"]) < utc(2024, 1, 2), r["url"]
 
 
 def test_relative_date(kn):
