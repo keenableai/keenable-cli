@@ -47,8 +47,10 @@ def test_dead_page(kn):
     assert res.code == 1
     data = res.yaml()
     # The backend rejects an unfetchable page with either a 404 ("Not found")
-    # or a 422 ("Unprocessable entity") depending on how far upstream got —
-    # both are valid "this page can't be fetched" outcomes.
+    # or a 422 ("Unprocessable entity"); both are valid "this page can't be
+    # fetched" outcomes. As of 2026-07-25 it always answers 422, even for a
+    # domain that doesn't resolve, so this can't assert which one — see the
+    # open backend bug on 422 being a catch-all.
     assert data["error"] in ("Not found", "Unprocessable entity")
 
 
