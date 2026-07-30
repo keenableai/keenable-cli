@@ -19,6 +19,16 @@ def test_fetch_live(kn):
     assert "# Example Domain" in data["content"]
 
 
+def test_fetch_prompt(kn):
+    res = kn("fetch", "https://example.com", "--prompt", "What is this page's domain name? Answer with the bare domain only.")
+    assert res.code == 0
+    data = res.yaml()
+    assert data["url"].startswith("https://example.com")
+    # LLM extraction replaces the full page with the instruction's output.
+    assert "example.com" in data["content"].lower()
+    assert "This domain is for use in illustrative examples" not in data["content"]
+
+
 def test_pretty_fetch(kn):
     res = kn("fetch", "https://example.com", "-p")
     assert res.code == 0

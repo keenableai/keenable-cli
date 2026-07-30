@@ -11,6 +11,10 @@ pub struct DaemonRequest {
     /// Fetch only: request live content instead of the cached copy.
     #[serde(default)]
     pub live: bool,
+    /// Fetch only: LLM extraction instruction — the response content is the
+    /// instruction's output instead of the full page.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 impl DaemonRequest {
@@ -32,6 +36,9 @@ impl DaemonRequest {
             .collect();
         if self.live {
             query.push(("live", "true"));
+        }
+        if let Some(p) = &self.prompt {
+            query.push(("prompt", p.as_str()));
         }
         Some(query)
     }

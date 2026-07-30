@@ -62,6 +62,7 @@ Works without login (free tier). Log in for higher rate limits.
 keenable fetch https://example.com      # Fetch page content
 keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://example.com --live   # Fetch the live page (skip cache)
+keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
 ```
 
 ### Authentication
