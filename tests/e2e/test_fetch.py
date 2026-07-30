@@ -1,5 +1,7 @@
 """T-23..T-29 — fetch. Single-URL by design since 0.1.16 (clap rejects extras)."""
 
+import pytest
+
 
 def test_fetch_single_url(kn):
     res = kn("fetch", "https://example.com")
@@ -19,6 +21,7 @@ def test_fetch_live(kn):
     assert "# Example Domain" in data["content"]
 
 
+@pytest.mark.semantic  # asserts live LLM extraction output
 def test_fetch_prompt(kn):
     res = kn("fetch", "https://example.com", "--prompt", "What is this page's domain name? Answer with the bare domain only.")
     assert res.code == 0

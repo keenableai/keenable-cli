@@ -324,10 +324,8 @@ pub async fn search(
 
     let req = DaemonRequest {
         command: "search".to_string(),
-        urls: None,
         body: Some(body),
-        live: false,
-        prompt: None,
+        ..Default::default()
     };
 
     let api_key = key_override(api_key);
@@ -385,16 +383,16 @@ pub async fn search(
 pub async fn fetch(
     url: &str,
     live: bool,
-    prompt: Option<&str>,
+    prompt: Option<String>,
     human: bool,
     api_key: Option<&str>,
 ) {
     let req = DaemonRequest {
         command: "fetch".to_string(),
         urls: Some(vec![url.to_string()]),
-        body: None,
         live,
-        prompt: prompt.map(str::to_string),
+        prompt,
+        ..Default::default()
     };
 
     let api_key = key_override(api_key);
@@ -468,10 +466,8 @@ pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Opti
 
     let req = DaemonRequest {
         command: "feedback".to_string(),
-        urls: None,
         body: Some(body),
-        live: false,
-        prompt: None,
+        ..Default::default()
     };
 
     let api_key = key_override(api_key);

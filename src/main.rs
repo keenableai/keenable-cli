@@ -333,8 +333,7 @@ async fn main() {
             pretty,
             api_key,
         } => {
-            commands::search::fetch(&url, live, prompt.as_deref(), pretty, api_key.as_deref())
-                .await;
+            commands::search::fetch(&url, live, prompt, pretty, api_key.as_deref()).await;
         }
         Commands::Feedback {
             query,
