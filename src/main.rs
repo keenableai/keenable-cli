@@ -178,7 +178,7 @@ enum Commands {
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key"
     )]
     Fetch {
         /// URL to fetch
@@ -187,6 +187,11 @@ enum Commands {
         /// Fetch the live page instead of the cached copy
         #[arg(long)]
         live: bool,
+
+        /// Extraction instruction: an LLM reads the page and returns only
+        /// this instruction's output instead of the full page (max 2000 chars)
+        #[arg(long)]
+        prompt: Option<String>,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -324,10 +329,11 @@ async fn main() {
         Commands::Fetch {
             url,
             live,
+            prompt,
             pretty,
             api_key,
         } => {
-            commands::search::fetch(&url, live, pretty, api_key.as_deref()).await;
+            commands::search::fetch(&url, live, prompt, pretty, api_key.as_deref()).await;
         }
         Commands::Feedback {
             query,
