@@ -23,12 +23,19 @@ def test_fetch_live(kn):
 
 @pytest.mark.semantic  # asserts live LLM extraction output
 def test_fetch_prompt(kn):
-    res = kn("fetch", "https://example.com", "--prompt", "What is this page's domain name? Answer with the bare domain only.")
+    # Ask for something the page text literally states. The original prompt asked
+    # for the domain name, which appears nowhere in the markdown — the model has
+    # to infer it from the URL, and once answered "The content does not contain
+    # the page's domain name." That reply was still valid extraction output, so
+    # the test failed on a detail it was never meant to pin down.
+    res = kn("fetch", "https://example.com", "--prompt", "Answer with the exact page title and nothing else.")
     assert res.code == 0
     data = res.yaml()
     assert data["url"].startswith("https://example.com")
-    # LLM extraction replaces the full page with the instruction's output.
-    assert "example.com" in data["content"].lower()
+    # LLM extraction replaces the full page with the instruction's output. The
+    # second assert is the load-bearing one: a stale daemon that drops `prompt`
+    # returns the full page with exit code 0.
+    assert "example domain" in data["content"].lower()
     assert "This domain is for use in illustrative examples" not in data["content"]
 
 
