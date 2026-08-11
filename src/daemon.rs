@@ -15,6 +15,9 @@ pub struct DaemonRequest {
     /// instruction's output instead of the full page.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Fetch only: content-length cap; the API defaults to 50000 when unset.
+    #[serde(default)]
+    pub max_chars: Option<u64>,
 }
 
 impl DaemonRequest {
@@ -27,18 +30,21 @@ impl DaemonRequest {
     /// Query params for GET /v1/fetch, shared by the daemon and the direct
     /// HTTP path so fetch params can't drift between them. None when `urls`
     /// is missing.
-    pub fn fetch_query(&self) -> Option<Vec<(&str, &str)>> {
-        let mut query: Vec<(&str, &str)> = self
+    pub fn fetch_query(&self) -> Option<Vec<(&str, String)>> {
+        let mut query: Vec<(&str, String)> = self
             .urls
             .as_ref()?
             .iter()
-            .map(|u| ("url", u.as_str()))
+            .map(|u| ("url", u.clone()))
             .collect();
         if self.live {
-            query.push(("live", "true"));
+            query.push(("live", "true".to_string()));
         }
         if let Some(p) = &self.prompt {
-            query.push(("prompt", p.as_str()));
+            query.push(("prompt", p.clone()));
+        }
+        if let Some(m) = self.max_chars {
+            query.push(("max_chars", m.to_string()));
         }
         Some(query)
     }

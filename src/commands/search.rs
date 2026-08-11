@@ -384,6 +384,7 @@ pub async fn fetch(
     url: &str,
     live: bool,
     prompt: Option<String>,
+    max_chars: Option<u64>,
     human: bool,
     api_key: Option<&str>,
 ) {
@@ -392,6 +393,7 @@ pub async fn fetch(
         urls: Some(vec![url.to_string()]),
         live,
         prompt,
+        max_chars,
         ..Default::default()
     };
 

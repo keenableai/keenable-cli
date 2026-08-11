@@ -63,6 +63,7 @@ keenable fetch https://example.com      # Fetch page content
 keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://example.com --live   # Fetch the live page (skip cache)
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
+keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char content cap
 ```
 
 ### Authentication
