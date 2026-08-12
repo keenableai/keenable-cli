@@ -39,6 +39,21 @@ def test_fetch_prompt(kn):
     assert "This domain is for use in illustrative examples" not in data["content"]
 
 
+def test_fetch_max_chars(kn):
+    res = kn("fetch", "https://example.com", "--max-chars", "50")
+    assert res.code == 0
+    data = res.yaml()
+    # The truncation disclaimer is the load-bearing assert: a stale daemon
+    # that drops `max_chars` returns the full page with exit code 0.
+    assert "truncated to stay below 50 characters" in data["content"]
+
+
+def test_fetch_max_chars_rejects_zero(kn):
+    res = kn("fetch", "https://example.com", "--max-chars", "0")
+    assert res.code == 2
+    assert "invalid value" in res.err
+
+
 def test_pretty_fetch(kn):
     res = kn("fetch", "https://example.com", "-p")
     assert res.code == 0

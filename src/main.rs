@@ -178,7 +178,7 @@ enum Commands {
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key"
     )]
     Fetch {
         /// URL to fetch
@@ -192,6 +192,10 @@ enum Commands {
         /// this instruction's output instead of the full page (max 2000 chars)
         #[arg(long)]
         prompt: Option<String>,
+
+        /// Truncate content at this many characters (default: 50000)
+        #[arg(long = "max-chars", value_parser = clap::value_parser!(u64).range(1..))]
+        max_chars: Option<u64>,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -330,10 +334,12 @@ async fn main() {
             url,
             live,
             prompt,
+            max_chars,
             pretty,
             api_key,
         } => {
-            commands::search::fetch(&url, live, prompt, pretty, api_key.as_deref()).await;
+            commands::search::fetch(&url, live, prompt, max_chars, pretty, api_key.as_deref())
+                .await;
         }
         Commands::Feedback {
             query,
