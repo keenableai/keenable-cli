@@ -47,6 +47,28 @@ def test_result_count(basic_search):
     print(f"\nResult count for 'rust async patterns': {count}")
 
 
+def test_snippet_max_length(kn):
+    def avg_snippet(data):
+        lens = [len(r.get("snippet") or "") for r in results_of(data)]
+        return sum(lens) / len(lens)
+
+    short = kn("search", SEARCH_QUERY, "--snippet-max-length", "180").yaml()
+    long = kn("search", SEARCH_QUERY, "--snippet-max-length", "5000").yaml()
+    # Caps overshoot by ~10% (applied per-fragment upstream), so assert loose
+    # bounds far apart instead of exact limits. A dropped param would give
+    # both runs the same default length and fail one of the two.
+    assert avg_snippet(short) < 500
+    assert avg_snippet(long) > 1000
+
+
+def test_snippet_max_length_out_of_range(kn):
+    res = kn("search", SEARCH_QUERY, "--snippet-max-length", "50")
+    assert res.code == 1
+    data = res.yaml()
+    assert data["error"] == "Invalid parameter"
+    assert "snippet_max_length" in data["message"]
+
+
 # --- 2.2 modes ---
 
 def test_mode_realtime(kn):

@@ -51,6 +51,7 @@ keenable search "query" -p                                 # Pretty output (for 
 keenable search "AI news" --site techcrunch.com            # Restrict to site
 keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
+keenable search "query" --snippet-max-length 2000          # Longer snippets (180-10000)
 keenable search "query" --api-key KEY                      # Use a specific API key
 ```
 
