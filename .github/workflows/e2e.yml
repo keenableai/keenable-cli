@@ -133,9 +133,6 @@ jobs:
           # Empty on Linux (full suite); "not semantic and not latency" on the
           # macOS/Windows legs so the OS-independent live-index checks run once.
           MARKERS: ${{ matrix.markers }}
-          # KEENABLE_E2E_WRITE_FEEDBACK is deliberately NOT set: the
-          # success-path feedback tests persist synthetic relevance data and
-          # are opt-in only (run them locally or on a staging tenant).
         run: |
           # The shell-installer test and daemon tests self-skip on Windows via
           # pytest skipif, so the same invocation works on every platform.

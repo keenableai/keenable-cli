@@ -18,7 +18,7 @@ export KEENABLE_BIN=./target/release/keenable    # default: `keenable` on PATH
 uv run --project tests/e2e pytest tests/e2e -v
 ```
 
-Markers: `-m "not latency"` / `-m "not semantic"` / `-m "not install"` to skip the slow/live-index/download groups. Success-path feedback tests persist synthetic relevance data in the live API and are skipped unless `KEENABLE_E2E_WRITE_FEEDBACK=1` — never enable that on a schedule. CI (`.github/workflows/e2e.yml`) installs the latest released binary via the installer script and runs the full suite nightly and on manual dispatch (with an optional version input). Requires the `KEENABLE_API_KEY` repo secret.
+Markers: `-m "not latency"` / `-m "not semantic"` / `-m "not install"` to skip the slow/live-index/download groups. CI (`.github/workflows/e2e.yml`) installs the latest released binary via the installer script and runs the full suite nightly and on manual dispatch (with an optional version input). Requires the `KEENABLE_API_KEY` repo secret.
 
 The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Config & path resolution" below). CI runs the matrix across **Linux, macOS, and Windows**. Unix installs the binary via the shell installer; Windows via the PowerShell installer (`keenable-cli-installer.ps1`). The Unix-only daemon tests and the shell-installer test self-skip on Windows (`os.name != "posix"`), so the same `pytest tests/e2e` invocation works on every platform.
 
@@ -39,7 +39,7 @@ src/
     ide.rs             # Shared IDE definitions and config helpers
     configure_mcp.rs   # Client detection, MCP configuration, interactive setup
     reset.rs           # Remove Keenable MCP and restore defaults
-    search.rs          # search, fetch, feedback commands
+    search.rs          # search, fetch commands
 assets/
   login_success.html   # Styled OAuth callback success page
   login_failure.html   # Styled OAuth callback failure page
@@ -54,7 +54,7 @@ assets/
 
 ### Output Format
 
-All tool commands (`search`, `fetch`, `feedback`) output **YAML by default** (token-efficient for agents).
+All tool commands (`search`, `fetch`) output **YAML by default** (token-efficient for agents).
 Use `-p` / `--pretty` flag for pretty-printed human-readable output.
 Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct.
 
@@ -81,8 +81,8 @@ Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`
 
 ### Unauthenticated (Free Tier) Flow
 
-All tool commands (`search`, `fetch`, `feedback`) work without login. When no API key is configured:
-- Requests go to `/v1/{search,fetch,feedback}/public` endpoints (IP-based rate limits)
+All tool commands (`search`, `fetch`) work without login. When no API key is configured:
+- Requests go to `/v1/{search,fetch}/public` endpoints (IP-based rate limits)
 - The daemon starts with a bare HTTP client (no `X-API-Key` header)
 - Rate limit errors include a hint to run `keenable login` for higher limits
 

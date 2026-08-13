@@ -12,7 +12,7 @@ def test_version(kn):
 def test_help_lists_subcommands(kn):
     res = kn("--help", key=False)
     assert res.code == 0
-    for sub in ("login", "logout", "configure-mcp", "reset", "config", "search", "fetch", "feedback"):
+    for sub in ("login", "logout", "configure-mcp", "reset", "config", "search", "fetch"):
         assert sub in res.out, f"--help missing subcommand {sub}"
 
 
