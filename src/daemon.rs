@@ -18,12 +18,6 @@ pub struct DaemonRequest {
 }
 
 impl DaemonRequest {
-    /// Non-idempotent commands must not be retried after a failure that may
-    /// have already delivered them.
-    pub fn idempotent(&self) -> bool {
-        self.command != "feedback"
-    }
-
     /// Query params for GET /v1/fetch, shared by the daemon and the direct
     /// HTTP path so fetch params can't drift between them. None when `urls`
     /// is missing.
@@ -53,17 +47,11 @@ pub struct DaemonResponse {
     pub error: Option<String>,
 }
 
-/// Whether a daemon failure happened before or after the request may have
-/// been forwarded to the API — callers must not retry non-idempotent
-/// commands after a possible delivery.
+/// A daemon round-trip failed. Every command the daemon proxies is a read, so
+/// callers always retry directly — whether the failure happened before or
+/// after the request may have reached the API.
 pub enum DaemonError {
-    /// Failed before delivery — safe to retry directly.
     Unavailable,
-    /// The request may have reached the API before the failure.
-    // Only constructed by the Unix daemon implementation; the Windows stub
-    // never reaches a post-send failure.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    AfterSend(String),
 }
 
 // ── Unix implementation (Unix sockets) ──────────────────────────────────────
@@ -310,18 +298,6 @@ mod platform {
                 )
                 .await
             }
-            "feedback" => {
-                let body = match &req.body {
-                    Some(b) => b.clone(),
-                    None => return err_response("Missing body"),
-                };
-                send_api(
-                    client
-                        .post(endpoint("/v1/feedback", authenticated))
-                        .json(&body),
-                )
-                .await
-            }
             "ping" => DaemonResponse {
                 ok: true,
                 data: None,
@@ -423,17 +399,10 @@ mod platform {
         let mut lines = BufReader::new(reader).lines();
         // Wait longer than the daemon's own 60s HTTP timeout, so a slow
         // upstream yields the daemon's structured error instead of a client
-        // timeout (which callers would treat as "maybe delivered").
+        // timeout that falls back to a second, equally slow direct request.
         match tokio::time::timeout(Duration::from_secs(75), lines.next_line()).await {
-            Ok(Ok(Some(line))) => serde_json::from_str(&line)
-                .map_err(|e| DaemonError::AfterSend(format!("Invalid daemon response: {}", e))),
-            Ok(Ok(None)) => Err(DaemonError::AfterSend(
-                "Daemon closed connection".to_string(),
-            )),
-            Ok(Err(e)) => Err(DaemonError::AfterSend(format!("Read error: {}", e))),
-            Err(_) => Err(DaemonError::AfterSend(
-                "Daemon request timed out".to_string(),
-            )),
+            Ok(Ok(Some(line))) => serde_json::from_str(&line).map_err(|_| DaemonError::Unavailable),
+            _ => Err(DaemonError::Unavailable),
         }
     }
 }

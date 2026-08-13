@@ -2,7 +2,7 @@
 
 Everything else in the suite passes --api-key, which skips the daemon and goes
 direct HTTP. These tests run `keenable login --api-key` once, then exercise
-search/fetch/feedback WITHOUT the flag, so the stored key is resolved from
+search/fetch WITHOUT the flag, so the stored key is resolved from
 config and requests go through the background daemon. Logout flips the same
 commands to the public (free-tier) endpoints.
 """
@@ -21,7 +21,6 @@ from conftest import (
     Runner,
     requires_posix,
     search_results,
-    write_feedback,
 )
 
 
@@ -59,14 +58,6 @@ def test_login_then_fetch_via_daemon(logged_in):
     res = logged_in("fetch", "https://example.com", key=False)
     assert res.code == 0, res.out + res.err
     assert res.yaml()["title"] == "Example Domain"
-
-
-@write_feedback
-def test_login_then_feedback_via_daemon(logged_in):
-    assert logged_in("search", QUERY, key=False).code == 0
-    res = logged_in("feedback", QUERY, "https://tokio.rs=5=synthetic e2e feedback, ignore", key=False)
-    assert res.code == 0, res.out + res.err
-    assert res.yaml()["status"] == "ok"
 
 
 def test_logout_clears_key_and_falls_back_to_public(logged_in):

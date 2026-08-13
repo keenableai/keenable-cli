@@ -101,11 +101,9 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         match daemon::daemon_request(req).await {
             Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
             Ok(resp) => return Err(daemon_response_to_api_error(resp)),
-            // If a non-idempotent request may already have reached the
-            // API, surface the failure instead of re-sending.
-            Err(daemon::DaemonError::AfterSend(e)) if !req.idempotent() => {
-                return Err(ApiError::request_failed(e));
-            }
+            // Every command is a read, so a daemon failure is always safe to
+            // retry directly — regardless of whether it happened before or
+            // after the request may have reached the API.
             Err(_) => {} // Fall through to direct
         }
     }
@@ -142,16 +140,6 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
             let resp = client
                 .get(endpoint("/v1/fetch", authenticated))
                 .query(&query)
-                .send()
-                .await
-                .map_err(send_err)?;
-            handle_response(resp).await
-        }
-        "feedback" => {
-            let body = req.body.as_ref().ok_or_else(|| missing("body"))?;
-            let resp = client
-                .post(endpoint("/v1/feedback", authenticated))
-                .json(body)
                 .send()
                 .await
                 .map_err(send_err)?;
@@ -416,71 +404,6 @@ pub async fn fetch(
                 return;
             }
             print_yaml(&data);
-        }
-        Err(e) => handle_api_error(e, human, api_key),
-    }
-}
-
-pub async fn feedback(query: &str, scores: &[String], human: bool, api_key: Option<&str>) {
-    // The API requires a non-empty comment per entry, so reject comment-less
-    // entries up front
-    let mut relevance: Vec<Value> = Vec::new();
-    for entry in scores {
-        // URL may contain '=' (e.g. query params), so split from the right.
-        // Note this means the comment itself cannot contain '=' — its first
-        // '=' would be taken as the score separator.
-        let parts: Vec<&str> = entry.rsplitn(3, '=').collect();
-        // rsplitn reverses: [comment, score, url]
-        if parts.len() < 3 || parts[0].is_empty() || parts[2].is_empty() {
-            ui::error(&format!(
-                "Invalid format: {}. Expected url=score=comment (comment is required).",
-                entry
-            ));
-            eprintln!();
-            std::process::exit(1);
-        }
-        let (comment, score_str, url) = (parts[0], parts[1], parts[2]);
-
-        let score: u32 = match score_str.parse() {
-            Ok(s) if s <= 5 => s,
-            _ => {
-                ui::error(&format!(
-                    "Invalid score in '{}'. Must be 0-5. Expected url=score=comment — note the comment cannot contain '='.",
-                    entry
-                ));
-                eprintln!();
-                std::process::exit(1);
-            }
-        };
-        relevance.push(json!({
-            "url": url,
-            "score": score,
-            "comment": comment,
-        }));
-    }
-
-    let body = json!({
-        "query": query,
-        "relevance": relevance,
-    });
-
-    let req = DaemonRequest {
-        command: "feedback".to_string(),
-        body: Some(body),
-        ..Default::default()
-    };
-
-    let api_key = key_override(api_key);
-    let api_key = api_key.as_deref();
-    match execute(&req, api_key).await {
-        Ok(data) => {
-            if human {
-                ui::header("keenable feedback");
-                ui::success("Feedback submitted");
-                eprintln!();
-                return;
-            }
-            print_yaml(&json!({"status": "ok", "message": "Feedback submitted", "data": data}));
         }
         Err(e) => handle_api_error(e, human, api_key),
     }

@@ -25,16 +25,8 @@ import yaml
 BIN = os.environ.get("KEENABLE_BIN", "keenable")
 API_KEY = os.environ.get("KEENABLE_API_KEY", "")
 
-# Seeds basic_search; feedback tests must submit for this exact query
+# Seeds basic_search
 SEARCH_QUERY = "rust async patterns"
-
-# Successful feedback submissions persist synthetic relevance data in the live
-# API (no test tenant / dry-run mode exists), so they are opt-in only and must
-# never run on a schedule.
-write_feedback = pytest.mark.skipif(
-    os.environ.get("KEENABLE_E2E_WRITE_FEEDBACK") != "1",
-    reason="persists synthetic feedback to the live API — opt in with KEENABLE_E2E_WRITE_FEEDBACK=1",
-)
 
 # Tests that rely on Unix-only behavior — the Unix-domain-socket daemon and the
 # POSIX shell installer. On Windows the CLI stubs the daemon out and ships a
@@ -146,7 +138,7 @@ def mcp(tmp_path) -> Runner:
 
 @pytest.fixture(scope="session")
 def basic_search(kn) -> dict:
-    """T-01 search output, reused by schema/count/feedback tests."""
+    """T-01 search output, reused by schema/count tests."""
     res = kn("search", SEARCH_QUERY)
     assert res.code == 0, res.err
     return res.yaml()

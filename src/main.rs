@@ -202,26 +202,6 @@ enum Commands {
         api_key: Option<String>,
     },
 
-    /// Submit search relevance feedback (outputs YAML by default, use -p for pretty output)
-    #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nScore format: url=score=comment (0=irrelevant, 5=perfect; comment is required)\n\nExamples:\n  keenable feedback \"rust async\" \"https://tokio.rs=5=great overview\" \"https://unrelated.com=1=off topic\""
-    )]
-    Feedback {
-        /// Original search query
-        query: String,
-
-        /// URL=score=comment entries (score 0-5, comment required)
-        scores: Vec<String>,
-
-        /// Pretty-print output for humans instead of YAML
-        #[arg(short = 'p', long = "pretty")]
-        pretty: bool,
-
-        /// API key (overrides stored key)
-        #[arg(long = "api-key")]
-        api_key: Option<String>,
-    },
-
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
@@ -257,9 +237,7 @@ async fn main() {
     // Update check only for human-facing output: awaiting it would add up to
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
     let wants_update_check = match &cli.command {
-        Commands::Search { pretty, .. }
-        | Commands::Fetch { pretty, .. }
-        | Commands::Feedback { pretty, .. } => *pretty,
+        Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => *pretty,
         Commands::Daemon => false,
         _ => true,
     };
@@ -334,14 +312,6 @@ async fn main() {
             api_key,
         } => {
             commands::search::fetch(&url, live, prompt, pretty, api_key.as_deref()).await;
-        }
-        Commands::Feedback {
-            query,
-            scores,
-            pretty,
-            api_key,
-        } => {
-            commands::search::feedback(&query, &scores, pretty, api_key.as_deref()).await;
         }
         Commands::Daemon => {
             daemon::run_daemon().await;
