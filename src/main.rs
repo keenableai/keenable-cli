@@ -171,9 +171,8 @@ enum Commands {
         #[arg(long = "snippet-max-length")]
         snippet_max_length: Option<u64>,
 
-        /// Point-in-time search: only pages available on or before this
-        /// timestamp (ISO 8601, e.g. 2024-01-01T00:00:00Z, or relative e.g. 7d)
-        #[arg(long = "query-time")]
+        /// Point-in-time search: only pages available on or before this timestamp (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+        #[arg(long)]
         query_time: Option<String>,
 
         /// Pretty-print output for humans instead of YAML
@@ -337,13 +336,13 @@ async fn main() {
                 acquired_before,
                 published_after,
                 published_before,
+                query_time,
             };
             commands::search::search(
                 &query,
                 mode.as_deref(),
                 filters,
                 snippet_max_length,
-                query_time.as_deref(),
                 pretty,
                 api_key.as_deref(),
             )

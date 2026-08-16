@@ -155,6 +155,11 @@ def test_iso8601_datetime(kn):
         assert parse_ts(r["acquired_at"]) >= instant, r["url"]
 
 
+def test_query_time(kn):
+    for r in _non_empty_results(kn, "AI news", "--query-time", "2026-05-01T00:00:00Z"):
+        assert parse_ts(r["acquired_at"]) <= utc(2026, 5, 1), r["url"]
+
+
 def test_combined_filters(kn):
     for r in _non_empty_results(kn, "async", "--site", "docs.rs", "--acquired-after", "2025-01-01"):
         assert host_under(host_of(r["url"]), "docs.rs"), r["url"]
