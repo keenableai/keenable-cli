@@ -286,6 +286,7 @@ pub async fn search(
     mode: Option<&str>,
     filters: SearchFilters,
     snippet_max_length: Option<u64>,
+    query_time: Option<&str>,
     human: bool,
     api_key: Option<&str>,
 ) {
@@ -318,6 +319,9 @@ pub async fn search(
     }
     if let Some(n) = snippet_max_length {
         body["snippet_max_length"] = json!(n);
+    }
+    if let Some(qt) = query_time {
+        body["query_time"] = json!(qt);
     }
     // Merge filter fields into body
     if let Value::Object(filter_map) = filters.to_json()
