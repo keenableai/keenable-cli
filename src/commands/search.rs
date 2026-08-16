@@ -13,6 +13,7 @@ pub struct SearchFilters {
     pub acquired_before: Option<String>,
     pub published_after: Option<String>,
     pub published_before: Option<String>,
+    pub query_time: Option<String>,
 }
 
 impl SearchFilters {
@@ -32,6 +33,9 @@ impl SearchFilters {
         }
         if let Some(v) = &self.published_before {
             map.insert("published_before".into(), json!(v));
+        }
+        if let Some(v) = &self.query_time {
+            map.insert("query_time".into(), json!(v));
         }
         Value::Object(map)
     }
@@ -426,6 +430,7 @@ mod tests {
             acquired_before: None,
             published_after: None,
             published_before: None,
+            query_time: None,
         }
     }
 
@@ -439,11 +444,13 @@ mod tests {
         let f = SearchFilters {
             site: Some("docs.rs".into()),
             published_after: Some("2024-01-01".into()),
+            query_time: Some("2024-06-01T00:00:00Z".into()),
             ..filters()
         };
         let v = f.to_json();
         assert_eq!(v["site"], json!("docs.rs"));
         assert_eq!(v["published_after"], json!("2024-01-01"));
+        assert_eq!(v["query_time"], json!("2024-06-01T00:00:00Z"));
         assert!(v.get("acquired_after").is_none());
         assert!(v.get("published_before").is_none());
     }

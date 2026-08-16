@@ -137,7 +137,7 @@ enum Commands {
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
     )]
     Search {
         /// Search query
@@ -170,6 +170,10 @@ enum Commands {
         /// Maximum snippet length in characters (API accepts 180-10000)
         #[arg(long = "snippet-max-length")]
         snippet_max_length: Option<u64>,
+
+        /// Point-in-time search: only pages available on or before this timestamp (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+        #[arg(long)]
+        query_time: Option<String>,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -300,6 +304,7 @@ async fn main() {
             published_after,
             published_before,
             snippet_max_length,
+            query_time,
             pretty,
             api_key,
         } => {
@@ -309,6 +314,7 @@ async fn main() {
                 acquired_before,
                 published_after,
                 published_before,
+                query_time,
             };
             commands::search::search(
                 &query,
