@@ -361,12 +361,11 @@ async fn main() {
     if let Some(handle) = update_handle
         && let Ok(Some(version)) = handle.await
     {
-        use colored::Colorize;
-        eprintln!(
-            "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
-            "Update:".yellow().bold(),
-            version,
-            update::update_hint().cyan()
-        );
+        eprintln!();
+        ui::warning(&format!(
+            "A newer version of keenable ({}) is available",
+            version
+        ));
+        ui::hint(&format!("Run: {}", update::update_hint()));
     }
 }
