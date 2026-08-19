@@ -22,7 +22,9 @@ pub async fn update() {
             .check_receipt_is_for_this_executable()
             .unwrap_or(false)
     {
-        ui::error("This binary was not installed by the Keenable installer, so it cannot self-update");
+        ui::error(
+            "This binary was not installed by the Keenable installer, so it cannot self-update",
+        );
         ui::hint(&format!("Reinstall with: {}", update::install_hint()));
         std::process::exit(1);
     }
