@@ -69,6 +69,22 @@ def test_snippet_max_length_out_of_range(kn):
     assert "snippet_max_length" in data["message"]
 
 
+def test_max_results(kn):
+    few = kn("search", SEARCH_QUERY, "--max-results", "3").yaml()
+    many = kn("search", SEARCH_QUERY, "--max-results", "30").yaml()
+    assert len(results_of(few)) <= 3
+    # A dropped param would give both runs the default count (10).
+    assert len(results_of(many)) > 10
+
+
+def test_max_results_out_of_range(kn):
+    res = kn("search", SEARCH_QUERY, "--max-results", "51")
+    assert res.code == 1
+    data = res.yaml()
+    assert data["error"] == "Invalid parameter"
+    assert "max_results" in data["message"]
+
+
 # --- 2.2 modes ---
 
 def test_mode_realtime(kn):
