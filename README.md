@@ -92,8 +92,8 @@ Supported clients: Claude Code, Cursor, Windsurf, Codex, OpenCode.
 The CLI checks for updates automatically (once per hour). To update manually:
 
 ```bash
+keenable update                                        # Installer-script installs
 brew update && brew upgrade keenable-cli               # Homebrew
-# or re-run the installer script
 ```
 
 ## Building from source

@@ -5,3 +5,4 @@ pub mod login;
 pub mod mcp_common;
 pub mod reset;
 pub mod search;
+pub mod update_cmd;

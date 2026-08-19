@@ -218,6 +218,12 @@ enum Commands {
         api_key: Option<String>,
     },
 
+    /// Update keenable to the latest version
+    #[command(
+        after_help = "Downloads and installs the latest release from GitHub.\nWorks for installs made with the Keenable installer scripts.\nHomebrew installs: use `brew update && brew upgrade keenable-cli` instead.\n\nExamples:\n  keenable update       Update to the latest version\n  keenable --version    Show the current version"
+    )]
+    Update,
+
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
@@ -252,9 +258,10 @@ async fn main() {
 
     // Update check only for human-facing output: awaiting it would add up to
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
+    // `update` is excluded because it performs its own explicit check.
     let wants_update_check = match &cli.command {
         Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => *pretty,
-        Commands::Daemon => false,
+        Commands::Daemon | Commands::Update => false,
         _ => true,
     };
     let update_handle =
@@ -343,6 +350,9 @@ async fn main() {
             commands::search::fetch(&url, live, prompt, max_chars, pretty, api_key.as_deref())
                 .await;
         }
+        Commands::Update => {
+            commands::update_cmd::update().await;
+        }
         Commands::Daemon => {
             daemon::run_daemon().await;
         }
@@ -352,12 +362,11 @@ async fn main() {
     if let Some(handle) = update_handle
         && let Ok(Some(version)) = handle.await
     {
-        use colored::Colorize;
-        eprintln!(
-            "\n{} A newer version of keenable ({}) is available. Run:\n  {}",
-            "Update:".yellow().bold(),
-            version,
-            update::install_hint().cyan()
-        );
+        eprintln!();
+        ui::warning(&format!(
+            "A newer version of keenable ({}) is available",
+            version
+        ));
+        ui::hint(&format!("Run: {}", update::update_hint()));
     }
 }
