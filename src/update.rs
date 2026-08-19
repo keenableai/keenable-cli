@@ -28,12 +28,22 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
-fn is_homebrew_install() -> bool {
+pub fn is_homebrew_install() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
     let path = exe.to_string_lossy();
     path.contains("/Cellar/") || path.contains("/homebrew/") || path.contains("/linuxbrew/")
+}
+
+/// Command to suggest in the update notification. Homebrew installs
+/// cannot self-update (no install receipt), so they get the brew command.
+pub fn update_hint() -> String {
+    if is_homebrew_install() {
+        "brew update && brew upgrade keenable-cli".to_string()
+    } else {
+        "keenable update".to_string()
+    }
 }
 
 pub fn install_hint() -> String {

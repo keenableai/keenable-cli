@@ -40,6 +40,7 @@ src/
     configure_mcp.rs   # Client detection, MCP configuration, interactive setup
     reset.rs           # Remove Keenable MCP and restore defaults
     search.rs          # search, fetch commands
+    update_cmd.rs      # Self-update via axoupdater (needs the installer's receipt)
 assets/
   login_success.html   # Styled OAuth callback success page
   login_failure.html   # Styled OAuth callback failure page
