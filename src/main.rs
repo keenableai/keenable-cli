@@ -258,6 +258,7 @@ async fn main() {
 
     // Update check only for human-facing output: awaiting it would add up to
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
+    // `update` is excluded because it performs its own explicit check.
     let wants_update_check = match &cli.command {
         Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => *pretty,
         Commands::Daemon | Commands::Update => false,

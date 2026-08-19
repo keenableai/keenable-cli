@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::config;
 use crate::constants::{GITHUB_REPO, UPDATE_CHECK_INTERVAL_SECONDS};
 
-fn current_version() -> &'static str {
+pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
@@ -40,7 +40,7 @@ pub fn is_homebrew_install() -> bool {
 /// cannot self-update (no install receipt), so they get the brew command.
 pub fn update_hint() -> String {
     if is_homebrew_install() {
-        "brew update && brew upgrade keenable-cli".to_string()
+        install_hint()
     } else {
         "keenable update".to_string()
     }
