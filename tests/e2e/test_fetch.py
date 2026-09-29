@@ -32,15 +32,18 @@ def test_fetch_prompt(kn):
     # for the domain name, which appears nowhere in the markdown — the model has
     # to infer it from the URL, and once answered "The content does not contain
     # the page's domain name." That reply was still valid extraction output, so
-    # the test failed on a detail it was never meant to pin down.
-    res = kn("fetch", "https://example.com", "--prompt", "Answer with the exact page title and nothing else.")
+    # the test failed on a detail it was never meant to pin down. The page title
+    # went the same way once example.com dropped its <h1>: the model no longer
+    # sees it and answered "The page content does not contain a title."
+    res = kn("fetch", "https://example.com", "--prompt", "What does the page say not to rely on it for? Answer in a few words.")
     assert res.code == 0
     data = res.yaml()
     assert data["url"].startswith("https://example.com")
     # LLM extraction replaces the full page with the instruction's output. The
-    # second assert is the load-bearing one: a stale daemon that drops `prompt`
+    # last assert is the load-bearing one: a stale daemon that drops `prompt`
     # returns the full page with exit code 0.
-    assert "example domain" in data["content"].lower()
+    assert "testing" in data["content"].lower()
+    assert "monitoring" in data["content"].lower()
     assert EXAMPLE_BODY not in data["content"]
 
 
