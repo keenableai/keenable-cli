@@ -2,6 +2,11 @@
 
 import pytest
 
+# Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
+# <h1> and reworded this paragraph (was "...for use in illustrative examples in
+# documents"). When it changes again, update this one line.
+EXAMPLE_BODY = "This domain is for use in documentation examples"
+
 
 def test_fetch_single_url(kn):
     res = kn("fetch", "https://example.com")
@@ -9,7 +14,7 @@ def test_fetch_single_url(kn):
     data = res.yaml()
     assert data["title"] == "Example Domain"
     assert data["url"].startswith("https://example.com")
-    assert "# Example Domain" in data["content"]
+    assert EXAMPLE_BODY in data["content"]
     assert "description" not in data
 
 
@@ -18,7 +23,7 @@ def test_fetch_live(kn):
     assert res.code == 0
     data = res.yaml()
     assert data["title"] == "Example Domain"
-    assert "# Example Domain" in data["content"]
+    assert EXAMPLE_BODY in data["content"]
 
 
 @pytest.mark.semantic  # asserts live LLM extraction output
@@ -27,16 +32,19 @@ def test_fetch_prompt(kn):
     # for the domain name, which appears nowhere in the markdown — the model has
     # to infer it from the URL, and once answered "The content does not contain
     # the page's domain name." That reply was still valid extraction output, so
-    # the test failed on a detail it was never meant to pin down.
-    res = kn("fetch", "https://example.com", "--prompt", "Answer with the exact page title and nothing else.")
+    # the test failed on a detail it was never meant to pin down. The page title
+    # went the same way once example.com dropped its <h1>: the model no longer
+    # sees it and answered "The page content does not contain a title."
+    res = kn("fetch", "https://example.com", "--prompt", "What does the page say not to rely on it for? Answer in a few words.")
     assert res.code == 0
     data = res.yaml()
     assert data["url"].startswith("https://example.com")
     # LLM extraction replaces the full page with the instruction's output. The
-    # second assert is the load-bearing one: a stale daemon that drops `prompt`
+    # last assert is the load-bearing one: a stale daemon that drops `prompt`
     # returns the full page with exit code 0.
-    assert "example domain" in data["content"].lower()
-    assert "This domain is for use in illustrative examples" not in data["content"]
+    assert "testing" in data["content"].lower()
+    assert "monitoring" in data["content"].lower()
+    assert EXAMPLE_BODY not in data["content"]
 
 
 def test_fetch_max_chars(kn):
