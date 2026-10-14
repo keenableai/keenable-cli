@@ -86,7 +86,9 @@ def test_unparseable_url(kn):
 
 
 def test_dead_page(kn):
-    res = kn("fetch", "https://example.com/nonexistent-xyz-12345")
+    # Not example.com: since Oct 2026 it serves its page on every path,
+    # so a made-up path there is no longer a dead page.
+    res = kn("fetch", "https://www.iana.org/nonexistent-xyz-12345")
     assert res.code == 1
     data = res.yaml()
     assert data["error"] == "Not found"
