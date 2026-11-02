@@ -192,21 +192,39 @@ pub fn api_key_client(api_key: &str) -> Client {
     if let Ok(value) = api_key.trim().parse() {
         headers.insert("X-API-Key", value);
     }
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .default_headers(headers)
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap()
+    build_client(headers)
 }
 
 pub fn bare_client() -> Client {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .default_headers(base_headers())
-        .timeout(std::time::Duration::from_secs(60))
+    build_client(base_headers())
+}
+
+fn build_client(headers: reqwest::header::HeaderMap) -> Client {
+    build_with_root_fallback(|builder| {
+        builder
+            .user_agent(USER_AGENT)
+            .default_headers(headers.clone())
+            .timeout(std::time::Duration::from_secs(60))
+    })
+    .expect("HTTP client with bundled roots must build")
+}
+
+/// Build a client that trusts the bundled webpki roots plus the platform
+/// roots. The platform side comes from `rustls-native-certs`, which reads
+/// `SSL_CERT_FILE` / `SSL_CERT_DIR` when set (instead of the OS store), so a
+/// TLS-intercepting proxy's CA is honored the same way curl does.
+///
+/// reqwest refuses to build a client when every native cert fails to parse
+/// (e.g. `SSL_CERT_FILE` points at a corrupt bundle). That must not take the
+/// CLI down: retry with webpki roots only, which is what we shipped before.
+/// Every client in the CLI goes through here.
+pub fn build_with_root_fallback(
+    configure: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+) -> Option<Client> {
+    configure(Client::builder())
         .build()
-        .unwrap()
+        .or_else(|_| configure(Client::builder().tls_built_in_native_certs(false)).build())
+        .ok()
 }
 
 pub fn api_url(path: &str) -> String {

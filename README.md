@@ -92,6 +92,18 @@ keenable reset --all                    # Remove Keenable from all clients
 
 Supported clients: Claude Code, Cursor, Windsurf, Codex, OpenCode.
 
+### Behind a proxy
+
+The CLI honors `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`. It trusts its bundled Mozilla roots plus the OS certificate store; when `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, those replace the OS store. A TLS-intercepting proxy works once its CA is in that bundle:
+
+```bash
+export HTTPS_PROXY=http://proxy.internal:3128
+export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle-with-proxy-ca.pem
+keenable search "query"
+```
+
+The background daemon (macOS/Linux) keeps the environment it was started with and exits after 5 minutes idle. After changing these variables, stop it with `pkill -f "keenable daemon"` so the next command starts a fresh one. Commands run with `--api-key` or `KEENABLE_API_KEY` skip the daemon.
+
 ## Updating
 
 The CLI checks for updates automatically (once per hour). To update manually:

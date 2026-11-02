@@ -91,6 +91,10 @@ All tool commands (`search`, `fetch`) work without login. When no API key is con
 
 Every path the CLI touches (config, credentials, daemon socket, MCP client configs) is resolved against `config::home_dir()`, which returns the `KEENABLE_HOME` env var when set and falls back to `dirs::home_dir()` otherwise. Set `KEENABLE_HOME` to relocate the entire `.keenable` tree — this is how the e2e suite isolates runs per-test (and the only reliable way on Windows, where `dirs::home_dir()` queries the real user profile and ignores `HOME`). Always go through `config::home_dir()`, never `dirs::home_dir()` directly.
 
+### HTTP Clients & TLS
+
+Build every HTTP client through `api::build_with_root_fallback` (`api_key_client` / `bare_client` / the update check already do). It trusts the bundled webpki roots plus the OS store — or `SSL_CERT_FILE` / `SSL_CERT_DIR` when set — so TLS-intercepting proxies work, and it retries with webpki roots only when the native bundle is unusable instead of panicking. Never call `Client::new()` / `Client::builder().build()` directly. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local MITM proxy to check all of this.
+
 ### Daemon
 
 The CLI uses a background daemon (`~/.keenable/daemon.sock`) to reuse HTTP connections.
