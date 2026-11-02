@@ -20,6 +20,7 @@ def test_fetch_single_url(kn):
     assert data["url"].startswith("https://example.com")
     assert EXAMPLE_BODY in data["content"]
     assert "description" not in data
+    assert "truncated" not in data
 
 
 def test_fetch_live(kn):
@@ -78,6 +79,7 @@ def test_fetch_max_chars(kn):
     # The truncation disclaimer is the load-bearing assert: a stale daemon
     # that drops `max_chars` returns the full page with exit code 0.
     assert "truncated to stay below 50 characters" in data["content"]
+    assert data["truncated"] is True
 
 
 def test_fetch_max_chars_rejects_zero(kn):

@@ -170,6 +170,47 @@ fn normalize_fetch_dates(data: &mut Value) {
     }
 }
 
+/// The note the fetch API appends to content cut at `max_chars`:
+/// `..._This content has been truncated to stay below N characters_...`
+const TRUNCATION_NOTE_PREFIX: &str = "..._This content has been truncated to stay below ";
+const TRUNCATION_NOTE_SUFFIX: &str = " characters_...";
+
+/// Whether fetched content ends with the API's exact truncation sentence
+/// (N is one or more digits), optionally followed by whitespace.
+/// Best-effort: it reads false if the API's wording changes.
+fn is_truncated(content: &str) -> bool {
+    let Some(rest) = content.trim_end().strip_suffix(TRUNCATION_NOTE_SUFFIX) else {
+        return false;
+    };
+    let digits = rest.len() - rest.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    digits > 0 && rest[..rest.len() - digits].ends_with(TRUNCATION_NOTE_PREFIX)
+}
+
+/// Flag truncated fetch content with `truncated: true`, placed just before
+/// `content` so agents see it before the (long) text. Content stays verbatim.
+fn mark_truncated(data: &mut Value) {
+    let Some(obj) = data.as_object_mut() else {
+        return;
+    };
+    if !obj
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(is_truncated)
+    {
+        return;
+    }
+    let mut out = serde_json::Map::with_capacity(obj.len() + 1);
+    for (k, v) in std::mem::take(obj) {
+        if k == "content" {
+            out.insert("truncated".into(), Value::Bool(true));
+        }
+        if k != "truncated" {
+            out.insert(k, v);
+        }
+    }
+    *obj = out;
+}
+
 /// "published: …  acquired: …" for pretty output, or None when neither is set.
 /// Bare digit strings (an epoch too small to convert) are not dates to show.
 fn dates_line(item: &Value) -> Option<String> {
@@ -500,6 +541,7 @@ pub async fn fetch(
                 obj.remove("description");
             }
             normalize_fetch_dates(&mut data);
+            mark_truncated(&mut data);
             if human {
                 ui::header("keenable fetch");
                 let title = data["title"].as_str().unwrap_or("Untitled");
@@ -514,6 +556,10 @@ pub async fn fetch(
                     eprintln!("   {}", line);
                 }
                 eprintln!();
+                if data["truncated"].as_bool() == Some(true) {
+                    ui::hint("Content was truncated; pass a larger --max-chars for more.");
+                    eprintln!();
+                }
                 return;
             }
             print_yaml(&data);
@@ -728,6 +774,61 @@ mod tests {
         );
         assert_eq!(dates_line(&json!({"published_at": ""})), None);
         assert_eq!(dates_line(&json!({})), None);
+    }
+
+    const NOTE: &str = "\n\n..._This content has been truncated to stay below 50 characters_...";
+
+    #[test]
+    fn truncation_note_is_detected() {
+        assert!(is_truncated(&format!("Example Domain{NOTE}")));
+        // Trailing whitespace after the note doesn't hide it.
+        assert!(is_truncated(&format!("Example Domain{NOTE}\n")));
+        // Underscores in the page text before the note are fine.
+        assert!(is_truncated(&format!("snake_case_name{NOTE}")));
+        assert!(is_truncated(NOTE.trim()));
+    }
+
+    #[test]
+    fn content_without_the_note_is_not_truncated() {
+        assert!(!is_truncated(""));
+        assert!(!is_truncated("Example Domain"));
+        assert!(!is_truncated("ends with _..."));
+        // The note quoted mid-page, not at the end.
+        assert!(!is_truncated(&format!("{NOTE}\n\nmore text")));
+        assert!(!is_truncated(
+            "..._This content has been truncated_with_more_underscores_..."
+        ));
+        // Same opening words, but not the API's sentence.
+        assert!(!is_truncated(
+            "Notes\n\n..._This content has been truncated by the author_..."
+        ));
+        assert!(!is_truncated(
+            "..._This content has been truncated to stay below many characters_..."
+        ));
+        assert!(!is_truncated(
+            "..._This content has been truncated to stay below  characters_..."
+        ));
+    }
+
+    #[test]
+    fn mark_truncated_adds_flag_before_content_and_keeps_content() {
+        let content = format!("Example Domain{NOTE}");
+        let mut data = json!({"url": "u", "title": "t", "content": content, "author": "a"});
+        mark_truncated(&mut data);
+        assert_eq!(data["truncated"], json!(true));
+        assert_eq!(data["content"], json!(content));
+        let keys: Vec<_> = data.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["url", "title", "truncated", "content", "author"]);
+    }
+
+    #[test]
+    fn mark_truncated_leaves_full_content_alone() {
+        let mut data = json!({"url": "u", "content": "Example Domain"});
+        mark_truncated(&mut data);
+        assert!(data.get("truncated").is_none());
+        let mut no_content = json!({"url": "u"});
+        mark_truncated(&mut no_content);
+        assert!(no_content.get("truncated").is_none());
     }
 
     #[test]
