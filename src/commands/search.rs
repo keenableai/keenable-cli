@@ -90,6 +90,101 @@ fn fold_description_into_snippet(data: &mut Value) {
     }
 }
 
+/// Values below this (1973-03-03 in seconds) are not treated as epochs:
+/// short digit runs like `2026` or `20261022` are more likely a year or a
+/// compact date than a 1970 timestamp, so they are left as sent.
+const EPOCH_MIN: f64 = 1e8;
+
+/// Epoch values at or above this are milliseconds: 1e11 seconds is the year
+/// 5138, while 1e11 milliseconds is 1973. Same thresholds as the SDKs.
+const EPOCH_MS_THRESHOLD: f64 = 1e11;
+
+/// Seconds since the Unix epoch as RFC 3339 UTC (`2026-10-22T19:00:00Z`).
+/// None outside years 1970..=9999, which no real page date falls in.
+fn epoch_to_rfc3339(secs: i64) -> Option<String> {
+    // 253402300800 = 10000-01-01T00:00:00Z
+    if !(0..253_402_300_800).contains(&secs) {
+        return None;
+    }
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil-from-days (Howard Hinnant's algorithm), proleptic Gregorian.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month,
+        day,
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    ))
+}
+
+/// Fetch returns dates as a Unix epoch number while search returns ISO
+/// strings. Normalize a numeric (or all-digit string) epoch to RFC 3339 UTC,
+/// treating values >= 1e11 as milliseconds. None leaves the value as-is:
+/// ISO strings, values below 1e8, and anything unparseable pass through
+/// untouched.
+fn epoch_value_to_rfc3339(value: &Value) -> Option<String> {
+    let raw = match value {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() || !t.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            t.parse::<f64>().ok()?
+        }
+        _ => return None,
+    };
+    if !raw.is_finite() || raw < EPOCH_MIN {
+        return None;
+    }
+    let secs = if raw >= EPOCH_MS_THRESHOLD {
+        raw / 1_000.0
+    } else {
+        raw
+    };
+    epoch_to_rfc3339(secs.floor() as i64)
+}
+
+/// Rewrite fetch's epoch `published_at` / `acquired_at` as RFC 3339 so both
+/// commands emit the same type for the same field.
+fn normalize_fetch_dates(data: &mut Value) {
+    let Some(obj) = data.as_object_mut() else {
+        return;
+    };
+    for key in ["published_at", "acquired_at"] {
+        if let Some(iso) = obj.get(key).and_then(epoch_value_to_rfc3339) {
+            obj.insert(key.into(), Value::String(iso));
+        }
+    }
+}
+
+/// "published: …  acquired: …" for pretty output, or None when neither is set.
+/// Bare digit strings (an epoch too small to convert) are not dates to show.
+fn dates_line(item: &Value) -> Option<String> {
+    let mut dates = Vec::new();
+    for (key, label) in [("published_at", "published"), ("acquired_at", "acquired")] {
+        if let Some(v) = item[key]
+            .as_str()
+            .filter(|v| !v.trim().bytes().all(|b| b.is_ascii_digit()))
+        {
+            dates.push(format!("{}: {}", label, v));
+        }
+    }
+    (!dates.is_empty()).then(|| dates.join("  "))
+}
+
 fn print_yaml(data: &Value) {
     match serde_yaml::to_string(data) {
         Ok(yaml) => print!("{}", yaml),
@@ -356,8 +451,6 @@ pub async fn search(
                         let snippet = result["snippet"].as_str().unwrap_or("");
                         let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
                         let snippet_truncated: String = snippet_flat.chars().take(200).collect();
-                        let published = result["published_at"].as_str().unwrap_or("");
-                        let acquired = result["acquired_at"].as_str().unwrap_or("");
 
                         let num = format!("{:>2}.", i + 1).dimmed();
                         eprintln!("   {} {}", num, title.bold());
@@ -365,15 +458,8 @@ pub async fn search(
                         if !snippet_truncated.is_empty() {
                             eprintln!("      {}", snippet_truncated.dimmed());
                         }
-                        if !published.is_empty() || !acquired.is_empty() {
-                            let mut dates = Vec::new();
-                            if !published.is_empty() {
-                                dates.push(format!("published: {}", published));
-                            }
-                            if !acquired.is_empty() {
-                                dates.push(format!("acquired: {}", acquired));
-                            }
-                            eprintln!("      {}", dates.join("  ").dimmed());
+                        if let Some(dates) = dates_line(result) {
+                            eprintln!("      {}", dates.dimmed());
                         }
                         eprintln!();
                     }
@@ -413,12 +499,16 @@ pub async fn fetch(
             if let Some(obj) = data.as_object_mut() {
                 obj.remove("description");
             }
+            normalize_fetch_dates(&mut data);
             if human {
                 ui::header("keenable fetch");
                 let title = data["title"].as_str().unwrap_or("Untitled");
                 let url = data["url"].as_str().unwrap_or("");
                 let content = data["content"].as_str().unwrap_or("");
                 eprintln!("   {} {}", title.bold(), url.cyan());
+                if let Some(dates) = dates_line(&data) {
+                    eprintln!("   {}", dates.dimmed());
+                }
                 eprintln!("   {}", "─".repeat(60).dimmed());
                 for line in content.lines() {
                     eprintln!("   {}", line);
@@ -508,6 +598,136 @@ mod tests {
         let (err, authed) = *daemon_response_to_api_error(daemon_403(anon));
         assert!(!authed);
         assert!(!err.hint(authed).unwrap().contains("revoked"));
+    }
+
+    #[test]
+    fn epoch_seconds_become_rfc3339() {
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        // The smallest value still read as an epoch.
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(100_000_000)).as_deref(),
+            Some("1973-03-03T09:46:40Z")
+        );
+        // Leap day, and the last second of a year.
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(951782400)).as_deref(),
+            Some("2000-02-29T00:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1735689599)).as_deref(),
+            Some("2024-12-31T23:59:59Z")
+        );
+    }
+
+    #[test]
+    fn epoch_milliseconds_are_detected() {
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600000_u64)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600999_u64)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        // Milliseconds before 2001 (below the old 1e12 threshold).
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(946684800000_u64)).as_deref(),
+            Some("2000-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!("946684800000")).as_deref(),
+            Some("2000-01-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn values_below_1e8_are_not_epochs() {
+        for v in [
+            json!("20261022"),
+            json!("2026"),
+            json!(20261022),
+            json!(2026),
+            json!(0),
+            json!("0"),
+            json!(99_999_999),
+        ] {
+            assert_eq!(epoch_value_to_rfc3339(&v), None, "{v}");
+        }
+        // Left exactly as sent, string or number, and hidden from -p.
+        let mut data = json!({"published_at": "20261022", "acquired_at": 2026});
+        normalize_fetch_dates(&mut data);
+        assert_eq!(data["published_at"], json!("20261022"));
+        assert_eq!(data["acquired_at"], json!(2026));
+        assert_eq!(dates_line(&data), None);
+    }
+
+    #[test]
+    fn numeric_string_and_float_epochs_convert() {
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!("1792695600")).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(" 1792695600 ")).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600.75)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+    }
+
+    #[test]
+    fn iso_strings_and_junk_pass_through() {
+        for v in [
+            json!("2026-10-22T19:00:00Z"),
+            json!("2026-10-22"),
+            json!(""),
+            json!("yesterday"),
+            json!("-5"),
+            json!(-5),
+            json!(true),
+            json!(null),
+            json!({"s": 1}),
+            json!(1e20),
+        ] {
+            assert_eq!(epoch_value_to_rfc3339(&v), None, "{v}");
+        }
+    }
+
+    #[test]
+    fn normalize_fetch_dates_rewrites_only_epoch_fields() {
+        let mut data = json!({
+            "url": "https://example.com",
+            "published_at": 1792695600,
+            "acquired_at": "2026-10-23T08:00:00Z",
+            "content": "1792695600",
+        });
+        normalize_fetch_dates(&mut data);
+        assert_eq!(data["published_at"], "2026-10-22T19:00:00Z");
+        assert_eq!(data["acquired_at"], "2026-10-23T08:00:00Z");
+        assert_eq!(data["content"], "1792695600");
+        // Absent fields stay absent rather than appearing as null.
+        let mut bare = json!({"url": "https://example.com"});
+        normalize_fetch_dates(&mut bare);
+        assert!(bare.get("published_at").is_none());
+    }
+
+    #[test]
+    fn dates_line_lists_whichever_dates_exist() {
+        assert_eq!(
+            dates_line(&json!({"published_at": "2026-10-22T19:00:00Z"})).as_deref(),
+            Some("published: 2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            dates_line(&json!({"published_at": "a", "acquired_at": "b"})).as_deref(),
+            Some("published: a  acquired: b")
+        );
+        assert_eq!(dates_line(&json!({"published_at": ""})), None);
+        assert_eq!(dates_line(&json!({})), None);
     }
 
     #[test]
