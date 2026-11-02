@@ -25,6 +25,14 @@ pub struct DaemonRequest {
     /// a daemon started against another base refuses the request.
     #[serde(default)]
     pub api_base: Option<String>,
+    /// The client's CLI version and build (see `DaemonIdentity`). Filled in
+    /// by `daemon_request`; a daemon from another build refuses the request,
+    /// since it would silently drop request fields it doesn't know (serde
+    /// skips unknown fields).
+    #[serde(default)]
+    pub cli_version: Option<String>,
+    #[serde(default)]
+    pub build: Option<String>,
 }
 
 impl DaemonRequest {
@@ -79,6 +87,85 @@ fn daemon_stem(base: &str) -> String {
     format!("daemon-{:012x}", hash >> 16)
 }
 
+/// What a daemon must share with a client to serve it: the API base it
+/// calls, the CLI version, and the exact build (so two source builds of the
+/// same version still differ). Clients tag requests with theirs, the daemon
+/// tags every response with its own, and any difference — including a
+/// daemon too old to report all three — gets the daemon replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
+pub struct DaemonIdentity {
+    pub api_base: String,
+    pub cli_version: String,
+    pub build: String,
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+impl DaemonIdentity {
+    /// This process's identity. The build part is read once per process: a
+    /// daemon keeps reporting the binary it started from even after an
+    /// upgrade replaces the file on disk, which is exactly the mismatch the
+    /// next (new) client must see.
+    pub fn current() -> Self {
+        static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let build = BUILD.get_or_init(|| {
+            std::env::current_exe()
+                .map(|exe| build_id_of(&exe))
+                .unwrap_or_else(|_| "unknown".to_string())
+        });
+        DaemonIdentity {
+            api_base: crate::api::api_base().to_string(),
+            cli_version: env!("CARGO_PKG_VERSION").to_string(),
+            build: build.clone(),
+        }
+    }
+
+    /// Add this identity to a serialized request or response.
+    fn tag(&self, value: &mut Value) {
+        value["api_base"] = Value::String(self.api_base.clone());
+        value["cli_version"] = Value::String(self.cli_version.clone());
+        value["build"] = Value::String(self.build.clone());
+    }
+
+    /// The identity a daemon reported; None when any part is missing.
+    fn from_tagged(value: &Value) -> Option<Self> {
+        Some(DaemonIdentity {
+            api_base: value["api_base"].as_str()?.to_string(),
+            cli_version: value["cli_version"].as_str()?.to_string(),
+            build: value["build"].as_str()?.to_string(),
+        })
+    }
+
+    /// Daemon side: whether to refuse a request. The base follows
+    /// `refuses_base`; a version or build that is present and differs is
+    /// refused. Clients that predate those tags are older than this daemon,
+    /// which understands all their fields, so they are served.
+    fn refuses(&self, req: &DaemonRequest) -> bool {
+        let differs =
+            |theirs: &Option<String>, ours: &str| theirs.as_deref().is_some_and(|t| t != ours);
+        refuses_base(req.api_base.as_deref(), &self.api_base)
+            || differs(&req.cli_version, &self.cli_version)
+            || differs(&req.build, &self.build)
+    }
+}
+
+/// Size and modification time of the executable: changes on every rebuild
+/// or reinstall without needing a build script.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn build_id_of(exe: &std::path::Path) -> String {
+    match std::fs::metadata(exe) {
+        Ok(meta) => {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{}-{}", meta.len(), mtime)
+        }
+        Err(_) => "unknown".to_string(),
+    }
+}
+
 /// Daemon side: whether a daemon serving `daemon_base` must refuse a request
 /// tagged with `req_base`. Untagged requests come from CLIs older than the
 /// tag, which only know the default base — serve them only if that's ours.
@@ -122,18 +209,18 @@ mod platform {
     /// so the real request never reaches an incompatible daemon.
     const HANDSHAKE_COMMAND: &str = "identity";
 
-    /// Error string for a request whose API base differs from the daemon's.
-    const BASE_MISMATCH: &str = "API base URL mismatch";
+    /// Error string for a request from a client with a different identity.
+    const IDENTITY_MISMATCH: &str = "Daemon API base, CLI version or build mismatch";
 
     /// sun_path size, including the trailing NUL.
     const MAX_SOCKET_PATH: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 
     /// Serialize a response as one protocol line, tagged with the daemon's
-    /// API base so clients can tell which base served it. Older daemons omit
-    /// the tag, which clients treat as a mismatch.
-    fn response_line(resp: &DaemonResponse, base: &str) -> String {
+    /// identity so clients can tell who served it. Older daemons omit the
+    /// tag, which clients treat as a mismatch.
+    fn response_line(resp: &DaemonResponse, identity: &DaemonIdentity) -> String {
         let mut value = serde_json::to_value(resp).unwrap_or_default();
-        value["api_base"] = Value::String(base.to_string());
+        identity.tag(&mut value);
         let mut line = serde_json::to_string(&value).unwrap_or_default();
         line.push('\n');
         line
@@ -157,7 +244,8 @@ mod platform {
     pub async fn run_daemon() {
         let api_key = config::get_api_key();
         let authenticated = api_key.is_some();
-        let base: Arc<str> = Arc::from(api_base());
+        // First thing: pin this binary's build before anything can replace it.
+        let identity = Arc::new(DaemonIdentity::current());
 
         let sock = socket_path();
 
@@ -240,7 +328,7 @@ mod platform {
                     *last_activity.lock().await = Instant::now();
                     let client = client.clone();
                     let authenticated = authenticated.clone();
-                    let base = base.clone();
+                    let identity = identity.clone();
                     let last_activity = last_activity.clone();
                     tokio::spawn(async move {
                         let (reader, mut writer) = stream.into_split();
@@ -258,7 +346,7 @@ mod platform {
                                         data: None,
                                         error: None,
                                     };
-                                    let resp_line = response_line(&resp, &base);
+                                    let resp_line = response_line(&resp, &identity);
                                     let _ = writer.write_all(resp_line.as_bytes()).await;
                                     let owns_files = fs::read_to_string(pid_path())
                                         .map(|p| p.trim() == std::process::id().to_string())
@@ -275,11 +363,12 @@ mod platform {
                                     data: None,
                                     error: None,
                                 },
-                                Ok(req) if refuses_base(req.api_base.as_deref(), &base) => {
-                                    err_response(BASE_MISMATCH)
+                                Ok(req) if identity.refuses(&req) => {
+                                    err_response(IDENTITY_MISMATCH)
                                 }
                                 Ok(req) => {
-                                    handle_request(&client, &base, *authenticated, req).await
+                                    handle_request(&client, &identity.api_base, *authenticated, req)
+                                        .await
                                 }
                                 Err(e) => DaemonResponse {
                                     ok: false,
@@ -288,7 +377,7 @@ mod platform {
                                 },
                             };
 
-                            let resp_line = response_line(&response, &base);
+                            let resp_line = response_line(&response, &identity);
                             if writer.write_all(resp_line.as_bytes()).await.is_err() {
                                 break;
                             }
@@ -495,15 +584,16 @@ mod platform {
         Ok(())
     }
 
-    /// Send a request to the daemon. A daemon started against a different
-    /// API base, or an older CLI that doesn't report its base, is detected by
-    /// the handshake before the request is sent, and replaced once. If the
-    /// mismatch persists (e.g. a concurrent command won the restart) the
-    /// caller goes direct.
+    /// Send a request to the daemon. A daemon with a different identity —
+    /// another API base, left running by another CLI version or build after
+    /// an upgrade, or too old to report one — is detected by the handshake
+    /// before the request is sent, and replaced once. If the mismatch
+    /// persists (e.g. a concurrent command won the restart) the caller goes
+    /// direct.
     pub async fn daemon_request(req: &DaemonRequest) -> Result<DaemonResponse, DaemonError> {
-        let base = api_base();
+        let identity = DaemonIdentity::current();
         let tagged_line = |value: &mut Value| {
-            value["api_base"] = Value::String(base.to_string());
+            identity.tag(value);
             let mut line = serde_json::to_string(value).map_err(|_| DaemonError::Unavailable)?;
             line.push('\n');
             Ok::<_, DaemonError>(line)
@@ -513,7 +603,7 @@ mod platform {
             tagged_line(&mut serde_json::to_value(req).map_err(|_| DaemonError::Unavailable)?)?;
 
         for attempt in 0..2 {
-            if let Some(resp) = exchange(&handshake, &request, base).await? {
+            if let Some(resp) = exchange(&handshake, &request, &identity).await? {
                 return Ok(resp);
             }
             if attempt == 0 {
@@ -525,13 +615,13 @@ mod platform {
     }
 
     /// Handshake, then the request, on one connection. Ok(None) means the
-    /// daemon serves another base (or predates the tag): checked on the
+    /// daemon has another identity (or predates the tag): checked on the
     /// handshake so the request is never sent, and again on the response as
     /// a backstop.
     async fn exchange(
         handshake: &str,
         request: &str,
-        base: &str,
+        identity: &DaemonIdentity,
     ) -> Result<Option<DaemonResponse>, DaemonError> {
         let stream = tokio::net::UnixStream::connect(socket_path())
             .await
@@ -544,7 +634,7 @@ mod platform {
             .await
             .map_err(|_| DaemonError::Unavailable)?;
         let hello = read_value(&mut lines, Duration::from_secs(5)).await?;
-        if hello["api_base"].as_str() != Some(base) {
+        if DaemonIdentity::from_tagged(&hello).as_ref() != Some(identity) {
             return Ok(None);
         }
 
@@ -556,7 +646,7 @@ mod platform {
         // upstream yields the daemon's structured error instead of a client
         // timeout that falls back to a second, equally slow direct request.
         let value = read_value(&mut lines, Duration::from_secs(75)).await?;
-        if value["api_base"].as_str() != Some(base) {
+        if DaemonIdentity::from_tagged(&value).as_ref() != Some(identity) {
             return Ok(None);
         }
         serde_json::from_value(value)
@@ -666,6 +756,104 @@ mod tests {
         assert!(!refuses_base(Some(local), local));
         assert!(refuses_base(Some(local), DEFAULT_API_BASE_URL));
         assert!(refuses_base(Some(DEFAULT_API_BASE_URL), local));
+    }
+
+    fn identity(base: &str, version: &str, build: &str) -> DaemonIdentity {
+        DaemonIdentity {
+            api_base: base.into(),
+            cli_version: version.into(),
+            build: build.into(),
+        }
+    }
+
+    #[test]
+    fn identity_tag_round_trips_through_a_response() {
+        let id = identity(DEFAULT_API_BASE_URL, "1.2.3", "100-5");
+        let mut value = serde_json::to_value(DaemonResponse {
+            ok: true,
+            data: None,
+            error: None,
+        })
+        .unwrap();
+        id.tag(&mut value);
+        assert_eq!(DaemonIdentity::from_tagged(&value), Some(id));
+        let resp: DaemonResponse = serde_json::from_value(value).unwrap();
+        assert!(resp.ok);
+    }
+
+    #[test]
+    fn partially_tagged_daemons_have_no_identity() {
+        // Pre-override daemons tag nothing; the first override build tagged
+        // only the base. Both count as a mismatch.
+        assert_eq!(
+            DaemonIdentity::from_tagged(&serde_json::json!({"ok": false})),
+            None
+        );
+        let base_only = serde_json::json!({"ok": true, "api_base": DEFAULT_API_BASE_URL});
+        assert_eq!(DaemonIdentity::from_tagged(&base_only), None);
+        let no_build =
+            serde_json::json!({"api_base": DEFAULT_API_BASE_URL, "cli_version": "1.2.3"});
+        assert_eq!(DaemonIdentity::from_tagged(&no_build), None);
+    }
+
+    #[test]
+    fn any_identity_difference_is_a_mismatch() {
+        let current = identity(DEFAULT_API_BASE_URL, "1.2.3", "100-5");
+        assert_eq!(current, identity(DEFAULT_API_BASE_URL, "1.2.3", "100-5"));
+        assert_ne!(current, identity(DEFAULT_API_BASE_URL, "1.2.2", "100-5"));
+        assert_ne!(current, identity(DEFAULT_API_BASE_URL, "1.2.3", "100-6"));
+        assert_ne!(current, identity("http://127.0.0.1:8080", "1.2.3", "100-5"));
+    }
+
+    #[test]
+    fn daemon_refuses_requests_from_other_versions_or_builds() {
+        let daemon = identity(DEFAULT_API_BASE_URL, "1.2.3", "100-5");
+        let request = |version: Option<&str>, build: Option<&str>| DaemonRequest {
+            command: "search".into(),
+            api_base: Some(DEFAULT_API_BASE_URL.into()),
+            cli_version: version.map(Into::into),
+            build: build.map(Into::into),
+            ..Default::default()
+        };
+        assert!(!daemon.refuses(&request(Some("1.2.3"), Some("100-5"))));
+        assert!(daemon.refuses(&request(Some("1.3.0"), Some("100-5"))));
+        assert!(daemon.refuses(&request(Some("1.2.3"), Some("101-5"))));
+        // Older clients without the tags only send fields this daemon knows.
+        assert!(!daemon.refuses(&request(None, None)));
+    }
+
+    #[test]
+    fn build_id_changes_when_the_executable_is_rebuilt() {
+        let dir = std::env::temp_dir().join(format!("kn-build-id-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("keenable");
+        std::fs::write(&exe, b"build one").unwrap();
+        let first = build_id_of(&exe);
+        assert_eq!(first, build_id_of(&exe), "stable for an unchanged file");
+
+        // Same size, later mtime: a rebuild that happens to be byte-for-byte
+        // the same length still differs.
+        std::fs::write(&exe, b"build two").unwrap();
+        let file = std::fs::File::options().write(true).open(&exe).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        let second = build_id_of(&exe);
+        assert_ne!(first, second);
+
+        // Different size.
+        std::fs::write(&exe, b"a longer third build").unwrap();
+        assert_ne!(second, build_id_of(&exe));
+
+        assert_eq!(build_id_of(&dir.join("missing")), "unknown");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn current_identity_reports_this_build() {
+        let id = DaemonIdentity::current();
+        assert_eq!(id.cli_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(id.build, build_id_of(&std::env::current_exe().unwrap()));
+        assert_ne!(id.build, "unknown");
     }
 
     #[test]

@@ -223,11 +223,35 @@ fn daemon_stem(base: &str) -> String {
 #[cfg(unix)]
 #[tokio::test]
 async fn old_daemon_never_sees_the_real_request() {
+    incompatible_daemon_never_sees_the_real_request("old", |_| None).await;
+}
+
+/// A daemon that answers the handshake for the right base but from another
+/// CLI version (left running across an upgrade): replaced the same way.
+#[cfg(unix)]
+#[tokio::test]
+async fn other_version_daemon_never_sees_the_real_request() {
+    incompatible_daemon_never_sees_the_real_request("version", |base| {
+        Some(format!(
+            r#"{{"ok":true,"api_base":"{base}","cli_version":"0.0.1","build":"1-1"}}"#
+        ))
+    })
+    .await;
+}
+
+/// `hello` builds the fake's handshake reply for a base; None answers like a
+/// daemon that doesn't know the handshake.
+#[cfg(unix)]
+async fn incompatible_daemon_never_sees_the_real_request(
+    name: &str,
+    hello: fn(&str) -> Option<String>,
+) {
     use tokio::net::UnixListener;
 
     let (port, log) = spawn_stub().await;
     let base = format!("http://127.0.0.1:{port}");
-    let home = temp_home("old-daemon");
+    let home = temp_home(name);
+    let hello = hello(&base);
     let sock = home.join(format!(".keenable/{}.sock", daemon_stem(&base)));
     let listener = UnixListener::bind(&sock).unwrap();
     let commands = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -235,6 +259,7 @@ async fn old_daemon_never_sees_the_real_request() {
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             let seen = seen.clone();
+            let hello = hello.clone();
             tokio::spawn(async move {
                 let (reader, mut writer) = stream.into_split();
                 let mut lines = BufReader::new(reader).lines();
@@ -248,6 +273,7 @@ async fn old_daemon_never_sees_the_real_request() {
                                 .to_string()
                         }
                         "shutdown" => r#"{"ok":true}"#.to_string(),
+                        "identity" if hello.is_some() => hello.clone().unwrap(),
                         other => format!(r#"{{"ok":false,"error":"Unknown command: {other}"}}"#),
                     };
                     let _ = writer.write_all(format!("{reply}\n").as_bytes()).await;
