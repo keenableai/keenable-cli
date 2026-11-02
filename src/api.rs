@@ -47,6 +47,10 @@ pub struct ApiError {
     pub error: String,
     pub message: Option<String>,
     pub retry_after: Option<u64>,
+    /// `X-RateLimit-Reset` on a 429: when the window reopens (ISO 8601). The
+    /// API sends this rather than `Retry-After`, so it is the only retry time
+    /// most 429s carry.
+    pub rate_limit_reset: Option<String>,
     /// The API's `X-Request-Id` for the failed call; users quote it to support.
     pub request_id: Option<String>,
 }
@@ -70,10 +74,25 @@ impl ApiError {
         if let Some(ra) = self.retry_after {
             map.insert("retry_after".into(), Value::Number(ra.into()));
         }
+        if let Some(reset) = &self.rate_limit_reset {
+            map.insert("rate_limit_reset".into(), Value::String(reset.clone()));
+        }
         if let Some(id) = &self.request_id {
             map.insert("request_id".into(), Value::String(id.clone()));
         }
         Value::Object(map)
+    }
+
+    /// "Retry after 30s" from `Retry-After`, else "Retry after <time>" from
+    /// `X-RateLimit-Reset`; None when the API sent neither.
+    pub fn retry_phrase(&self) -> Option<String> {
+        self.retry_after
+            .map(|s| format!("Retry after {}s", s))
+            .or_else(|| {
+                self.rate_limit_reset
+                    .as_ref()
+                    .map(|t| format!("Retry after {}", t))
+            })
     }
 
     /// Transport-level failure (no HTTP status).
@@ -84,10 +103,6 @@ impl ApiError {
             message: Some(message),
             ..Default::default()
         }
-    }
-
-    pub fn is_rate_limit(&self) -> bool {
-        self.status == 429
     }
 
     /// The credentials themselves were rejected (401, or a 400 the server
@@ -127,15 +142,20 @@ impl ApiError {
             // authenticated 429 suggests retrying or switching accounts.
             429 if authenticated => {
                 let retry = self
-                    .retry_after
-                    .map(|s| format!("Retry after {}s", s))
+                    .retry_phrase()
                     .unwrap_or_else(|| "Retry later".to_string());
                 Some(format!(
                     "Rate limit reached for your API key. {}, or run `keenable login` to switch accounts.",
                     retry
                 ))
             }
-            429 => Some("Run `keenable login` to authenticate and increase your limits.".into()),
+            429 => Some(match self.retry_phrase() {
+                Some(retry) => format!(
+                    "{}, or run `keenable login` to authenticate and increase your limits.",
+                    retry
+                ),
+                None => "Run `keenable login` to authenticate and increase your limits.".into(),
+            }),
             _ => None,
         }
     }
@@ -208,10 +228,21 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
             status: status.as_u16(),
             error: "Failed to parse response".into(),
             message: Some(e.to_string()),
-            retry_after: None,
             request_id,
+            ..Default::default()
         });
     }
+
+    // The API sends X-RateLimit-* on other statuses too (e.g. 400s); it is
+    // only a retry time on a 429.
+    let rate_limit_reset = resp
+        .headers()
+        .get("x-ratelimit-reset")
+        .filter(|_| status.as_u16() == 429)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
 
     // Extract retry-after header before consuming body
     let retry_after = resp
@@ -244,6 +275,7 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         error,
         message,
         retry_after,
+        rate_limit_reset,
         request_id,
     })
 }
@@ -258,13 +290,6 @@ mod tests {
             error: error.into(),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn rate_limit_is_429_only() {
-        assert!(err(429, "Too many requests").is_rate_limit());
-        assert!(!err(401, "nope").is_rate_limit());
-        assert!(!err(500, "boom").is_rate_limit());
     }
 
     #[test]
@@ -394,5 +419,112 @@ mod tests {
         assert_eq!(e.display(), "Server error");
         e.message = Some("upstream timeout".into());
         assert_eq!(e.display(), "Server error: upstream timeout");
+    }
+
+    #[test]
+    fn rate_limit_reset_is_the_retry_time_when_no_retry_after() {
+        let mut e = err(429, "Too many requests");
+        e.rate_limit_reset = Some("2026-11-02T19:48:53.100Z".into());
+        assert_eq!(
+            e.retry_phrase().as_deref(),
+            Some("Retry after 2026-11-02T19:48:53.100Z")
+        );
+        let h = e.hint(true).unwrap_or_default();
+        assert!(h.contains("Retry after 2026-11-02T19:48:53.100Z"), "{h}");
+        assert_eq!(
+            e.to_yaml_value()["rate_limit_reset"],
+            "2026-11-02T19:48:53.100Z"
+        );
+    }
+
+    #[test]
+    fn keyless_429_hint_carries_the_retry_time() {
+        let mut e = err(429, "Too many requests");
+        e.rate_limit_reset = Some("2026-11-02T19:48:53.100Z".into());
+        assert_eq!(
+            e.hint(false).as_deref(),
+            Some(
+                "Retry after 2026-11-02T19:48:53.100Z, or run `keenable login` to authenticate and increase your limits."
+            )
+        );
+        e.rate_limit_reset = None;
+        e.retry_after = Some(30);
+        let h = e.hint(false).unwrap_or_default();
+        assert!(
+            h.starts_with("Retry after 30s, or run `keenable login`"),
+            "{h}"
+        );
+        // No retry time: the plain login hint, as before.
+        assert_eq!(
+            err(429, "x").hint(false).as_deref(),
+            Some("Run `keenable login` to authenticate and increase your limits.")
+        );
+    }
+
+    #[test]
+    fn authenticated_429_hint_with_reset_only() {
+        let mut e = err(429, "Too many requests");
+        e.rate_limit_reset = Some("2026-11-02T19:48:53.100Z".into());
+        assert_eq!(
+            e.hint(true).as_deref(),
+            Some(
+                "Rate limit reached for your API key. Retry after 2026-11-02T19:48:53.100Z, or run `keenable login` to switch accounts."
+            )
+        );
+    }
+
+    #[test]
+    fn retry_after_seconds_win_over_rate_limit_reset() {
+        let mut e = err(429, "Too many requests");
+        e.retry_after = Some(30);
+        e.rate_limit_reset = Some("2026-11-02T19:48:53.100Z".into());
+        assert_eq!(e.retry_phrase().as_deref(), Some("Retry after 30s"));
+    }
+
+    #[test]
+    fn no_retry_time_means_no_retry_phrase() {
+        let e = err(429, "Too many requests");
+        assert!(e.retry_phrase().is_none());
+        assert!(e.to_yaml_value().get("rate_limit_reset").is_none());
+        assert!(e.hint(true).unwrap_or_default().contains("Retry later"));
+    }
+
+    /// A 429 the way the API sends it: no Retry-After, only X-RateLimit-*.
+    #[tokio::test]
+    async fn handle_response_reads_x_ratelimit_reset_on_429() {
+        let http_resp = reqwest::Response::from(
+            ::http::Response::builder()
+                .status(429)
+                .header("x-ratelimit-reset", "2026-11-02T19:48:53.100Z")
+                .header("x-request-id", "req-429")
+                .body(r#"{"error":"Too many requests","message":"Rate limit exceeded"}"#)
+                .unwrap(),
+        );
+        let e = handle_response(http_resp).await.unwrap_err();
+        assert_eq!(e.status, 429);
+        assert_eq!(e.retry_after, None);
+        assert_eq!(
+            e.rate_limit_reset.as_deref(),
+            Some("2026-11-02T19:48:53.100Z")
+        );
+        assert_eq!(e.request_id.as_deref(), Some("req-429"));
+    }
+
+    /// The API sends X-RateLimit-Reset on 400s too; it must not leak into
+    /// a non-429 error as a retry time.
+    #[tokio::test]
+    async fn handle_response_ignores_x_ratelimit_reset_on_400() {
+        let http_resp = reqwest::Response::from(
+            ::http::Response::builder()
+                .status(400)
+                .header("x-ratelimit-reset", "2026-11-02T19:48:53.100Z")
+                .body(r#"{"error":"Invalid parameter","message":"\"max_results\": must be an integer between 1 and 50"}"#)
+                .unwrap(),
+        );
+        let e = handle_response(http_resp).await.unwrap_err();
+        assert_eq!(e.status, 400);
+        assert_eq!(e.rate_limit_reset, None);
+        assert!(e.to_yaml_value().get("rate_limit_reset").is_none());
+        assert!(e.retry_phrase().is_none());
     }
 }

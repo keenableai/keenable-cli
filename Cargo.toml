@@ -35,3 +35,6 @@ axoupdater = "0.10.2"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[dev-dependencies]
+http = "1"

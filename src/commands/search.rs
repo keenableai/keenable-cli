@@ -361,11 +361,13 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
         let retry_after = data["retry_after"].as_u64();
         let status = data["status"].as_u64().unwrap_or(0) as u16;
         let request_id = data["request_id"].as_str().map(|s| s.to_string());
+        let rate_limit_reset = data["rate_limit_reset"].as_str().map(|s| s.to_string());
         return ApiError {
             status,
             error,
             message,
             retry_after,
+            rate_limit_reset,
             request_id,
         };
     }
@@ -385,12 +387,6 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
 
     if human {
         ui::error(&err.display());
-        if err.is_rate_limit()
-            && !authenticated
-            && let Some(secs) = err.retry_after
-        {
-            ui::hint(&format!("Retry after {}s.", secs));
-        }
         if let Some(hint) = &hint {
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
         }
