@@ -28,7 +28,7 @@ The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Conf
 src/
   main.rs              # CLI entry point, clap definitions
   ui.rs                # Shared terminal UI helpers (header, step_done, success, error, hint)
-  constants.rs         # API URLs, OAuth config, ports
+  constants.rs         # Default API URL, KEENABLE_API_URL name, OAuth config
   config.rs            # ~/.keenable/ config and credentials read/write
   api.rs               # HTTP client factories (api_key_client, bare_client), ApiError, response handling
   update.rs            # GitHub Releases version check (cached, non-blocking)
@@ -102,6 +102,12 @@ Commands auto-start the daemon on first call. It auto-exits after 5 minutes of i
 
 The daemon works with or without an API key (authenticated vs public endpoints).
 It is automatically killed and restarted on `login` / `logout` so it picks up the new auth state.
+There is one daemon per API base: `daemon.sock` / `daemon.pid` for the production API, `daemon-<12-hex FNV-1a of the base>.sock/.pid` for a `KEENABLE_API_URL` override, so switching bases never stops another base's daemon. `login` / `logout` stop all of them. A socket path at or over the OS limit (104 bytes on macOS) skips the daemon and goes direct.
+Each connection starts with an `identity` handshake: current daemons answer with their tagged API base, older ones with an untagged "Unknown command". On a mismatch the real request is never sent; `daemon_request` restarts that daemon once, then falls back to the direct path. Every response is also tagged and checked as a backstop. A daemon on an overridden base refuses untagged requests (older CLIs only know the default base). `stop_daemon` removes socket/pid files only if the pid file is unchanged, so a concurrently started replacement survives.
+
+### API Base URL (`KEENABLE_API_URL`)
+
+All API calls (search, fetch, public endpoints, key validation, login device flow) build URLs via `api::api_url()`, which uses `api::api_base()`: `KEENABLE_API_URL` when set, else `https://api.keenable.ai` (`DEFAULT_API_BASE_URL`). Rule: https only, except http to `localhost` or a loopback IP; trailing slashes are stripped, a path prefix is kept. Same variable as the SDKs, and the same core rule (https, or http to loopback); the CLI additionally rejects a query or fragment (the Go SDK does too, Python doesn't) and accepts any spelling of the loopback IPs (`127.1`, `[0:0::1]`), which the SDKs reject. `main` validates it before any API command and exits 1 with an error naming the variable and the fix — YAML on stdout only for search/fetch without `-p`, `ui::error` + `ui::hint` on stderr otherwise (`api::exit_invalid_api_base`). The MCP URL written by `configure-mcp` always uses the production base — an env override is never persisted into client configs. Never format URLs from the constant directly.
 
 ### Terminal UI Design (`src/ui.rs`)
 

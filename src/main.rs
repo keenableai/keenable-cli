@@ -264,9 +264,24 @@ fn collect_client_flags(
         .collect()
 }
 
+/// Fail fast on an invalid `KEENABLE_API_URL` before any command talks to
+/// the API. Agent-facing output (search/fetch without `-p`) also gets the
+/// error as YAML on stdout, like API errors.
+fn check_api_base(command: &Commands) {
+    let yaml = match command {
+        Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => !*pretty,
+        Commands::Login { .. } | Commands::ConfigureMcp { .. } | Commands::Daemon => false,
+        _ => return,
+    };
+    if let Err(msg) = api::resolved_api_base() {
+        api::exit_invalid_api_base(msg, yaml);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    check_api_base(&cli.command);
 
     // Update check only for human-facing output: awaiting it would add up to
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.

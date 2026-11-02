@@ -73,6 +73,14 @@ keenable fetch https://example.com --session-id agent-run-42   # Group with rela
 
 When content is cut at the character cap, it ends with the API's truncation note and the YAML output carries `truncated: true`.
 
+### API endpoint
+
+Set `KEENABLE_API_URL` to send API calls somewhere other than `https://api.keenable.ai`, e.g. a local gateway that adds credentials. It must be `https://`, except `http://` to `localhost`, `127.0.0.1` or `::1`. `configure-mcp` still writes the production MCP URL.
+
+```bash
+KEENABLE_API_URL=http://127.0.0.1:8080 keenable search "query"
+```
+
 ### Authentication
 
 ```bash

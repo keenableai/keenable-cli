@@ -1,7 +1,9 @@
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::constants::API_BASE_URL;
+use std::sync::OnceLock;
+
+use crate::constants::{API_URL_ENV, DEFAULT_API_BASE_URL};
 
 const USER_AGENT: &str = concat!("keenable-cli/", env!("CARGO_PKG_VERSION"));
 
@@ -227,8 +229,89 @@ pub fn build_with_root_fallback(
         .ok()
 }
 
+/// Resolve the API base URL from an optional `KEENABLE_API_URL` value.
+/// Unset or blank means the production API. https only, except plain http to
+/// localhost or a loopback IP (any spelling: `127.1`, `[0:0::1]`); a host is
+/// required, a query or fragment is not allowed, and trailing slashes are
+/// dropped. A path prefix (`https://gw.example/keenable`) is kept. The SDKs
+/// read the same variable with the same core rule, but accept only the exact
+/// strings `127.0.0.1` / `::1`, and the Python SDK allows a query. Pure for
+/// unit tests.
+fn resolve_api_base(env_value: Option<&str>) -> Result<String, String> {
+    let raw = match env_value.map(str::trim) {
+        Some(v) if !v.is_empty() => v.trim_end_matches('/'),
+        _ => return Ok(DEFAULT_API_BASE_URL.to_string()),
+    };
+    let invalid = |why: &str| {
+        format!(
+            "{API_URL_ENV} must be an https:// URL{why} (http is allowed only for localhost, 127.0.0.1 and ::1), got {raw:?}"
+        )
+    };
+    let url = reqwest::Url::parse(raw).map_err(|_| invalid(" with a host"))?;
+    // host_str() brackets IPv6 literals ("[::1]"); compare parsed addresses
+    // so every spelling of the loopback address (`[0:0::1]`, `127.1`) counts.
+    let local = match url.host_str() {
+        None | Some("") => return Err(invalid(" with a host")),
+        Some(host) => match host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+        {
+            Ok(ip) => ip == std::net::Ipv4Addr::LOCALHOST || ip == std::net::Ipv6Addr::LOCALHOST,
+            Err(_) => host == "localhost",
+        },
+    };
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(invalid(" with no query or fragment"));
+    }
+    match url.scheme() {
+        "https" => Ok(raw.to_string()),
+        "http" if local => Ok(raw.to_string()),
+        _ => Err(invalid("")),
+    }
+}
+
+/// The API base URL for this process: `KEENABLE_API_URL` or production.
+/// `main` validates it before any API command runs, so callers can rely on
+/// `api_base()`; the daemon reports it so a client never talks to a daemon
+/// started against a different base.
+pub fn resolved_api_base() -> Result<&'static str, &'static str> {
+    static BASE: OnceLock<Result<String, String>> = OnceLock::new();
+    BASE.get_or_init(|| resolve_api_base(std::env::var(API_URL_ENV).ok().as_deref()))
+        .as_ref()
+        .map(String::as_str)
+        .map_err(String::as_str)
+}
+
+pub fn api_base() -> &'static str {
+    match resolved_api_base() {
+        Ok(base) => base,
+        Err(msg) => exit_invalid_api_base(msg, false),
+    }
+}
+
+/// Report an invalid `KEENABLE_API_URL` with the fix and exit 1: as a
+/// structured YAML error on stdout when `yaml` (agent-facing commands),
+/// otherwise as human text on stderr.
+pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
+    let hint = format!("Fix {API_URL_ENV} or unset it to use {DEFAULT_API_BASE_URL}.");
+    if yaml {
+        let out = serde_json::json!({
+            "error": format!("Invalid {API_URL_ENV}"),
+            "message": msg,
+            "hint": hint,
+        });
+        // Like API errors in YAML mode: structured output only.
+        print!("{}", serde_yaml::to_string(&out).unwrap_or_default());
+    } else {
+        crate::ui::error(msg);
+        crate::ui::hint(&hint);
+    }
+    std::process::exit(1);
+}
+
 pub fn api_url(path: &str) -> String {
-    format!("{}{}", API_BASE_URL, path)
+    format!("{}{}", api_base(), path)
 }
 
 pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError> {
@@ -429,6 +512,84 @@ mod tests {
             resolve_app_title(Some("  custom-app  ".into())),
             "custom-app"
         );
+    }
+
+    #[test]
+    fn api_base_defaults_when_env_absent_or_blank() {
+        assert_eq!(resolve_api_base(None).unwrap(), "https://api.keenable.ai");
+        assert_eq!(
+            resolve_api_base(Some("")).unwrap(),
+            "https://api.keenable.ai"
+        );
+        assert_eq!(
+            resolve_api_base(Some("  ")).unwrap(),
+            "https://api.keenable.ai"
+        );
+    }
+
+    #[test]
+    fn api_base_accepts_https_and_strips_trailing_slash() {
+        let ok = |v: &str| resolve_api_base(Some(v)).unwrap();
+        assert_eq!(
+            ok("https://api-test.keenable.ai"),
+            "https://api-test.keenable.ai"
+        );
+        assert_eq!(
+            ok("https://api-test.keenable.ai/"),
+            "https://api-test.keenable.ai"
+        );
+        assert_eq!(
+            ok(" https://gw.example:8443/keenable// "),
+            "https://gw.example:8443/keenable"
+        );
+        assert_eq!(ok("HTTPS://Gw.Example"), "HTTPS://Gw.Example");
+    }
+
+    #[test]
+    fn api_base_allows_http_only_for_loopback() {
+        let ok = |v: &str| resolve_api_base(Some(v)).unwrap();
+        assert_eq!(ok("http://localhost:8080/"), "http://localhost:8080");
+        assert_eq!(ok("http://LOCALHOST"), "http://LOCALHOST");
+        assert_eq!(ok("http://127.0.0.1:9000"), "http://127.0.0.1:9000");
+        assert_eq!(ok("http://[::1]:9000"), "http://[::1]:9000");
+        assert_eq!(ok("http://[::1]"), "http://[::1]");
+        assert_eq!(
+            ok("http://[0:0:0:0:0:0:0:1]:9000/"),
+            "http://[0:0:0:0:0:0:0:1]:9000"
+        );
+        assert_eq!(ok("http://127.1:9000"), "http://127.1:9000");
+        for bad in [
+            "http://example.com",
+            "http://127.0.0.2",
+            "http://10.0.0.1:8080",
+            "http://localhost.example.com",
+            "http://[::2]",
+        ] {
+            assert!(
+                resolve_api_base(Some(bad)).is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn api_base_rejects_malformed_values() {
+        for bad in [
+            "api.keenable.ai",
+            "ftp://api.keenable.ai",
+            "https://",
+            "file:///etc/passwd",
+            "https://api.keenable.ai?x=1",
+            "https://api.keenable.ai#frag",
+            "not a url",
+        ] {
+            let err = resolve_api_base(Some(bad)).unwrap_err();
+            assert!(
+                err.starts_with("KEENABLE_API_URL must be an https:// URL"),
+                "{bad}: {err}"
+            );
+            assert!(err.contains(bad.trim_end_matches('/')), "{bad}: {err}");
+        }
     }
 
     #[test]
