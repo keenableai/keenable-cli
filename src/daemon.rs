@@ -18,6 +18,9 @@ pub struct DaemonRequest {
     /// Fetch only: content-length cap; the API defaults to 50000 when unset.
     #[serde(default)]
     pub max_chars: Option<u64>,
+    /// Fetch only: groups the call with related searches and fetches.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 impl DaemonRequest {
@@ -39,6 +42,9 @@ impl DaemonRequest {
         }
         if let Some(m) = self.max_chars {
             query.push(("max_chars", m.to_string()));
+        }
+        if let Some(id) = &self.session_id {
+            query.push(("session_id", id.clone()));
         }
         Some(query)
     }

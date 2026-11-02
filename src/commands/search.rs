@@ -41,6 +41,38 @@ impl SearchFilters {
     }
 }
 
+/// Non-filter search parameters; unset ones are left to the server default.
+#[derive(Default)]
+pub struct SearchOptions {
+    pub snippet_max_length: Option<u64>,
+    pub max_results: Option<u64>,
+    /// Groups related calls (search and fetch) under one session.
+    pub session_id: Option<String>,
+    /// Experimental structured-data extraction; pro mode only.
+    pub enable_wizards: bool,
+}
+
+impl SearchOptions {
+    fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        if let Some(n) = self.snippet_max_length {
+            map.insert("snippet_max_length".into(), json!(n));
+        }
+        if let Some(n) = self.max_results {
+            map.insert("max_results".into(), json!(n));
+        }
+        if let Some(id) = &self.session_id {
+            map.insert("session_id".into(), json!(id));
+        }
+        // Sent only when set: the API rejects it outside pro mode, so an
+        // explicit `false` would turn a valid realtime search into a 400.
+        if self.enable_wizards {
+            map.insert("enable_wizards".into(), json!(true));
+        }
+        Value::Object(map)
+    }
+}
+
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
 /// Trimmed — stray whitespace breaks HTTP header building.
 fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
@@ -422,8 +454,7 @@ pub async fn search(
     query: &str,
     mode: Option<&str>,
     filters: SearchFilters,
-    snippet_max_length: Option<u64>,
-    max_results: Option<u64>,
+    options: SearchOptions,
     human: bool,
     api_key: Option<&str>,
 ) {
@@ -454,17 +485,14 @@ pub async fn search(
     if let Some(m) = &effective_mode {
         body["mode"] = json!(m);
     }
-    if let Some(n) = snippet_max_length {
-        body["snippet_max_length"] = json!(n);
-    }
-    if let Some(n) = max_results {
-        body["max_results"] = json!(n);
-    }
-    // Merge filter fields into body
-    if let Value::Object(filter_map) = filters.to_json()
-        && let Value::Object(ref mut body_map) = body
-    {
-        body_map.extend(filter_map);
+    // Merge option and filter fields into body. The body goes to the API
+    // verbatim on both the daemon and the direct path.
+    if let Value::Object(ref mut body_map) = body {
+        for extra in [options.to_json(), filters.to_json()] {
+            if let Value::Object(map) = extra {
+                body_map.extend(map);
+            }
+        }
     }
 
     let req = DaemonRequest {
@@ -521,6 +549,7 @@ pub async fn fetch(
     live: bool,
     prompt: Option<String>,
     max_chars: Option<u64>,
+    session_id: Option<String>,
     human: bool,
     api_key: Option<&str>,
 ) {
@@ -530,6 +559,7 @@ pub async fn fetch(
         live,
         prompt,
         max_chars,
+        session_id,
         ..Default::default()
     };
 
@@ -602,6 +632,60 @@ mod tests {
         assert_eq!(v["query_time"], json!("2024-06-01T00:00:00Z"));
         assert!(v.get("acquired_after").is_none());
         assert!(v.get("published_before").is_none());
+    }
+
+    #[test]
+    fn search_options_omit_unset_fields() {
+        assert!(
+            SearchOptions::default()
+                .to_json()
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_options_include_session_and_wizards() {
+        let v = SearchOptions {
+            snippet_max_length: Some(500),
+            max_results: Some(5),
+            session_id: Some("sess-1".into()),
+            enable_wizards: true,
+        }
+        .to_json();
+        assert_eq!(
+            v,
+            json!({
+                "snippet_max_length": 500,
+                "max_results": 5,
+                "session_id": "sess-1",
+                "enable_wizards": true,
+            })
+        );
+    }
+
+    #[test]
+    fn fetch_query_carries_session_id() {
+        let req = DaemonRequest {
+            command: "fetch".into(),
+            urls: Some(vec!["https://example.com".into()]),
+            session_id: Some("sess-1".into()),
+            ..Default::default()
+        };
+        let q = req.fetch_query().unwrap();
+        assert!(q.contains(&("session_id", "sess-1".to_string())), "{q:?}");
+        let bare = DaemonRequest {
+            urls: Some(vec!["https://example.com".into()]),
+            ..Default::default()
+        };
+        assert!(
+            !bare
+                .fetch_query()
+                .unwrap()
+                .iter()
+                .any(|(k, _)| *k == "session_id")
+        );
     }
 
     #[test]

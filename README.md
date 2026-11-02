@@ -53,6 +53,8 @@ keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
 keenable search "query" --snippet-max-length 2000          # Longer snippets (180-10000)
 keenable search "query" --query-time 2026-01-01T00:00:00Z  # Point-in-time search
+keenable search "query" --session-id agent-run-42          # Group related calls in a session
+keenable search "query" --mode pro --enable-wizards        # Structured-data extraction (experimental, pro mode only)
 keenable search "query" --api-key KEY                      # Use a specific API key
 ```
 
@@ -66,6 +68,7 @@ keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://example.com --live   # Fetch the live page (skip cache)
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
 keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char content cap
+keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
 ```
 
 When content is cut at the character cap, it ends with the API's truncation note and the YAML output carries `truncated: true`.
