@@ -7,8 +7,20 @@ use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
+/// Optional filters merged into the `/v1/search` request body.
+///
+/// Unset fields are omitted from the JSON so older servers never see them.
 pub struct SearchFilters {
+    /// Single-domain alias kept for backward compatibility (`site`).
     pub site: Option<String>,
+    /// Allow-list: results come only from these entries (`include_domains`).
+    /// Empty means the field is omitted. Entries are sent verbatim: the
+    /// server validates and normalizes them, so its `invalid_filter` error
+    /// (field, entry, reason) reaches the user unchanged.
+    pub include_domains: Vec<String>,
+    /// Block-list: results never come from these entries (`exclude_domains`).
+    /// Empty means the field is omitted. Sent verbatim, like `include_domains`.
+    pub exclude_domains: Vec<String>,
     pub acquired_after: Option<String>,
     pub acquired_before: Option<String>,
     pub published_after: Option<String>,
@@ -17,10 +29,16 @@ pub struct SearchFilters {
 }
 
 impl SearchFilters {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
         if let Some(v) = &self.site {
             map.insert("site".into(), json!(v));
+        }
+        if !self.include_domains.is_empty() {
+            map.insert("include_domains".into(), json!(self.include_domains));
+        }
+        if !self.exclude_domains.is_empty() {
+            map.insert("exclude_domains".into(), json!(self.exclude_domains));
         }
         if let Some(v) = &self.acquired_after {
             map.insert("acquired_after".into(), json!(v));
@@ -430,6 +448,8 @@ mod tests {
     fn filters() -> SearchFilters {
         SearchFilters {
             site: None,
+            include_domains: vec![],
+            exclude_domains: vec![],
             acquired_after: None,
             acquired_before: None,
             published_after: None,
@@ -457,6 +477,57 @@ mod tests {
         assert_eq!(v["query_time"], json!("2024-06-01T00:00:00Z"));
         assert!(v.get("acquired_after").is_none());
         assert!(v.get("published_before").is_none());
+    }
+
+    #[test]
+    fn to_json_omits_empty_domain_lists() {
+        let v = filters().to_json();
+        assert!(v.get("include_domains").is_none());
+        assert!(v.get("exclude_domains").is_none());
+    }
+
+    #[test]
+    fn to_json_serializes_domain_lists_as_arrays() {
+        let f = SearchFilters {
+            include_domains: vec!["press.un.org".into(), "undocs.org".into(), ".gov".into()],
+            exclude_domains: vec!["blogs.un.org".into()],
+            ..filters()
+        };
+        let v = f.to_json();
+        assert_eq!(
+            v["include_domains"],
+            json!(["press.un.org", "undocs.org", ".gov"])
+        );
+        assert_eq!(v["exclude_domains"], json!(["blogs.un.org"]));
+        assert!(v.get("site").is_none());
+    }
+
+    #[test]
+    fn to_json_keeps_site_alongside_exclude_domains() {
+        // `site` stays a single-domain alias; combining it with
+        // exclude_domains is valid, so both are forwarded.
+        let f = SearchFilters {
+            site: Some("docs.rs".into()),
+            exclude_domains: vec!["docs.rs/old".into()],
+            ..filters()
+        };
+        let v = f.to_json();
+        assert_eq!(v["site"], json!("docs.rs"));
+        assert_eq!(v["exclude_domains"], json!(["docs.rs/old"]));
+    }
+
+    #[test]
+    fn to_json_does_not_validate_entries() {
+        // No client-side validation: bad entries go to the server, which
+        // answers with a 400 invalid_filter naming field, entry and reason.
+        let f = SearchFilters {
+            include_domains: vec!["https://example.com".into(), "*".into()],
+            ..filters()
+        };
+        assert_eq!(
+            f.to_json()["include_domains"],
+            json!(["https://example.com", "*"])
+        );
     }
 
     #[test]

@@ -41,6 +41,9 @@ enum ConfigAction {
     },
 }
 
+// Parsed once per process, so the size gap between `Search` (many flags) and
+// the small variants is irrelevant; boxing would only add noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
@@ -137,7 +140,7 @@ enum Commands {
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --include-domain a.com,b.com          Only these domains (repeatable)\n  keenable search \"AI news\" --exclude-domain spam.com             Never these domains\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
     )]
     Search {
         /// Search query
@@ -147,9 +150,17 @@ enum Commands {
         #[arg(long)]
         mode: Option<String>,
 
-        /// Restrict results to a specific site (e.g. "docs.rs")
+        /// Restrict results to a specific site (e.g. "docs.rs"). Single-domain alias; use --include-domain for several
         #[arg(long)]
         site: Option<String>,
+
+        /// Only return results from this domain. Repeatable, or a comma list (a.com,b.com). Forms: example.com (with subdomains), example.com/docs (path prefix), .gov (suffix)
+        #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
+        include_domain: Vec<String>,
+
+        /// Never return results from this domain. Repeatable, or a comma list. Same forms as --include-domain; wins over it on overlap
+        #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
+        exclude_domain: Vec<String>,
 
         /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
         #[arg(long)]
@@ -310,6 +321,8 @@ async fn main() {
             query,
             mode,
             site,
+            include_domain,
+            exclude_domain,
             acquired_after,
             acquired_before,
             published_after,
@@ -322,6 +335,8 @@ async fn main() {
         } => {
             let filters = commands::search::SearchFilters {
                 site,
+                include_domains: include_domain,
+                exclude_domains: exclude_domain,
                 acquired_after,
                 acquired_before,
                 published_after,
@@ -368,5 +383,75 @@ async fn main() {
             version
         ));
         ui::hint(&format!("Run: {}", update::update_hint()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Parse `keenable search ...` and return the filters it would send.
+    fn search_filters(args: &[&str]) -> serde_json::Value {
+        let argv = ["keenable", "search", "q"].iter().chain(args);
+        let Commands::Search {
+            site,
+            include_domain,
+            exclude_domain,
+            ..
+        } = Cli::try_parse_from(argv).expect("args parse").command
+        else {
+            panic!("expected the search subcommand");
+        };
+        commands::search::SearchFilters {
+            site,
+            include_domains: include_domain,
+            exclude_domains: exclude_domain,
+            acquired_after: None,
+            acquired_before: None,
+            published_after: None,
+            published_before: None,
+            query_time: None,
+        }
+        .to_json()
+    }
+
+    #[test]
+    fn domain_flags_absent_by_default() {
+        let v = search_filters(&[]);
+        assert!(v.get("include_domains").is_none());
+        assert!(v.get("exclude_domains").is_none());
+    }
+
+    #[test]
+    fn domain_flags_accept_repeats_and_comma_lists() {
+        let v = search_filters(&[
+            "--include-domain",
+            "press.un.org,undocs.org",
+            "--include-domain",
+            ".gov",
+            "--exclude-domain",
+            "blogs.un.org",
+        ]);
+        assert_eq!(
+            v["include_domains"],
+            json!(["press.un.org", "undocs.org", ".gov"])
+        );
+        assert_eq!(v["exclude_domains"], json!(["blogs.un.org"]));
+    }
+
+    #[test]
+    fn site_flag_is_kept() {
+        let v = search_filters(&["--site", "docs.rs"]);
+        assert_eq!(v["site"], json!("docs.rs"));
+        assert!(v.get("include_domains").is_none());
+    }
+
+    #[test]
+    fn site_and_include_domain_both_forwarded_for_server_to_reject() {
+        // No client-side validation: the server answers 400 invalid_filter.
+        let v = search_filters(&["--site", "a.com", "--include-domain", "b.com"]);
+        assert_eq!(v["site"], json!("a.com"));
+        assert_eq!(v["include_domains"], json!(["b.com"]));
     }
 }
