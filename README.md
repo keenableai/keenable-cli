@@ -81,6 +81,8 @@ Each entry is one of:
 
 - Both flags together keep results that are included and not excluded
   (exclude wins). A narrow list can return fewer than `--max-results`.
+  When the filter actually removed results, the response carries a `warning`
+  that says so (printed in YAML, and shown above the results with `-p`).
 - `--site` still works as a single-domain alias, but cannot be combined with
   `--include-domain`.
 - The CLI does not validate entries itself. A bad entry (scheme, port, bare

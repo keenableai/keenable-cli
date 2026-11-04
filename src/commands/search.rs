@@ -59,6 +59,15 @@ impl SearchFilters {
     }
 }
 
+/// The response's `warning`, if any (e.g. the domain filter removed results,
+/// or inline `site:` tokens were dropped). Blank strings count as none.
+fn response_warning(data: &Value) -> Option<&str> {
+    data["warning"]
+        .as_str()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+}
+
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
 /// Trimmed — stray whitespace breaks HTTP header building.
 fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
@@ -353,6 +362,12 @@ pub async fn search(
             fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
+                // YAML mode prints the whole response; pretty mode must surface
+                // the warning itself, or a short list goes unexplained.
+                if let Some(warning) = response_warning(&data) {
+                    ui::warning(warning);
+                    eprintln!();
+                }
                 if let Some(results) = data["results"].as_array() {
                     if results.is_empty() {
                         ui::info("No results found.");
@@ -551,5 +566,18 @@ mod tests {
     fn config_mode_ignores_invalid_or_missing() {
         assert_eq!(config_mode(&json!({"m": "bogus"}), "m"), None);
         assert_eq!(config_mode(&json!({}), "m"), None);
+    }
+
+    #[test]
+    fn response_warning_is_surfaced_only_when_set() {
+        assert_eq!(
+            response_warning(
+                &json!({"warning": "Some results were removed by the domain filter."})
+            ),
+            Some("Some results were removed by the domain filter.")
+        );
+        assert_eq!(response_warning(&json!({"warning": "  "})), None);
+        assert_eq!(response_warning(&json!({"warning": null})), None);
+        assert_eq!(response_warning(&json!({"results": []})), None);
     }
 }
