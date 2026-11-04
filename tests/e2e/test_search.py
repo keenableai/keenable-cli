@@ -200,6 +200,17 @@ def domain_flags(kn):
         pytest.skip("binary predates --include-domain/--exclude-domain")
 
 
+def _assert_invalid_filter(message, field, entry):
+    """Assert the API's invalid_filter wording, not just any 400.
+
+    A server without domain filters also exits 1, with "Unknown parameter(s):
+    include_domains ... site", which names both fields. The real rejection is
+    `Invalid <field> value "<entry>": <reason>` (backend ticket 03).
+    """
+    assert "Unknown parameter" not in message, f"server lacks domain filters: {message}"
+    assert message.startswith(f'Invalid {field} value "{entry}"'), message
+
+
 def test_include_domains_allowlist(kn, domain_flags):
     # Repeated flag + comma list together: all three must reach the server.
     results = _non_empty_results(
@@ -236,7 +247,7 @@ def test_domain_conflict_errors(kn, domain_flags):
     assert res.code == 1
     data = res.yaml()
     assert "error" in data
-    assert "docs.rs" in data["message"]
+    _assert_invalid_filter(data["message"], "exclude_domains", "docs.rs")
 
 
 def test_site_with_include_domain_errors(kn, domain_flags):
@@ -244,7 +255,7 @@ def test_site_with_include_domain_errors(kn, domain_flags):
     assert res.code == 1
     data = res.yaml()
     assert "error" in data
-    assert "site" in data["message"] or "include_domains" in data["message"]
+    _assert_invalid_filter(data["message"], "site", "docs.rs")
 
 
 def test_malformed_date(kn):
