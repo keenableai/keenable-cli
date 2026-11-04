@@ -80,6 +80,60 @@ fn response_warning(data: &Value) -> Option<&str> {
         .filter(|w| !w.is_empty())
 }
 
+/// One piece of the pretty search output, in print order.
+#[derive(Debug, PartialEq)]
+enum HumanBlock<'a> {
+    Warning(&'a str),
+    NoResults,
+    Result(usize, &'a Value),
+}
+
+/// The pretty output's blocks; the warning comes first so it shows even with no results.
+fn human_blocks(data: &Value) -> Vec<HumanBlock<'_>> {
+    let mut blocks: Vec<HumanBlock<'_>> = response_warning(data)
+        .map(HumanBlock::Warning)
+        .into_iter()
+        .collect();
+    match data["results"].as_array() {
+        Some(results) if !results.is_empty() => blocks.extend(
+            results
+                .iter()
+                .enumerate()
+                .map(|(i, r)| HumanBlock::Result(i, r)),
+        ),
+        _ => blocks.push(HumanBlock::NoResults),
+    }
+    blocks
+}
+
+fn print_human_result(i: usize, result: &Value) {
+    let title = result["title"].as_str().unwrap_or("Untitled");
+    let url = result["url"].as_str().unwrap_or("");
+    let snippet = result["snippet"].as_str().unwrap_or("");
+    let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+    let snippet_truncated: String = snippet_flat.chars().take(200).collect();
+    let published = result["published_at"].as_str().unwrap_or("");
+    let acquired = result["acquired_at"].as_str().unwrap_or("");
+
+    let num = format!("{:>2}.", i + 1).dimmed();
+    eprintln!("   {} {}", num, title.bold());
+    eprintln!("      {}", url.cyan());
+    if !snippet_truncated.is_empty() {
+        eprintln!("      {}", snippet_truncated.dimmed());
+    }
+    if !published.is_empty() || !acquired.is_empty() {
+        let mut dates = Vec::new();
+        if !published.is_empty() {
+            dates.push(format!("published: {}", published));
+        }
+        if !acquired.is_empty() {
+            dates.push(format!("acquired: {}", acquired));
+        }
+        eprintln!("      {}", dates.join("  ").dimmed());
+    }
+    eprintln!();
+}
+
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
 /// Trimmed — stray whitespace breaks HTTP header building.
 fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
@@ -225,15 +279,10 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
     }
 }
 
-/// Display an ApiError according to output mode (human vs YAML).
-/// Auth and rate-limit errors always carry a `keenable login` hint (a
-/// structured `hint` field in YAML mode), but the wording is auth-aware:
-/// login can't raise limits for a key that's already in use, so an
-/// authenticated 429 suggests retrying or switching accounts instead of
-/// falsely promising higher limits.
-fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
-    let authenticated = resolve_api_key(api_key_override).is_some();
-    let login_hint = if err.is_auth_error() {
+/// The `keenable login` hint for auth and rate-limit errors, None for anything else.
+/// An authenticated 429 suggests retrying, since login cannot raise that key's limits.
+fn login_hint(err: &ApiError, authenticated: bool) -> Option<String> {
+    if err.is_auth_error() {
         Some("Run `keenable login` to authenticate.".to_string())
     } else if err.is_rate_limit() {
         if authenticated {
@@ -250,7 +299,22 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
         }
     } else {
         None
-    };
+    }
+}
+
+/// YAML error output: the error's fields plus the hint, if any.
+fn error_yaml(err: &ApiError, hint: Option<String>) -> Value {
+    let mut val = err.to_yaml_value();
+    if let Some(hint) = hint {
+        val["hint"] = Value::String(hint);
+    }
+    val
+}
+
+/// Display an ApiError according to output mode (human vs YAML).
+fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
+    let authenticated = resolve_api_key(api_key_override).is_some();
+    let login_hint = login_hint(&err, authenticated);
 
     if human {
         ui::error(&err.display());
@@ -265,12 +329,7 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
         }
         eprintln!();
     } else {
-        // YAML error output for agents (retry_after is already a field)
-        let mut val = err.to_yaml_value();
-        if let Some(hint) = login_hint {
-            val["hint"] = Value::String(hint);
-        }
-        print_yaml(&val);
+        print_yaml(&error_yaml(&err, login_hint));
     }
     std::process::exit(1);
 }
@@ -391,46 +450,18 @@ pub async fn search(
             fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
-                if let Some(warning) = response_warning(&data) {
-                    ui::warning(warning);
-                    eprintln!();
-                }
-                if let Some(results) = data["results"].as_array() {
-                    if results.is_empty() {
-                        ui::info("No results found.");
-                        eprintln!();
-                        return;
-                    }
-                    for (i, result) in results.iter().enumerate() {
-                        let title = result["title"].as_str().unwrap_or("Untitled");
-                        let url = result["url"].as_str().unwrap_or("");
-                        let snippet = result["snippet"].as_str().unwrap_or("");
-                        let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let snippet_truncated: String = snippet_flat.chars().take(200).collect();
-                        let published = result["published_at"].as_str().unwrap_or("");
-                        let acquired = result["acquired_at"].as_str().unwrap_or("");
-
-                        let num = format!("{:>2}.", i + 1).dimmed();
-                        eprintln!("   {} {}", num, title.bold());
-                        eprintln!("      {}", url.cyan());
-                        if !snippet_truncated.is_empty() {
-                            eprintln!("      {}", snippet_truncated.dimmed());
+                for block in human_blocks(&data) {
+                    match block {
+                        HumanBlock::Warning(warning) => {
+                            ui::warning(warning);
+                            eprintln!();
                         }
-                        if !published.is_empty() || !acquired.is_empty() {
-                            let mut dates = Vec::new();
-                            if !published.is_empty() {
-                                dates.push(format!("published: {}", published));
-                            }
-                            if !acquired.is_empty() {
-                                dates.push(format!("acquired: {}", acquired));
-                            }
-                            eprintln!("      {}", dates.join("  ").dimmed());
+                        HumanBlock::NoResults => {
+                            ui::info("No results found.");
+                            eprintln!();
                         }
-                        eprintln!();
+                        HumanBlock::Result(i, result) => print_human_result(i, result),
                     }
-                } else {
-                    ui::info("No results found.");
-                    eprintln!();
                 }
                 return;
             }
@@ -668,6 +699,115 @@ mod tests {
                 "warning": "Some results were removed by the domain filter.",
                 "results": [{"url": "https://a.com", "snippet": "d"}],
             })
+        );
+    }
+
+    fn invalid_filter() -> ApiError {
+        ApiError {
+            status: 400,
+            error: "invalid_filter".into(),
+            message: Some(
+                r#"Invalid exclude_domains value "docs.rs": also in include_domains"#.into(),
+            ),
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn invalid_filter_is_neither_auth_nor_rate_limit() {
+        let err = invalid_filter();
+        assert!(!err.is_auth_error());
+        assert!(!err.is_rate_limit());
+        assert_eq!(login_hint(&err, true), None);
+        assert_eq!(login_hint(&err, false), None);
+    }
+
+    #[test]
+    fn invalid_filter_yaml_keeps_the_message_and_has_no_hint() {
+        let err = invalid_filter();
+        let v = error_yaml(&err, login_hint(&err, false));
+        assert_eq!(
+            v,
+            json!({
+                "error": "invalid_filter",
+                "message": r#"Invalid exclude_domains value "docs.rs": also in include_domains"#,
+            })
+        );
+    }
+
+    #[test]
+    fn auth_and_rate_limit_errors_get_a_login_hint() {
+        let auth = ApiError {
+            status: 401,
+            error: "Authentication failed".into(),
+            message: None,
+            retry_after: None,
+        };
+        let v = error_yaml(&auth, login_hint(&auth, true));
+        assert!(v["hint"].as_str().unwrap().contains("keenable login"));
+
+        let limited = ApiError {
+            status: 429,
+            error: "Too many requests".into(),
+            message: None,
+            retry_after: Some(7),
+        };
+        assert!(
+            login_hint(&limited, true)
+                .unwrap()
+                .contains("Retry after 7s")
+        );
+        assert!(
+            login_hint(&limited, false)
+                .unwrap()
+                .contains("increase your limits")
+        );
+    }
+
+    #[test]
+    fn human_blocks_show_the_warning_before_empty_results() {
+        let data = json!({"warning": "site: was dropped", "results": []});
+        assert_eq!(
+            human_blocks(&data),
+            vec![
+                HumanBlock::Warning("site: was dropped"),
+                HumanBlock::NoResults
+            ]
+        );
+    }
+
+    #[test]
+    fn human_blocks_show_the_warning_when_results_are_missing() {
+        let data = json!({"warning": "site: was dropped"});
+        assert_eq!(
+            human_blocks(&data),
+            vec![
+                HumanBlock::Warning("site: was dropped"),
+                HumanBlock::NoResults
+            ]
+        );
+    }
+
+    #[test]
+    fn human_blocks_list_results_after_the_warning() {
+        let data = json!({"warning": "w", "results": [{"url": "a"}, {"url": "b"}]});
+        let blocks = human_blocks(&data);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], HumanBlock::Warning("w"));
+        assert_eq!(blocks[1], HumanBlock::Result(0, &data["results"][0]));
+        assert_eq!(blocks[2], HumanBlock::Result(1, &data["results"][1]));
+    }
+
+    #[test]
+    fn human_blocks_without_a_warning() {
+        assert_eq!(
+            human_blocks(&json!({"results": []})),
+            vec![HumanBlock::NoResults]
+        );
+        let data = json!({"results": [{"url": "a"}]});
+        assert_eq!(
+            human_blocks(&data),
+            vec![HumanBlock::Result(0, &data["results"][0])]
         );
     }
 }

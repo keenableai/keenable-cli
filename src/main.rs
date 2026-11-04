@@ -41,8 +41,7 @@ enum ConfigAction {
     },
 }
 
-// Parsed once per process, so boxing the large variant buys nothing.
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant, reason = "parsed once per process")]
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key

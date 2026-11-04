@@ -230,21 +230,61 @@ def test_include_and_exclude_combined(kn, domain_flags):
         assert not host_under(host, "doc.rust-lang.org"), r["url"]
 
 
+def _assert_filter_rejected(res, field, entry):
+    """Exit 1 with the server's invalid_filter error and no login hint."""
+    assert res.code == 1, res.out
+    data = res.yaml()
+    assert data["error"] == "invalid_filter", data
+    assert "hint" not in data, data
+    _assert_invalid_filter(data["message"], field, entry)
+
+
+CONFLICT_ARGS = ("search", "x", "--include-domain", "docs.rs", "--exclude-domain", "docs.rs")
+
+
 def test_domain_conflict_errors(kn, domain_flags):
     # The same entry in both lists is rejected by the server.
-    res = kn("search", "x", "--include-domain", "docs.rs", "--exclude-domain", "docs.rs")
+    _assert_filter_rejected(kn(*CONFLICT_ARGS), "exclude_domains", "docs.rs")
+
+
+def test_domain_conflict_errors_in_pretty(kn, domain_flags):
+    res = kn(*CONFLICT_ARGS, "-p")
     assert res.code == 1
-    data = res.yaml()
-    assert "error" in data
-    _assert_invalid_filter(data["message"], "exclude_domains", "docs.rs")
+    assert res.out == ""
+    err = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", res.err).split())
+    assert 'Invalid exclude_domains value "docs.rs"' in err, res.err
+    assert "keenable login" not in err, res.err
 
 
 def test_site_with_include_domain_errors(kn, domain_flags):
     res = kn("search", "x", "--site", "docs.rs", "--include-domain", "crates.io")
-    assert res.code == 1
-    data = res.yaml()
-    assert "error" in data
-    _assert_invalid_filter(data["message"], "site", "docs.rs")
+    _assert_filter_rejected(res, "site", "docs.rs")
+
+
+@pytest.mark.parametrize("flag,field", [
+    ("--include-domain", "include_domains"),
+    ("--exclude-domain", "exclude_domains"),
+])
+@pytest.mark.parametrize("blank", ["", " "])
+def test_blank_domain_flag_is_rejected(kn, domain_flags, flag, field, blank):
+    # A blank flag must 400, not run an unfiltered search.
+    _assert_filter_rejected(kn("search", "x", f"{flag}={blank}"), field, "")
+
+
+@pytest.mark.parametrize("flag,field", [
+    ("--include-domain", "include_domains"),
+    ("--exclude-domain", "exclude_domains"),
+])
+@pytest.mark.parametrize("entry", ["https://docs.rs", "docs.rs:443", "*"])
+def test_bad_domain_entry_is_rejected_as_sent(kn, domain_flags, flag, field, entry):
+    _assert_filter_rejected(kn("search", "x", flag, entry), field, entry)
+
+
+def test_more_than_200_domain_entries_is_rejected(kn, domain_flags):
+    include = ",".join(f"d{i}.example.com" for i in range(150))
+    exclude = ",".join(f"d{i}.example.com" for i in range(150, 201))
+    res = kn("search", "x", "--include-domain", include, "--exclude-domain", exclude)
+    _assert_filter_rejected(res, "include_domains+exclude_domains", "201")
 
 
 # Inline positive site: plus --include-domain always drops the site: token with a warning.
@@ -266,6 +306,19 @@ def test_inline_site_with_include_domain_warns_in_pretty(kn, domain_flags):
     # ui::warning word-wraps and may color each line, so compare plain, joined text.
     err = re.sub(r"\x1b\[[0-9;]*m", "", res.err)
     assert " ".join(warning.split()) in " ".join(err.split())
+
+
+def test_warning_shows_in_pretty_when_no_results(kn, domain_flags):
+    args = ("search", "site:docs.rs zqxjvkwplm-no-such-term-7f3a9", "--include-domain", "crates.io")
+    data = kn(*args).yaml()
+    if data.get("results") or not data.get("warning"):
+        pytest.skip("query returned results or no warning; empty-result case not reached")
+    res = kn(*args, "-p")
+    assert res.code == 0
+    assert res.out == ""
+    err = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", res.err).split())
+    assert " ".join(data["warning"].split()) in err
+    assert "No results found." in err
 
 
 def test_malformed_date(kn):
