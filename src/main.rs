@@ -242,7 +242,6 @@ struct SearchArgs {
 }
 
 impl SearchArgs {
-    /// Request filters from the parsed flags, domain lists tidied.
     fn filters(&self) -> commands::search::SearchFilters {
         commands::search::SearchFilters {
             site: self.site.clone(),
@@ -383,7 +382,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Parse `keenable search ...` and return the filters it would send.
     fn search_filters(args: &[&str]) -> serde_json::Value {
         let argv = ["keenable", "search", "q"].iter().chain(args);
         let Commands::Search(search) = Cli::try_parse_from(argv).expect("args parse").command
@@ -426,7 +424,6 @@ mod tests {
 
     #[test]
     fn site_and_include_domain_both_forwarded_for_server_to_reject() {
-        // No client-side validation: the server answers 400 invalid_filter.
         let v = search_filters(&["--site", "a.com", "--include-domain", "b.com"]);
         assert_eq!(v["site"], json!("a.com"));
         assert_eq!(v["include_domains"], json!(["b.com"]));
@@ -448,7 +445,6 @@ mod tests {
 
     #[test]
     fn blank_domain_flag_still_reaches_the_server() {
-        // A blank value must reach the server as [""], not become an unfiltered search.
         for (flag, field) in [
             ("--include-domain", "include_domains"),
             ("--exclude-domain", "exclude_domains"),

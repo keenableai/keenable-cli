@@ -183,27 +183,22 @@ def test_combined_filters(kn):
         assert parse_ts(r["acquired_at"]) >= utc(2025, 1, 1), r["url"]
 
 
-# --- 2.3b domain allow-list / block-list (keenableai/keenable-sdk#10) ---
-
 ALLOWLIST = ("docs.rs", "doc.rust-lang.org", "rust-lang.github.io")
 
 
 @pytest.fixture(scope="module")
 def domain_flags(kn):
-    """Skip on released binaries that predate the domain flags."""
     res = kn("search", "--help", key=False)
     if "--include-domain" not in res.out + res.err:
         pytest.skip("binary predates --include-domain/--exclude-domain")
 
 
 def _assert_invalid_filter(message, field, entry):
-    """Assert the API's invalid_filter wording, not an unknown-parameter 400."""
     assert "Unknown parameter" not in message, f"server lacks domain filters: {message}"
     assert message.startswith(f'Invalid {field} value "{entry}"'), message
 
 
 def test_include_domains_allowlist(kn, domain_flags):
-    # Repeated flag + comma list together: all three must reach the server.
     results = _non_empty_results(
         kn, "async", "--include-domain", ",".join(ALLOWLIST[:2]),
         "--include-domain", ALLOWLIST[2],
@@ -219,7 +214,6 @@ def test_exclude_domains_blocklist(kn, domain_flags):
 
 
 def test_include_and_exclude_combined(kn, domain_flags):
-    # Exclude wins: a subdomain carved out of an allowed parent stays out.
     results = _non_empty_results(
         kn, "rust", "--include-domain", "rust-lang.org",
         "--exclude-domain", "doc.rust-lang.org",
@@ -231,7 +225,6 @@ def test_include_and_exclude_combined(kn, domain_flags):
 
 
 def _assert_filter_rejected(res, field, entry):
-    """Exit 1 with the server's invalid_filter error and no login hint."""
     assert res.code == 1, res.out
     data = res.yaml()
     assert data["error"] == "invalid_filter", data
@@ -243,7 +236,6 @@ CONFLICT_ARGS = ("search", "x", "--include-domain", "docs.rs", "--exclude-domain
 
 
 def test_domain_conflict_errors(kn, domain_flags):
-    # The same entry in both lists is rejected by the server.
     _assert_filter_rejected(kn(*CONFLICT_ARGS), "exclude_domains", "docs.rs")
 
 
@@ -267,7 +259,6 @@ def test_site_with_include_domain_errors(kn, domain_flags):
 ])
 @pytest.mark.parametrize("blank", ["", " "])
 def test_blank_domain_flag_is_rejected(kn, domain_flags, flag, field, blank):
-    # A blank flag must 400, not run an unfiltered search.
     _assert_filter_rejected(kn("search", "x", f"{flag}={blank}"), field, "")
 
 
@@ -287,7 +278,6 @@ def test_more_than_200_domain_entries_is_rejected(kn, domain_flags):
     _assert_filter_rejected(res, "include_domains+exclude_domains", "201")
 
 
-# Inline positive site: plus --include-domain always drops the site: token with a warning.
 INLINE_SITE_ARGS = ("search", "site:docs.rs async", "--include-domain", "crates.io")
 
 
@@ -303,7 +293,6 @@ def test_inline_site_with_include_domain_warns_in_pretty(kn, domain_flags):
     res = kn(*INLINE_SITE_ARGS, "-p")
     assert res.code == 0
     assert res.out == ""
-    # ui::warning word-wraps and may color each line, so compare plain, joined text.
     err = re.sub(r"\x1b\[[0-9;]*m", "", res.err)
     assert " ".join(warning.split()) in " ".join(err.split())
 

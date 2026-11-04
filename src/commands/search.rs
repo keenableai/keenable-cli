@@ -7,13 +7,9 @@ use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
-/// Optional filters merged into the `/v1/search` request body; unset fields are omitted.
 pub struct SearchFilters {
-    /// Single-domain alias kept for backward compatibility (`site`).
     pub site: Option<String>,
-    /// Allow-list (`include_domains`), sent unvalidated; the server validates entries.
     pub include_domains: Vec<String>,
-    /// Block-list (`exclude_domains`), sent unvalidated like `include_domains`.
     pub exclude_domains: Vec<String>,
     pub acquired_after: Option<String>,
     pub acquired_before: Option<String>,
@@ -53,8 +49,6 @@ impl SearchFilters {
     }
 }
 
-/// Trims each domain and drops blank pieces.
-/// An all-blank flag yields `[""]` so the server rejects it instead of searching unfiltered.
 pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     if raw.is_empty() {
         return raw;
@@ -72,7 +66,6 @@ pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     }
 }
 
-/// The response's non-blank `warning`, if any.
 fn response_warning(data: &Value) -> Option<&str> {
     data["warning"]
         .as_str()
@@ -80,7 +73,6 @@ fn response_warning(data: &Value) -> Option<&str> {
         .filter(|w| !w.is_empty())
 }
 
-/// One piece of the pretty search output, in print order.
 #[derive(Debug, PartialEq)]
 enum HumanBlock<'a> {
     Warning(&'a str),
@@ -88,7 +80,6 @@ enum HumanBlock<'a> {
     Result(usize, &'a Value),
 }
 
-/// The pretty output's blocks; the warning comes first so it shows even with no results.
 fn human_blocks(data: &Value) -> Vec<HumanBlock<'_>> {
     let mut blocks: Vec<HumanBlock<'_>> = response_warning(data)
         .map(HumanBlock::Warning)
@@ -279,8 +270,6 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
     }
 }
 
-/// The `keenable login` hint for auth and rate-limit errors, None for anything else.
-/// An authenticated 429 suggests retrying, since login cannot raise that key's limits.
 fn login_hint(err: &ApiError, authenticated: bool) -> Option<String> {
     if err.is_auth_error() {
         Some("Run `keenable login` to authenticate.".to_string())
@@ -302,7 +291,6 @@ fn login_hint(err: &ApiError, authenticated: bool) -> Option<String> {
     }
 }
 
-/// YAML error output: the error's fields plus the hint, if any.
 fn error_yaml(err: &ApiError, hint: Option<String>) -> Value {
     let mut val = err.to_yaml_value();
     if let Some(hint) = hint {
@@ -371,7 +359,6 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
-/// The `/v1/search` request body: query, optional knobs, then the filter fields.
 fn build_search_body(
     query: &str,
     mode: Option<&str>,
