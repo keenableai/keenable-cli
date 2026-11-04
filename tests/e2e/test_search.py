@@ -182,6 +182,71 @@ def test_combined_filters(kn):
         assert parse_ts(r["acquired_at"]) >= utc(2025, 1, 1), r["url"]
 
 
+# --- 2.3b domain allow-list / block-list (keenableai/keenable-sdk#10) ---
+
+ALLOWLIST = ("docs.rs", "doc.rust-lang.org", "rust-lang.github.io")
+
+
+@pytest.fixture(scope="module")
+def domain_flags(kn):
+    """Skip on binaries released before --include-domain/--exclude-domain.
+
+    The nightly job runs the latest *released* binary, which can predate the
+    flags; clap would reject them (exit 2) and every test here would fail for
+    the wrong reason. Local check only: `--help` makes no API call.
+    """
+    res = kn("search", "--help", key=False)
+    if "--include-domain" not in res.out + res.err:
+        pytest.skip("binary predates --include-domain/--exclude-domain")
+
+
+def test_include_domains_allowlist(kn, domain_flags):
+    # Repeated flag + comma list together: all three must reach the server.
+    results = _non_empty_results(
+        kn, "async", "--include-domain", ",".join(ALLOWLIST[:2]),
+        "--include-domain", ALLOWLIST[2],
+    )
+    for r in results:
+        host = host_of(r["url"])
+        assert any(host_under(host, d) for d in ALLOWLIST), r["url"]
+
+
+def test_exclude_domains_blocklist(kn, domain_flags):
+    for r in _non_empty_results(kn, "rust async", "--exclude-domain", "docs.rs"):
+        assert not host_under(host_of(r["url"]), "docs.rs"), r["url"]
+
+
+def test_include_and_exclude_combined(kn, domain_flags):
+    # Exclude wins: a subdomain carved out of an allowed parent stays out.
+    results = _non_empty_results(
+        kn, "rust", "--include-domain", "rust-lang.org",
+        "--exclude-domain", "doc.rust-lang.org",
+    )
+    for r in results:
+        host = host_of(r["url"])
+        assert host_under(host, "rust-lang.org"), r["url"]
+        assert not host_under(host, "doc.rust-lang.org"), r["url"]
+
+
+def test_domain_conflict_errors(kn, domain_flags):
+    # The same entry in both lists is a 400 invalid_filter. The CLI does no
+    # client-side validation, so the server's field/entry/reason reaches the
+    # user and the exit code is non-zero.
+    res = kn("search", "x", "--include-domain", "docs.rs", "--exclude-domain", "docs.rs")
+    assert res.code == 1
+    data = res.yaml()
+    assert "error" in data
+    assert "docs.rs" in data["message"]
+
+
+def test_site_with_include_domain_errors(kn, domain_flags):
+    res = kn("search", "x", "--site", "docs.rs", "--include-domain", "crates.io")
+    assert res.code == 1
+    data = res.yaml()
+    assert "error" in data
+    assert "site" in data["message"] or "include_domains" in data["message"]
+
+
 def test_malformed_date(kn):
     res = kn("search", "x", "--acquired-after", "notadate")
     assert res.code == 1

@@ -49,6 +49,8 @@ keenable configure-mcp --all
 keenable search "query"                                    # YAML output (for agents)
 keenable search "query" -p                                 # Pretty output (for humans)
 keenable search "AI news" --site techcrunch.com            # Restrict to site
+keenable search "query" --include-domain a.com,b.com       # Only these domains
+keenable search "query" --exclude-domain spam.com          # Never these domains
 keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
 keenable search "query" --snippet-max-length 2000          # Longer snippets (180-10000)
@@ -57,6 +59,34 @@ keenable search "query" --api-key KEY                      # Use a specific API 
 ```
 
 Works without login (free tier). Log in for higher rate limits.
+
+#### Domain filters
+
+`--include-domain` keeps results to an allow-list; `--exclude-domain` drops a
+block-list. Both are repeatable and each also takes a comma list, so these are
+equivalent:
+
+```bash
+keenable search "security council vote" --include-domain press.un.org,undocs.org --include-domain .gov
+keenable search "security council vote" --include-domain press.un.org --include-domain undocs.org --include-domain .gov
+```
+
+Each entry is one of:
+
+| Entry | Matches |
+|---|---|
+| `example.com` | the host and its subdomains |
+| `example.com/docs` | that path prefix (`/docs/x`, not `/docsx`) |
+| `.gov`, `*.gov`, `.gov.uk` | any host under that suffix |
+
+- Both flags together keep results that are included and not excluded
+  (exclude wins). A narrow list can return fewer than `--max-results`.
+- `--site` still works as a single-domain alias, but cannot be combined with
+  `--include-domain`.
+- The CLI does not validate entries itself. A bad entry (scheme, port, bare
+  `*`, the same entry in both lists, ...) comes back from the server as an
+  error naming the flag's field, the entry and the reason, and the command
+  exits 1.
 
 ### Fetch
 
