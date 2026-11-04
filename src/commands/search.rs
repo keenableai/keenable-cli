@@ -14,8 +14,8 @@ pub struct SearchFilters {
     /// Single-domain alias kept for backward compatibility (`site`).
     pub site: Option<String>,
     /// Allow-list: results come only from these entries (`include_domains`).
-    /// Empty means the field is omitted. Entries are sent verbatim: the
-    /// server validates and normalizes them, so its `invalid_filter` error
+    /// Empty means the field is omitted. Entries are sent verbatim apart from
+    /// [`tidy_domain_list`]'s trimming: the server validates and normalizes them, so its `invalid_filter` error
     /// (field, entry, reason) reaches the user unchanged.
     pub include_domains: Vec<String>,
     /// Block-list: results never come from these entries (`exclude_domains`).
@@ -56,6 +56,34 @@ impl SearchFilters {
             map.insert("query_time".into(), json!(v));
         }
         Value::Object(map)
+    }
+}
+
+/// Tidy one domain flag's values after clap's comma split.
+///
+/// Each piece is trimmed, and pieces left empty are dropped, so
+/// `"a.com, b.com"` and a trailing comma (`a.com,`) work as people type them.
+/// This is tokenizing, not validation: every remaining entry still goes to the
+/// server verbatim, which validates it and answers `invalid_filter`.
+///
+/// When the flag was given but every piece is blank (`--include-domain=`,
+/// `--include-domain ,`, or an empty shell variable), the result is `[""]`
+/// rather than empty. An empty list would omit the field and quietly turn an
+/// allow-list search into an unfiltered one; `[""]` makes the server reject it.
+pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
+    if raw.is_empty() {
+        return raw;
+    }
+    let tidy: Vec<String> = raw
+        .iter()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .collect();
+    if tidy.is_empty() {
+        vec![String::new()]
+    } else {
+        tidy
     }
 }
 
@@ -579,5 +607,11 @@ mod tests {
         assert_eq!(response_warning(&json!({"warning": "  "})), None);
         assert_eq!(response_warning(&json!({"warning": null})), None);
         assert_eq!(response_warning(&json!({"results": []})), None);
+    }
+
+    #[test]
+    fn tidy_domain_list_leaves_absent_flags_absent() {
+        assert!(tidy_domain_list(vec![]).is_empty());
+        assert_eq!(tidy_domain_list(vec!["a.com".into()]), vec!["a.com"]);
     }
 }

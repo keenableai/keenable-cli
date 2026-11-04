@@ -158,7 +158,7 @@ enum Commands {
         #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
         include_domain: Vec<String>,
 
-        /// Never return results from this domain. Repeatable, or a comma list. Same forms as --include-domain; wins over it on overlap
+        /// Never return results from this domain. Repeatable, or a comma list. Same forms as --include-domain. Wins over a broader --include-domain entry (include a.com, exclude docs.a.com); the same entry in both is an error
         #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
         exclude_domain: Vec<String>,
 
@@ -335,8 +335,8 @@ async fn main() {
         } => {
             let filters = commands::search::SearchFilters {
                 site,
-                include_domains: include_domain,
-                exclude_domains: exclude_domain,
+                include_domains: commands::search::tidy_domain_list(include_domain),
+                exclude_domains: commands::search::tidy_domain_list(exclude_domain),
                 acquired_after,
                 acquired_before,
                 published_after,
@@ -405,8 +405,8 @@ mod tests {
         };
         commands::search::SearchFilters {
             site,
-            include_domains: include_domain,
-            exclude_domains: exclude_domain,
+            include_domains: commands::search::tidy_domain_list(include_domain),
+            exclude_domains: commands::search::tidy_domain_list(exclude_domain),
             acquired_after: None,
             acquired_before: None,
             published_after: None,
@@ -453,5 +453,35 @@ mod tests {
         let v = search_filters(&["--site", "a.com", "--include-domain", "b.com"]);
         assert_eq!(v["site"], json!("a.com"));
         assert_eq!(v["include_domains"], json!(["b.com"]));
+    }
+
+    #[test]
+    fn comma_lists_tolerate_spaces_and_stray_commas() {
+        let v = search_filters(&[
+            "--include-domain",
+            " a.com , b.com",
+            "--include-domain",
+            "c.com,",
+            "--exclude-domain",
+            ",spam.com,,",
+        ]);
+        assert_eq!(v["include_domains"], json!(["a.com", "b.com", "c.com"]));
+        assert_eq!(v["exclude_domains"], json!(["spam.com"]));
+    }
+
+    #[test]
+    fn blank_domain_flag_still_reaches_the_server() {
+        // A blank value (e.g. an empty shell variable) must not silently turn
+        // into an unfiltered search: send [""] so the server returns 400.
+        for blank in [
+            "--include-domain=",
+            "--include-domain= ",
+            "--include-domain=,",
+        ] {
+            let v = search_filters(&[blank]);
+            assert_eq!(v["include_domains"], json!([""]), "{blank}");
+        }
+        let v = search_filters(&["--exclude-domain="]);
+        assert_eq!(v["exclude_domains"], json!([""]));
     }
 }

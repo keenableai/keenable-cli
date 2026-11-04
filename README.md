@@ -79,8 +79,13 @@ Each entry is one of:
 | `example.com/docs` | that path prefix (`/docs/x`, not `/docsx`) |
 | `.gov`, `*.gov`, `.gov.uk` | any host under that suffix |
 
-- Both flags together keep results that are included and not excluded
-  (exclude wins). A narrow list can return fewer than `--max-results`.
+- Spaces around comma-separated entries and stray commas are ignored
+  (`"a.com, b.com"` and `a.com,` both work). A blank value such as
+  `--include-domain ""` is still sent, so the server rejects it instead of
+  running an unfiltered search.
+- Both flags together keep results that are included and not excluded:
+  an exclude entry wins over a broader include entry (include `a.com`,
+  exclude `docs.a.com`). A narrow list can return fewer than `--max-results`.
   When the filter actually removed results, the response carries a `warning`
   that says so (printed in YAML, and shown above the results with `-p`).
 - `--site` still works as a single-domain alias, but cannot be combined with
