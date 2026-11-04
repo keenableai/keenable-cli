@@ -7,19 +7,13 @@ use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
 use crate::ui;
 
-/// Optional filters merged into the `/v1/search` request body.
-///
-/// Unset fields are omitted from the JSON so older servers never see them.
+/// Optional filters merged into the `/v1/search` request body; unset fields are omitted.
 pub struct SearchFilters {
     /// Single-domain alias kept for backward compatibility (`site`).
     pub site: Option<String>,
-    /// Allow-list: results come only from these entries (`include_domains`).
-    /// Empty means the field is omitted. Entries are sent verbatim apart from
-    /// [`tidy_domain_list`]'s trimming: the server validates and normalizes them, so its `invalid_filter` error
-    /// (field, entry, reason) reaches the user unchanged.
+    /// Allow-list (`include_domains`), sent unvalidated; the server validates entries.
     pub include_domains: Vec<String>,
-    /// Block-list: results never come from these entries (`exclude_domains`).
-    /// Empty means the field is omitted. Sent verbatim, like `include_domains`.
+    /// Block-list (`exclude_domains`), sent unvalidated like `include_domains`.
     pub exclude_domains: Vec<String>,
     pub acquired_after: Option<String>,
     pub acquired_before: Option<String>,
@@ -59,17 +53,8 @@ impl SearchFilters {
     }
 }
 
-/// Tidy one domain flag's values after clap's comma split.
-///
-/// Each piece is trimmed, and pieces left empty are dropped, so
-/// `"a.com, b.com"` and a trailing comma (`a.com,`) work as people type them.
-/// This is tokenizing, not validation: every remaining entry still goes to the
-/// server verbatim, which validates it and answers `invalid_filter`.
-///
-/// When the flag was given but every piece is blank (`--include-domain=`,
-/// `--include-domain ,`, or an empty shell variable), the result is `[""]`
-/// rather than empty. An empty list would omit the field and quietly turn an
-/// allow-list search into an unfiltered one; `[""]` makes the server reject it.
+/// Trims each domain and drops blank pieces.
+/// An all-blank flag yields `[""]` so the server rejects it instead of searching unfiltered.
 pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     if raw.is_empty() {
         return raw;
@@ -87,8 +72,7 @@ pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     }
 }
 
-/// The response's `warning`, if any (e.g. the domain filter removed results,
-/// or inline `site:` tokens were dropped). Blank strings count as none.
+/// The response's non-blank `warning`, if any.
 fn response_warning(data: &Value) -> Option<&str> {
     data["warning"]
         .as_str()
@@ -390,8 +374,6 @@ pub async fn search(
             fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
-                // YAML mode prints the whole response; pretty mode must surface
-                // the warning itself, or a short list goes unexplained.
                 if let Some(warning) = response_warning(&data) {
                     ui::warning(warning);
                     eprintln!();
@@ -547,8 +529,6 @@ mod tests {
 
     #[test]
     fn to_json_keeps_site_alongside_exclude_domains() {
-        // `site` stays a single-domain alias; combining it with
-        // exclude_domains is valid, so both are forwarded.
         let f = SearchFilters {
             site: Some("docs.rs".into()),
             exclude_domains: vec!["docs.rs/old".into()],
@@ -561,8 +541,6 @@ mod tests {
 
     #[test]
     fn to_json_does_not_validate_entries() {
-        // No client-side validation: bad entries go to the server, which
-        // answers with a 400 invalid_filter naming field, entry and reason.
         let f = SearchFilters {
             include_domains: vec!["https://example.com".into(), "*".into()],
             ..filters()

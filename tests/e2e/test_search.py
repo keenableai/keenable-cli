@@ -189,24 +189,14 @@ ALLOWLIST = ("docs.rs", "doc.rust-lang.org", "rust-lang.github.io")
 
 @pytest.fixture(scope="module")
 def domain_flags(kn):
-    """Skip on binaries released before --include-domain/--exclude-domain.
-
-    The nightly job runs the latest *released* binary, which can predate the
-    flags; clap would reject them (exit 2) and every test here would fail for
-    the wrong reason. Local check only: `--help` makes no API call.
-    """
+    """Skip on released binaries that predate the domain flags."""
     res = kn("search", "--help", key=False)
     if "--include-domain" not in res.out + res.err:
         pytest.skip("binary predates --include-domain/--exclude-domain")
 
 
 def _assert_invalid_filter(message, field, entry):
-    """Assert the API's invalid_filter wording, not just any 400.
-
-    A server without domain filters also exits 1, with "Unknown parameter(s):
-    include_domains ... site", which names both fields. The real rejection is
-    `Invalid <field> value "<entry>": <reason>` (backend ticket 03).
-    """
+    """Assert the API's invalid_filter wording, not an unknown-parameter 400."""
     assert "Unknown parameter" not in message, f"server lacks domain filters: {message}"
     assert message.startswith(f'Invalid {field} value "{entry}"'), message
 
@@ -240,9 +230,7 @@ def test_include_and_exclude_combined(kn, domain_flags):
 
 
 def test_domain_conflict_errors(kn, domain_flags):
-    # The same entry in both lists is a 400 invalid_filter. The CLI does no
-    # client-side validation, so the server's field/entry/reason reaches the
-    # user and the exit code is non-zero.
+    # The same entry in both lists is rejected by the server.
     res = kn("search", "x", "--include-domain", "docs.rs", "--exclude-domain", "docs.rs")
     assert res.code == 1
     data = res.yaml()

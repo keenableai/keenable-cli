@@ -41,8 +41,7 @@ enum ConfigAction {
     },
 }
 
-// Parsed once per process, so the size gap between `Search` (many flags) and
-// the small variants is irrelevant; boxing would only add noise.
+// Parsed once per process, so boxing the large variant buys nothing.
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
@@ -471,8 +470,7 @@ mod tests {
 
     #[test]
     fn blank_domain_flag_still_reaches_the_server() {
-        // A blank value (e.g. an empty shell variable) must not silently turn
-        // into an unfiltered search: send [""] so the server returns 400.
+        // A blank value must reach the server as [""], not become an unfiltered search.
         for blank in [
             "--include-domain=",
             "--include-domain= ",
