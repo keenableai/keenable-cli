@@ -450,15 +450,51 @@ mod tests {
     #[test]
     fn blank_domain_flag_still_reaches_the_server() {
         // A blank value must reach the server as [""], not become an unfiltered search.
-        for blank in [
-            "--include-domain=",
-            "--include-domain= ",
-            "--include-domain=,",
+        for (flag, field) in [
+            ("--include-domain", "include_domains"),
+            ("--exclude-domain", "exclude_domains"),
         ] {
-            let v = search_filters(&[blank]);
-            assert_eq!(v["include_domains"], json!([""]), "{blank}");
+            for blank in ["", " ", ","] {
+                let v = search_filters(&[&format!("{flag}={blank}")]);
+                assert_eq!(v[field], json!([""]), "{flag}={blank:?}");
+            }
         }
-        let v = search_filters(&["--exclude-domain="]);
-        assert_eq!(v["exclude_domains"], json!([""]));
+    }
+
+    #[test]
+    fn blank_domain_flag_beside_a_real_one_is_dropped() {
+        for (flag, field) in [
+            ("--include-domain", "include_domains"),
+            ("--exclude-domain", "exclude_domains"),
+        ] {
+            let v = search_filters(&[&format!("{flag}="), flag, "a.com", flag, " "]);
+            assert_eq!(v[field], json!(["a.com"]), "{flag}");
+        }
+    }
+
+    #[test]
+    fn date_flags_reach_the_filters() {
+        let v = search_filters(&[
+            "--acquired-after",
+            "7d",
+            "--acquired-before",
+            "2026-01-01",
+            "--published-after",
+            "2024-01-01",
+            "--published-before",
+            "2025-01-01",
+            "--query-time",
+            "2026-05-01T00:00:00Z",
+        ]);
+        assert_eq!(
+            v,
+            json!({
+                "acquired_after": "7d",
+                "acquired_before": "2026-01-01",
+                "published_after": "2024-01-01",
+                "published_before": "2025-01-01",
+                "query_time": "2026-05-01T00:00:00Z",
+            })
+        );
     }
 }

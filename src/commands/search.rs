@@ -609,4 +609,65 @@ mod tests {
         assert!(tidy_domain_list(vec![]).is_empty());
         assert_eq!(tidy_domain_list(vec!["a.com".into()]), vec!["a.com"]);
     }
+
+    #[test]
+    fn tidy_domain_list_drops_blanks_beside_a_real_entry() {
+        for raw in [
+            vec!["", "a.com"],
+            vec![" ", "a.com", ""],
+            vec!["a.com", "  "],
+        ] {
+            let raw: Vec<String> = raw.into_iter().map(String::from).collect();
+            assert_eq!(tidy_domain_list(raw.clone()), vec!["a.com"], "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn build_search_body_merges_filters_with_request_fields() {
+        let f = SearchFilters {
+            include_domains: vec!["docs.rs".into()],
+            exclude_domains: vec!["docs.rs/old".into()],
+            published_after: Some("2024-01-01".into()),
+            ..filters()
+        };
+        let body = build_search_body("rust async", Some("pro"), &f, Some(500), Some(20));
+        assert_eq!(
+            body,
+            json!({
+                "query": "rust async",
+                "mode": "pro",
+                "snippet_max_length": 500,
+                "max_results": 20,
+                "include_domains": ["docs.rs"],
+                "exclude_domains": ["docs.rs/old"],
+                "published_after": "2024-01-01",
+            })
+        );
+    }
+
+    #[test]
+    fn build_search_body_sends_only_the_query_by_default() {
+        let body = build_search_body("q", None, &filters(), None, None);
+        assert_eq!(body, json!({"query": "q"}));
+    }
+
+    #[test]
+    fn fold_description_keeps_top_level_fields() {
+        let mut data = json!({
+            "query": "q",
+            "mode": "realtime",
+            "warning": "Some results were removed by the domain filter.",
+            "results": [{"url": "https://a.com", "description": "d"}],
+        });
+        fold_description_into_snippet(&mut data);
+        assert_eq!(
+            data,
+            json!({
+                "query": "q",
+                "mode": "realtime",
+                "warning": "Some results were removed by the domain filter.",
+                "results": [{"url": "https://a.com", "snippet": "d"}],
+            })
+        );
+    }
 }

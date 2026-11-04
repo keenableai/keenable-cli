@@ -1,5 +1,6 @@
 """T-01..T-22 — search: core, modes, filters, error/edge cases."""
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -244,6 +245,27 @@ def test_site_with_include_domain_errors(kn, domain_flags):
     data = res.yaml()
     assert "error" in data
     _assert_invalid_filter(data["message"], "site", "docs.rs")
+
+
+# Inline positive site: plus --include-domain always drops the site: token with a warning.
+INLINE_SITE_ARGS = ("search", "site:docs.rs async", "--include-domain", "crates.io")
+
+
+def test_inline_site_with_include_domain_warns_in_yaml(kn, domain_flags):
+    res = kn(*INLINE_SITE_ARGS)
+    assert res.code == 0, res.err
+    data = res.yaml()
+    assert isinstance(data.get("warning"), str) and data["warning"].strip(), data
+
+
+def test_inline_site_with_include_domain_warns_in_pretty(kn, domain_flags):
+    warning = kn(*INLINE_SITE_ARGS).yaml()["warning"]
+    res = kn(*INLINE_SITE_ARGS, "-p")
+    assert res.code == 0
+    assert res.out == ""
+    # ui::warning word-wraps and may color each line, so compare plain, joined text.
+    err = re.sub(r"\x1b\[[0-9;]*m", "", res.err)
+    assert " ".join(warning.split()) in " ".join(err.split())
 
 
 def test_malformed_date(kn):
