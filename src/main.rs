@@ -141,62 +141,7 @@ enum Commands {
     #[command(
         after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --include-domain a.com,b.com          Only these domains (repeatable)\n  keenable search \"AI news\" --exclude-domain spam.com             Never these domains\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
     )]
-    Search {
-        /// Search query
-        query: String,
-
-        /// Search mode
-        #[arg(long)]
-        mode: Option<String>,
-
-        /// Restrict results to a specific site (e.g. "docs.rs"). Single-domain alias; use --include-domain for several
-        #[arg(long)]
-        site: Option<String>,
-
-        /// Only return results from this domain. Repeatable, or a comma list (a.com,b.com). Forms: example.com (with subdomains), example.com/docs (path prefix), .gov (suffix)
-        #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
-        include_domain: Vec<String>,
-
-        /// Never return results from this domain. Repeatable, or a comma list. Same forms as --include-domain. Wins over a broader --include-domain entry (include a.com, exclude docs.a.com); the same entry in both is an error
-        #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
-        exclude_domain: Vec<String>,
-
-        /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        acquired_after: Option<String>,
-
-        /// Filter to pages acquired/indexed before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        acquired_before: Option<String>,
-
-        /// Filter to pages published after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        published_after: Option<String>,
-
-        /// Filter to pages published before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        published_before: Option<String>,
-
-        /// Maximum snippet length in characters (API accepts 180-10000)
-        #[arg(long = "snippet-max-length")]
-        snippet_max_length: Option<u64>,
-
-        /// Maximum number of results (API accepts 1-50, default 10)
-        #[arg(long = "max-results")]
-        max_results: Option<u64>,
-
-        /// Point-in-time search: only pages available on or before this timestamp (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        query_time: Option<String>,
-
-        /// Pretty-print output for humans instead of YAML
-        #[arg(short = 'p', long = "pretty")]
-        pretty: bool,
-
-        /// API key (overrides stored key)
-        #[arg(long = "api-key")]
-        api_key: Option<String>,
-    },
+    Search(SearchArgs),
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
@@ -239,6 +184,80 @@ enum Commands {
     Daemon,
 }
 
+#[derive(clap::Args)]
+struct SearchArgs {
+    /// Search query
+    query: String,
+
+    /// Search mode
+    #[arg(long)]
+    mode: Option<String>,
+
+    /// Restrict results to a specific site (e.g. "docs.rs"). Single-domain alias; use --include-domain for several
+    #[arg(long)]
+    site: Option<String>,
+
+    /// Only return results from this domain. Repeatable, or a comma list (a.com,b.com). Forms: example.com (with subdomains), example.com/docs (path prefix), .gov (suffix)
+    #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
+    include_domain: Vec<String>,
+
+    /// Never return results from this domain. Repeatable, or a comma list. Same forms as --include-domain. Wins over a broader --include-domain entry (include a.com, exclude docs.a.com); the same entry in both is an error
+    #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
+    exclude_domain: Vec<String>,
+
+    /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    acquired_after: Option<String>,
+
+    /// Filter to pages acquired/indexed before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    acquired_before: Option<String>,
+
+    /// Filter to pages published after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    published_after: Option<String>,
+
+    /// Filter to pages published before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    published_before: Option<String>,
+
+    /// Maximum snippet length in characters (API accepts 180-10000)
+    #[arg(long = "snippet-max-length")]
+    snippet_max_length: Option<u64>,
+
+    /// Maximum number of results (API accepts 1-50, default 10)
+    #[arg(long = "max-results")]
+    max_results: Option<u64>,
+
+    /// Point-in-time search: only pages available on or before this timestamp (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    query_time: Option<String>,
+
+    /// Pretty-print output for humans instead of YAML
+    #[arg(short = 'p', long = "pretty")]
+    pretty: bool,
+
+    /// API key (overrides stored key)
+    #[arg(long = "api-key")]
+    api_key: Option<String>,
+}
+
+impl SearchArgs {
+    /// Request filters from the parsed flags, domain lists tidied.
+    fn filters(&self) -> commands::search::SearchFilters {
+        commands::search::SearchFilters {
+            site: self.site.clone(),
+            include_domains: commands::search::tidy_domain_list(self.include_domain.clone()),
+            exclude_domains: commands::search::tidy_domain_list(self.exclude_domain.clone()),
+            acquired_after: self.acquired_after.clone(),
+            acquired_before: self.acquired_before.clone(),
+            published_after: self.published_after.clone(),
+            published_before: self.published_before.clone(),
+            query_time: self.query_time.clone(),
+        }
+    }
+}
+
 fn collect_client_flags(
     all: bool,
     claude_code: bool,
@@ -270,7 +289,7 @@ async fn main() {
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
     // `update` is excluded because it performs its own explicit check.
     let wants_update_check = match &cli.command {
-        Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => *pretty,
+        Commands::Search(SearchArgs { pretty, .. }) | Commands::Fetch { pretty, .. } => *pretty,
         Commands::Daemon | Commands::Update => false,
         _ => true,
     };
@@ -316,40 +335,15 @@ async fn main() {
             Some(ConfigAction::Get { key }) => commands::config_cmd::config_get(&key),
             Some(ConfigAction::Unset { key }) => commands::config_cmd::config_unset(&key),
         },
-        Commands::Search {
-            query,
-            mode,
-            site,
-            include_domain,
-            exclude_domain,
-            acquired_after,
-            acquired_before,
-            published_after,
-            published_before,
-            snippet_max_length,
-            max_results,
-            query_time,
-            pretty,
-            api_key,
-        } => {
-            let filters = commands::search::SearchFilters {
-                site,
-                include_domains: commands::search::tidy_domain_list(include_domain),
-                exclude_domains: commands::search::tidy_domain_list(exclude_domain),
-                acquired_after,
-                acquired_before,
-                published_after,
-                published_before,
-                query_time,
-            };
+        Commands::Search(args) => {
             commands::search::search(
-                &query,
-                mode.as_deref(),
-                filters,
-                snippet_max_length,
-                max_results,
-                pretty,
-                api_key.as_deref(),
+                &args.query,
+                args.mode.as_deref(),
+                args.filters(),
+                args.snippet_max_length,
+                args.max_results,
+                args.pretty,
+                args.api_key.as_deref(),
             )
             .await;
         }
@@ -393,26 +387,11 @@ mod tests {
     /// Parse `keenable search ...` and return the filters it would send.
     fn search_filters(args: &[&str]) -> serde_json::Value {
         let argv = ["keenable", "search", "q"].iter().chain(args);
-        let Commands::Search {
-            site,
-            include_domain,
-            exclude_domain,
-            ..
-        } = Cli::try_parse_from(argv).expect("args parse").command
+        let Commands::Search(search) = Cli::try_parse_from(argv).expect("args parse").command
         else {
             panic!("expected the search subcommand");
         };
-        commands::search::SearchFilters {
-            site,
-            include_domains: commands::search::tidy_domain_list(include_domain),
-            exclude_domains: commands::search::tidy_domain_list(exclude_domain),
-            acquired_after: None,
-            acquired_before: None,
-            published_after: None,
-            published_before: None,
-            query_time: None,
-        }
-        .to_json()
+        search.filters().to_json()
     }
 
     #[test]

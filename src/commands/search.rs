@@ -312,6 +312,32 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
+/// The `/v1/search` request body: query, optional knobs, then the filter fields.
+fn build_search_body(
+    query: &str,
+    mode: Option<&str>,
+    filters: &SearchFilters,
+    snippet_max_length: Option<u64>,
+    max_results: Option<u64>,
+) -> Value {
+    let mut body = json!({ "query": query });
+    if let Some(m) = mode {
+        body["mode"] = json!(m);
+    }
+    if let Some(n) = snippet_max_length {
+        body["snippet_max_length"] = json!(n);
+    }
+    if let Some(n) = max_results {
+        body["max_results"] = json!(n);
+    }
+    if let Value::Object(filter_map) = filters.to_json()
+        && let Value::Object(ref mut body_map) = body
+    {
+        body_map.extend(filter_map);
+    }
+    body
+}
+
 pub async fn search(
     query: &str,
     mode: Option<&str>,
@@ -344,22 +370,13 @@ pub async fn search(
         }
     });
 
-    let mut body = json!({ "query": query });
-    if let Some(m) = &effective_mode {
-        body["mode"] = json!(m);
-    }
-    if let Some(n) = snippet_max_length {
-        body["snippet_max_length"] = json!(n);
-    }
-    if let Some(n) = max_results {
-        body["max_results"] = json!(n);
-    }
-    // Merge filter fields into body
-    if let Value::Object(filter_map) = filters.to_json()
-        && let Value::Object(ref mut body_map) = body
-    {
-        body_map.extend(filter_map);
-    }
+    let body = build_search_body(
+        query,
+        effective_mode.as_deref(),
+        &filters,
+        snippet_max_length,
+        max_results,
+    );
 
     let req = DaemonRequest {
         command: "search".to_string(),
