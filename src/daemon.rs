@@ -18,6 +18,9 @@ pub struct DaemonRequest {
     /// Fetch only: content-length cap; the API defaults to 50000 when unset.
     #[serde(default)]
     pub max_chars: Option<u64>,
+    /// Fetch only: groups the call with related searches and fetches.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 impl DaemonRequest {
@@ -39,6 +42,9 @@ impl DaemonRequest {
         }
         if let Some(m) = self.max_chars {
             query.push(("max_chars", m.to_string()));
+        }
+        if let Some(id) = &self.session_id {
+            query.push(("session_id", id.clone()));
         }
         Some(query)
     }
@@ -231,7 +237,9 @@ mod platform {
     }
 
     /// Send an API request and convert the result into a DaemonResponse.
-    async fn send_api(request: reqwest::RequestBuilder) -> DaemonResponse {
+    /// Errors carry `authenticated` (whether this daemon sent a key), so the
+    /// client's hint matches the request rather than the current config.
+    async fn send_api(request: reqwest::RequestBuilder, authenticated: bool) -> DaemonResponse {
         match request.send().await {
             Ok(r) => match handle_response(r).await {
                 Ok(data) => DaemonResponse {
@@ -239,22 +247,26 @@ mod platform {
                     data: Some(data),
                     error: None,
                 },
-                Err(api_err) => {
-                    // Forward the structured error so the client can reconstruct ApiError
-                    let mut data = api_err.to_yaml_value();
-                    data["status"] = serde_json::json!(api_err.status);
-                    DaemonResponse {
-                        ok: false,
-                        data: Some(data),
-                        error: Some(api_err.display()),
-                    }
-                }
+                Err(api_err) => api_error_response(&api_err, authenticated),
             },
             Err(e) => DaemonResponse {
                 ok: false,
                 data: None,
                 error: Some(e.to_string()),
             },
+        }
+    }
+
+    /// Forward the structured error so the client can reconstruct ApiError,
+    /// plus `status` and whether this daemon sent the request with a key.
+    fn api_error_response(api_err: &crate::api::ApiError, authenticated: bool) -> DaemonResponse {
+        let mut data = api_err.to_yaml_value();
+        data["status"] = serde_json::json!(api_err.status);
+        data["authenticated"] = serde_json::json!(authenticated);
+        DaemonResponse {
+            ok: false,
+            data: Some(data),
+            error: Some(api_err.display()),
         }
     }
 
@@ -289,6 +301,7 @@ mod platform {
                     client
                         .post(endpoint("/v1/search", authenticated))
                         .json(&body),
+                    authenticated,
                 )
                 .await
             }
@@ -301,6 +314,7 @@ mod platform {
                     client
                         .get(endpoint("/v1/fetch", authenticated))
                         .query(&query),
+                    authenticated,
                 )
                 .await
             }
@@ -409,6 +423,36 @@ mod platform {
         match tokio::time::timeout(Duration::from_secs(75), lines.next_line()).await {
             Ok(Ok(Some(line))) => serde_json::from_str(&line).map_err(|_| DaemonError::Unavailable),
             _ => Err(DaemonError::Unavailable),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::api::ApiError;
+
+        fn forbidden() -> ApiError {
+            ApiError {
+                status: 403,
+                error: "Forbidden".into(),
+                message: Some("no".into()),
+                request_id: Some("req-1".into()),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn forwarded_error_carries_the_daemons_auth_state() {
+            for authenticated in [true, false] {
+                let resp = api_error_response(&forbidden(), authenticated);
+                assert!(!resp.ok);
+                let data = resp.data.expect("structured error data");
+                assert_eq!(data["authenticated"], serde_json::json!(authenticated));
+                assert_eq!(data["status"], 403);
+                assert_eq!(data["error"], "Forbidden");
+                assert_eq!(data["request_id"], "req-1");
+                assert_eq!(resp.error.as_deref(), Some("Forbidden: no"));
+            }
         }
     }
 }

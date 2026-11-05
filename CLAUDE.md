@@ -91,6 +91,10 @@ All tool commands (`search`, `fetch`) work without login. When no API key is con
 
 Every path the CLI touches (config, credentials, daemon socket, MCP client configs) is resolved against `config::home_dir()`, which returns the `KEENABLE_HOME` env var when set and falls back to `dirs::home_dir()` otherwise. Set `KEENABLE_HOME` to relocate the entire `.keenable` tree — this is how the e2e suite isolates runs per-test (and the only reliable way on Windows, where `dirs::home_dir()` queries the real user profile and ignores `HOME`). Always go through `config::home_dir()`, never `dirs::home_dir()` directly.
 
+### HTTP Clients & TLS
+
+Build every HTTP client through `api::build_with_root_fallback` (`api_key_client` / `bare_client` / the update check already do). It trusts the bundled webpki roots plus the OS store — or `SSL_CERT_FILE` / `SSL_CERT_DIR` when set — so TLS-intercepting proxies work, and it retries with webpki roots only when the native bundle is unusable instead of panicking. Never call `Client::new()` / `Client::builder().build()` directly. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local MITM proxy to check all of this.
+
 ### Daemon
 
 The CLI uses a background daemon (`~/.keenable/daemon.sock`) to reuse HTTP connections.
@@ -157,9 +161,14 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
 - API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's `{error, message, retryAfter}` format
-- In YAML mode, errors are output as structured YAML to stdout (with `hint` field for auth/rate-limit errors)
-- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr
-- Auth errors (401, 400 auth failed) and rate limit errors (429) include a `keenable login` hint
+- In YAML mode, errors are output as structured YAML to stdout: `error`, `message`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `request_id` (the API's `X-Request-Id`, for support), and a `hint` with the next step
+- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus a `Request ID: …` hint when the API sent one
+- Hints come from `ApiError::hint(authenticated)`. `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
+  - 401 / 400 "Authentication failed" → `keenable login`
+  - 400 / 422 → fix the request (the message says what was rejected); retrying unchanged fails
+  - 402 → out of credits, add credits at https://keenable.ai/console
+  - 403 → anonymous: `keenable login` (the feature needs an account); authenticated: the key or plan does not allow this — `keenable login` if the key was revoked, else check the plan at the console
+  - 429 → both auth states lead with "Retry after <Retry-After seconds | X-RateLimit-Reset time>" when the API sent either (Retry-After wins); anonymous: then `keenable login` to increase limits; authenticated: then `keenable login` to switch accounts ("Retry later" when no time was sent)
 
 ### Help Text & Hints
 
