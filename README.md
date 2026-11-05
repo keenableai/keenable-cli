@@ -68,6 +68,8 @@ keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM ext
 keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char content cap
 ```
 
+When content is cut at the character cap, it ends with the API's truncation note and the YAML output carries `truncated: true`.
+
 ### Authentication
 
 ```bash
