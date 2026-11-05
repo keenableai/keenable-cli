@@ -28,7 +28,7 @@ The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Conf
 src/
   main.rs              # CLI entry point, clap definitions
   ui.rs                # Shared terminal UI helpers (header, step_done, success, error, hint)
-  constants.rs         # API URLs, OAuth config, ports
+  constants.rs         # Default API URL, KEENABLE_API_URL name, OAuth config
   config.rs            # ~/.keenable/ config and credentials read/write
   api.rs               # HTTP client factories (api_key_client, bare_client), ApiError, response handling
   update.rs            # GitHub Releases version check (cached, non-blocking)
@@ -91,6 +91,10 @@ All tool commands (`search`, `fetch`) work without login. When no API key is con
 
 Every path the CLI touches (config, credentials, daemon socket, MCP client configs) is resolved against `config::home_dir()`, which returns the `KEENABLE_HOME` env var when set and falls back to `dirs::home_dir()` otherwise. Set `KEENABLE_HOME` to relocate the entire `.keenable` tree — this is how the e2e suite isolates runs per-test (and the only reliable way on Windows, where `dirs::home_dir()` queries the real user profile and ignores `HOME`). Always go through `config::home_dir()`, never `dirs::home_dir()` directly.
 
+### HTTP Clients & TLS
+
+Build every HTTP client through `api::build_with_root_fallback` (`api_key_client` / `bare_client` / the update check already do). It trusts the bundled webpki roots plus the OS store — or `SSL_CERT_FILE` / `SSL_CERT_DIR` when set — so TLS-intercepting proxies work, and it retries with webpki roots only when the native bundle is unusable instead of panicking. Never call `Client::new()` / `Client::builder().build()` directly. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local MITM proxy to check all of this.
+
 ### Daemon
 
 The CLI uses a background daemon (`~/.keenable/daemon.sock`) to reuse HTTP connections.
@@ -98,6 +102,12 @@ Commands auto-start the daemon on first call. It auto-exits after 5 minutes of i
 
 The daemon works with or without an API key (authenticated vs public endpoints).
 It is automatically killed and restarted on `login` / `logout` so it picks up the new auth state.
+There is one daemon per API base: `daemon.sock` / `daemon.pid` for the production API, `daemon-<12-hex FNV-1a of the base>.sock/.pid` for a `KEENABLE_API_URL` override, so switching bases never stops another base's daemon. `login` / `logout` stop all of them. A socket path at or over the OS limit (104 bytes on macOS) skips the daemon and goes direct.
+Each connection starts with an `identity` handshake: current daemons answer with their `DaemonIdentity` (API base, `CARGO_PKG_VERSION`, and a build id from the executable's size + mtime, captured at daemon start), older ones with an untagged "Unknown command". Any difference counts as a mismatch, so a daemon left running across an upgrade or rebuild is replaced instead of silently dropping request fields it doesn't know (serde skips unknown fields). Accepted trade-off: two installs of the same version at different paths (e.g. Homebrew and the installer script) sharing one `KEENABLE_HOME` have different build ids, so alternating between them restarts each other's daemon; results stay correct, only the connection reuse is lost. On a mismatch the real request is never sent; `daemon_request` restarts that daemon once, then falls back to the direct path. Every response is also tagged and checked as a backstop. A daemon on an overridden base refuses untagged requests (older CLIs only know the default base). `stop_daemon` removes socket/pid files only if the pid file is unchanged, so a concurrently started replacement survives.
+
+### API Base URL (`KEENABLE_API_URL`)
+
+All API calls (search, fetch, public endpoints, key validation, login device flow) build URLs via `api::api_url()`, which uses `api::api_base()`: `KEENABLE_API_URL` when set, else `https://api.keenable.ai` (`DEFAULT_API_BASE_URL`). Rule: https only, except http to `localhost` or a loopback IP; trailing slashes are stripped, a path prefix is kept. Same variable as the SDKs, and the same core rule (https, or http to loopback); the CLI additionally rejects a query or fragment (the Go SDK does too, Python doesn't) and accepts any spelling of the loopback IPs (`127.1`, `[0:0::1]`), which the SDKs reject. `main` validates it before any API command and exits 1 with an error naming the variable and the fix — YAML on stdout only for search/fetch without `-p`, `ui::error` + `ui::hint` on stderr otherwise (`api::exit_invalid_api_base`). The MCP URL written by `configure-mcp` always uses the production base — an env override is never persisted into client configs. Never format URLs from the constant directly.
 
 ### Terminal UI Design (`src/ui.rs`)
 
@@ -157,9 +167,14 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
 - API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's `{error, message, retryAfter}` format
-- In YAML mode, errors are output as structured YAML to stdout (with `hint` field for auth/rate-limit errors)
-- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr
-- Auth errors (401, 400 auth failed) and rate limit errors (429) include a `keenable login` hint
+- In YAML mode, errors are output as structured YAML to stdout: `error`, `message`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `request_id` (the API's `X-Request-Id`, for support), and a `hint` with the next step
+- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus a `Request ID: …` hint when the API sent one
+- Hints come from `ApiError::hint(authenticated)`. `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
+  - 401 / 400 "Authentication failed" → `keenable login`
+  - 400 / 422 → fix the request (the message says what was rejected); retrying unchanged fails
+  - 402 → out of credits, add credits at https://keenable.ai/console
+  - 403 → anonymous: `keenable login` (the feature needs an account); authenticated: the key or plan does not allow this — `keenable login` if the key was revoked, else check the plan at the console
+  - 429 → both auth states lead with "Retry after <Retry-After seconds | X-RateLimit-Reset time>" when the API sent either (Retry-After wins); anonymous: then `keenable login` to increase limits; authenticated: then `keenable login` to switch accounts ("Retry later" when no time was sent)
 
 ### Help Text & Hints
 
