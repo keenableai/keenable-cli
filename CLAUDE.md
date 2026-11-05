@@ -259,3 +259,12 @@ Contains IDE definitions (`IDEDef`, `all_ides()`), config read/write helpers, an
 ### Browser Callback Pages (`assets/`)
 
 OAuth login callback pages (`login_success.html`, `login_failure.html`) are embedded at compile time via `include_str!`. They match the Keenable landing site's design system (Crimson Pro headings, EB Garamond body, `#f8f7f4` background, inline logo SVG). Keep them self-contained — no external assets except Google Fonts.
+
+## Public Docs and SDK
+
+Every user-facing change ships with its docs. A change is user-facing when it alters a command, a flag, an output format, an error message, or what `configure-mcp` writes into a client's config.
+
+- **Docs:** update [keenable-external-docs](https://github.com/keenableai/keenable-external-docs) in the same change set: open a docs PR alongside this one and link it in the description.
+- **SDK:** if the change touches the API surface the SDKs wrap, also update [keenable-sdk](https://github.com/keenableai/keenable-sdk) (Python, TypeScript and Go), or open an issue there when it can't land in the same change set.
+- **Docs reference the SDKs.** Code examples use the official SDKs, with the HTTP API (curl) shown next to them. If the docs describe something the SDK can't do, that's an SDK gap: fix it or file an issue.
+- **If it isn't in the public docs, it doesn't exist in the product.** Don't ship an undocumented user-facing feature: document it, or remove it.
