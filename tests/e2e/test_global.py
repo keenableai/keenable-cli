@@ -19,8 +19,13 @@ def test_help_lists_subcommands(kn):
 def test_subcommand_help(kn):
     res = kn("search", "--help", key=False)
     assert res.code == 0
-    for flag in ("--mode", "--site", "--acquired-after", "--published-before", "--pretty", "--api-key"):
+    for flag in ("--mode", "--site", "--acquired-after", "--published-before", "--pretty", "--api-key",
+                 "--session-id", "--enable-wizards"):
         assert flag in res.out, f"search --help missing {flag}"
+    res = kn("fetch", "--help", key=False)
+    assert res.code == 0
+    for flag in ("--live", "--prompt", "--max-chars", "--session-id", "--pretty", "--api-key"):
+        assert flag in res.out, f"fetch --help missing {flag}"
 
 
 def test_unknown_subcommand(kn):
