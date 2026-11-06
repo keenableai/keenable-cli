@@ -277,6 +277,26 @@ def test_bad_domain_entry_is_rejected_as_sent(kn, domain_flags, flag, field, ent
     _assert_filter_rejected(kn("search", "x", flag, entry), field, entry)
 
 
+PRIVATE_SUFFIX_HOSTS = ["github.io", "blogspot.com", "s3.amazonaws.com"]
+
+
+@pytest.mark.parametrize("flag,field", [
+    ("--include-domain", "include_domains"),
+    ("--exclude-domain", "exclude_domains"),
+])
+@pytest.mark.parametrize("host", PRIVATE_SUFFIX_HOSTS)
+def test_private_suffix_host_is_accepted(kn, domain_flags, flag, field, host):
+    res = kn("search", "async", flag, host)
+    assert res.code == 0, res.out + res.err
+    assert f"Normalized {field}" not in (res.yaml().get("warning") or ""), res.out
+
+
+def test_www_is_kept_when_the_rest_is_a_public_suffix(kn, domain_flags):
+    res = kn("search", "async", "--include-domain", "www.github.io")
+    assert res.code == 0, res.out + res.err
+    assert "Normalized include_domains" not in (res.yaml().get("warning") or ""), res.out
+
+
 def test_path_rejection_names_the_host_to_use(kn, domain_flags):
     res = kn("search", "x", "--include-domain", "docs.rs/releases")
     _assert_filter_rejected(res, "include_domains", "docs.rs/releases")
