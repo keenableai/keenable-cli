@@ -1,5 +1,6 @@
 """T-01..T-22 — search: core, modes, filters, error/edge cases."""
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -180,6 +181,100 @@ def test_combined_filters(kn):
     for r in _non_empty_results(kn, "async", "--site", "docs.rs", "--acquired-after", "2025-01-01"):
         assert host_under(host_of(r["url"]), "docs.rs"), r["url"]
         assert parse_ts(r["acquired_at"]) >= utc(2025, 1, 1), r["url"]
+
+
+@pytest.fixture(scope="module")
+def domain_flags(kn):
+    res = kn("search", "--help", key=False)
+    if "--exclude-domain" not in res.out + res.err:
+        pytest.skip("binary predates --exclude-domain")
+
+
+def _assert_invalid_filter(message, entry):
+    assert "Unknown parameter" not in message, f"server lacks domain filters: {message}"
+    assert message.startswith(f'Invalid exclude_domains value "{entry}"'), message
+
+
+def test_exclude_domains_blocklist(kn, domain_flags):
+    for r in _non_empty_results(kn, "rust async", "--exclude-domain", "docs.rs"):
+        assert not host_under(host_of(r["url"]), "docs.rs"), r["url"]
+
+
+def test_exclude_domains_covers_subdomains(kn, domain_flags):
+    for r in _non_empty_results(kn, "rust std library", "--exclude-domain", "rust-lang.org"):
+        assert not host_under(host_of(r["url"]), "rust-lang.org"), r["url"]
+
+
+def _assert_filter_rejected(res, entry):
+    assert res.code == 1, res.out
+    data = res.yaml()
+    assert data["error"] == "invalid_filter", data
+    assert "hint" not in data, data
+    _assert_invalid_filter(data["message"], entry)
+
+
+def test_bad_entry_errors_in_pretty(kn, domain_flags):
+    res = kn("search", "x", "--exclude-domain", "docs.rs/releases", "-p")
+    assert res.code == 1
+    assert res.out == ""
+    err = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", res.err).split())
+    assert 'Invalid exclude_domains value "docs.rs/releases"' in err, res.err
+    assert "keenable login" not in err, res.err
+
+
+@pytest.mark.parametrize("blank", ["", " "])
+def test_blank_exclude_flag_is_rejected(kn, domain_flags, blank):
+    _assert_filter_rejected(kn("search", "x", f"--exclude-domain={blank}"), "")
+
+
+REJECTED_ENTRIES = [
+    "*", ".com", ".gov", "*.gov", "*.docs.rs", "docs.rs/releases",
+    "user@docs.rs", "127.0.0.1", "doc s.rs", "localhost", "co.uk", "docs.notarealtld",
+]
+
+
+@pytest.mark.parametrize("entry", REJECTED_ENTRIES)
+def test_bad_exclude_entry_is_rejected_as_sent(kn, domain_flags, entry):
+    _assert_filter_rejected(kn("search", "x", "--exclude-domain", entry), entry)
+
+
+@pytest.mark.parametrize("host", ["github.io", "blogspot.com"])
+def test_private_suffix_host_is_accepted(kn, domain_flags, host):
+    res = kn("search", "async", "--exclude-domain", host)
+    assert res.code == 0, res.out + res.err
+    for r in res.yaml().get("results") or []:
+        assert not host_under(host_of(r["url"]), host), r["url"]
+
+
+def test_fixable_entries_are_cleaned_up(kn, domain_flags):
+    res = kn("search", "rust async", "--exclude-domain", " HTTPS://WWW.Docs.RS:443/?a=1 ")
+    assert res.code == 0, res.out + res.err
+    for r in res.yaml().get("results") or []:
+        assert not host_under(host_of(r["url"]), "docs.rs"), r["url"]
+
+
+def _hosts(start, stop):
+    return ",".join(f"d{i}.example.com" for i in range(start, stop))
+
+
+def test_1000_exclude_hosts_are_accepted(kn, domain_flags):
+    res = kn("search", "x", "--exclude-domain", _hosts(0, 1000))
+    assert res.code == 0, res.out + res.err
+
+
+def test_more_than_1000_exclude_hosts_is_rejected(kn, domain_flags):
+    res = kn("search", "x", "--exclude-domain", _hosts(0, 1001))
+    assert res.code == 1, res.out
+    data = res.yaml()
+    assert data["error"] == "invalid_filter", data
+    assert data["message"].startswith("Invalid exclude_domains value"), data
+    assert "1000" in data["message"].replace(",", ""), data
+
+
+def test_limit_counts_hosts_after_cleanup(kn, domain_flags):
+    hosts = _hosts(0, 1000) + ",WWW.D0.example.com,https://d1.example.com/"
+    res = kn("search", "x", "--exclude-domain", hosts)
+    assert res.code == 0, res.out + res.err
 
 
 def test_malformed_date(kn):

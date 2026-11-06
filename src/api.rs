@@ -169,10 +169,7 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         .unwrap_or("Request failed")
         .to_string();
 
-    let message = body_json
-        .as_ref()
-        .and_then(|v| v["message"].as_str())
-        .map(|s| s.to_string());
+    let message = body_json.as_ref().and_then(error_message);
 
     // Also check retryAfter in body (backend may include it)
     let retry_after =
@@ -184,6 +181,18 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         message,
         retry_after,
     })
+}
+
+/// The body's `message`, or one built from an `invalid_filter` body's
+/// `{field, value, reason}` so the rejected entry is still shown.
+fn error_message(body: &Value) -> Option<String> {
+    if let Some(m) = body["message"].as_str() {
+        return Some(m.to_string());
+    }
+    let field = body["field"].as_str()?;
+    let value = body["value"].as_str().unwrap_or_default();
+    let reason = body["reason"].as_str().unwrap_or("invalid value");
+    Some(format!("Invalid {field} value \"{value}\": {reason}"))
 }
 
 #[cfg(test)]
@@ -242,5 +251,30 @@ mod tests {
         assert_eq!(e.display(), "Server error");
         e.message = Some("upstream timeout".into());
         assert_eq!(e.display(), "Server error: upstream timeout");
+    }
+
+    #[test]
+    fn error_message_prefers_the_message_field() {
+        let body = serde_json::json!({"error": "x", "message": "m", "field": "f"});
+        assert_eq!(error_message(&body).as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn error_message_is_built_from_an_invalid_filter_body() {
+        let body = serde_json::json!({
+            "error": "invalid_filter",
+            "field": "exclude_domains",
+            "value": "un.org/press",
+            "reason": "paths are not supported",
+        });
+        assert_eq!(
+            error_message(&body).as_deref(),
+            Some(r#"Invalid exclude_domains value "un.org/press": paths are not supported"#)
+        );
+    }
+
+    #[test]
+    fn error_message_is_absent_without_message_or_field() {
+        assert_eq!(error_message(&serde_json::json!({"error": "x"})), None);
     }
 }

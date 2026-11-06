@@ -9,6 +9,7 @@ use crate::ui;
 
 pub struct SearchFilters {
     pub site: Option<String>,
+    pub exclude_domains: Vec<String>,
     pub acquired_after: Option<String>,
     pub acquired_before: Option<String>,
     pub published_after: Option<String>,
@@ -17,10 +18,13 @@ pub struct SearchFilters {
 }
 
 impl SearchFilters {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
         if let Some(v) = &self.site {
             map.insert("site".into(), json!(v));
+        }
+        if !self.exclude_domains.is_empty() {
+            map.insert("exclude_domains".into(), json!(self.exclude_domains));
         }
         if let Some(v) = &self.acquired_after {
             map.insert("acquired_after".into(), json!(v));
@@ -39,6 +43,82 @@ impl SearchFilters {
         }
         Value::Object(map)
     }
+}
+
+pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
+    if raw.is_empty() {
+        return raw;
+    }
+    let tidy: Vec<String> = raw
+        .iter()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .collect();
+    if tidy.is_empty() {
+        vec![String::new()]
+    } else {
+        tidy
+    }
+}
+
+fn response_warning(data: &Value) -> Option<&str> {
+    data["warning"]
+        .as_str()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+}
+
+#[derive(Debug, PartialEq)]
+enum HumanBlock<'a> {
+    Warning(&'a str),
+    NoResults,
+    Result(usize, &'a Value),
+}
+
+fn human_blocks(data: &Value) -> Vec<HumanBlock<'_>> {
+    let mut blocks: Vec<HumanBlock<'_>> = response_warning(data)
+        .map(HumanBlock::Warning)
+        .into_iter()
+        .collect();
+    match data["results"].as_array() {
+        Some(results) if !results.is_empty() => blocks.extend(
+            results
+                .iter()
+                .enumerate()
+                .map(|(i, r)| HumanBlock::Result(i, r)),
+        ),
+        _ => blocks.push(HumanBlock::NoResults),
+    }
+    blocks
+}
+
+fn print_human_result(i: usize, result: &Value) {
+    let title = result["title"].as_str().unwrap_or("Untitled");
+    let url = result["url"].as_str().unwrap_or("");
+    let snippet = result["snippet"].as_str().unwrap_or("");
+    let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+    let snippet_truncated: String = snippet_flat.chars().take(200).collect();
+    let published = result["published_at"].as_str().unwrap_or("");
+    let acquired = result["acquired_at"].as_str().unwrap_or("");
+
+    let num = format!("{:>2}.", i + 1).dimmed();
+    eprintln!("   {} {}", num, title.bold());
+    eprintln!("      {}", url.cyan());
+    if !snippet_truncated.is_empty() {
+        eprintln!("      {}", snippet_truncated.dimmed());
+    }
+    if !published.is_empty() || !acquired.is_empty() {
+        let mut dates = Vec::new();
+        if !published.is_empty() {
+            dates.push(format!("published: {}", published));
+        }
+        if !acquired.is_empty() {
+            dates.push(format!("acquired: {}", acquired));
+        }
+        eprintln!("      {}", dates.join("  ").dimmed());
+    }
+    eprintln!();
 }
 
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
@@ -186,15 +266,8 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
     }
 }
 
-/// Display an ApiError according to output mode (human vs YAML).
-/// Auth and rate-limit errors always carry a `keenable login` hint (a
-/// structured `hint` field in YAML mode), but the wording is auth-aware:
-/// login can't raise limits for a key that's already in use, so an
-/// authenticated 429 suggests retrying or switching accounts instead of
-/// falsely promising higher limits.
-fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
-    let authenticated = resolve_api_key(api_key_override).is_some();
-    let login_hint = if err.is_auth_error() {
+fn login_hint(err: &ApiError, authenticated: bool) -> Option<String> {
+    if err.is_auth_error() {
         Some("Run `keenable login` to authenticate.".to_string())
     } else if err.is_rate_limit() {
         if authenticated {
@@ -211,7 +284,21 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
         }
     } else {
         None
-    };
+    }
+}
+
+fn error_yaml(err: &ApiError, hint: Option<String>) -> Value {
+    let mut val = err.to_yaml_value();
+    if let Some(hint) = hint {
+        val["hint"] = Value::String(hint);
+    }
+    val
+}
+
+/// Display an ApiError according to output mode (human vs YAML).
+fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
+    let authenticated = resolve_api_key(api_key_override).is_some();
+    let login_hint = login_hint(&err, authenticated);
 
     if human {
         ui::error(&err.display());
@@ -226,12 +313,7 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
         }
         eprintln!();
     } else {
-        // YAML error output for agents (retry_after is already a field)
-        let mut val = err.to_yaml_value();
-        if let Some(hint) = login_hint {
-            val["hint"] = Value::String(hint);
-        }
-        print_yaml(&val);
+        print_yaml(&error_yaml(&err, login_hint));
     }
     std::process::exit(1);
 }
@@ -273,6 +355,31 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
+fn build_search_body(
+    query: &str,
+    mode: Option<&str>,
+    filters: &SearchFilters,
+    snippet_max_length: Option<u64>,
+    max_results: Option<u64>,
+) -> Value {
+    let mut body = json!({ "query": query });
+    if let Some(m) = mode {
+        body["mode"] = json!(m);
+    }
+    if let Some(n) = snippet_max_length {
+        body["snippet_max_length"] = json!(n);
+    }
+    if let Some(n) = max_results {
+        body["max_results"] = json!(n);
+    }
+    if let Value::Object(filter_map) = filters.to_json()
+        && let Value::Object(ref mut body_map) = body
+    {
+        body_map.extend(filter_map);
+    }
+    body
+}
+
 pub async fn search(
     query: &str,
     mode: Option<&str>,
@@ -305,22 +412,13 @@ pub async fn search(
         }
     });
 
-    let mut body = json!({ "query": query });
-    if let Some(m) = &effective_mode {
-        body["mode"] = json!(m);
-    }
-    if let Some(n) = snippet_max_length {
-        body["snippet_max_length"] = json!(n);
-    }
-    if let Some(n) = max_results {
-        body["max_results"] = json!(n);
-    }
-    // Merge filter fields into body
-    if let Value::Object(filter_map) = filters.to_json()
-        && let Value::Object(ref mut body_map) = body
-    {
-        body_map.extend(filter_map);
-    }
+    let body = build_search_body(
+        query,
+        effective_mode.as_deref(),
+        &filters,
+        snippet_max_length,
+        max_results,
+    );
 
     let req = DaemonRequest {
         command: "search".to_string(),
@@ -335,42 +433,18 @@ pub async fn search(
             fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
-                if let Some(results) = data["results"].as_array() {
-                    if results.is_empty() {
-                        ui::info("No results found.");
-                        eprintln!();
-                        return;
-                    }
-                    for (i, result) in results.iter().enumerate() {
-                        let title = result["title"].as_str().unwrap_or("Untitled");
-                        let url = result["url"].as_str().unwrap_or("");
-                        let snippet = result["snippet"].as_str().unwrap_or("");
-                        let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let snippet_truncated: String = snippet_flat.chars().take(200).collect();
-                        let published = result["published_at"].as_str().unwrap_or("");
-                        let acquired = result["acquired_at"].as_str().unwrap_or("");
-
-                        let num = format!("{:>2}.", i + 1).dimmed();
-                        eprintln!("   {} {}", num, title.bold());
-                        eprintln!("      {}", url.cyan());
-                        if !snippet_truncated.is_empty() {
-                            eprintln!("      {}", snippet_truncated.dimmed());
+                for block in human_blocks(&data) {
+                    match block {
+                        HumanBlock::Warning(warning) => {
+                            ui::warning(warning);
+                            eprintln!();
                         }
-                        if !published.is_empty() || !acquired.is_empty() {
-                            let mut dates = Vec::new();
-                            if !published.is_empty() {
-                                dates.push(format!("published: {}", published));
-                            }
-                            if !acquired.is_empty() {
-                                dates.push(format!("acquired: {}", acquired));
-                            }
-                            eprintln!("      {}", dates.join("  ").dimmed());
+                        HumanBlock::NoResults => {
+                            ui::info("No results found.");
+                            eprintln!();
                         }
-                        eprintln!();
+                        HumanBlock::Result(i, result) => print_human_result(i, result),
                     }
-                } else {
-                    ui::info("No results found.");
-                    eprintln!();
                 }
                 return;
             }
@@ -430,6 +504,7 @@ mod tests {
     fn filters() -> SearchFilters {
         SearchFilters {
             site: None,
+            exclude_domains: vec![],
             acquired_after: None,
             acquired_before: None,
             published_after: None,
@@ -460,6 +535,47 @@ mod tests {
     }
 
     #[test]
+    fn to_json_omits_an_empty_exclude_list() {
+        let v = filters().to_json();
+        assert!(v.get("exclude_domains").is_none());
+    }
+
+    #[test]
+    fn to_json_serializes_exclude_domains_as_an_array() {
+        let f = SearchFilters {
+            exclude_domains: vec!["blogs.un.org".into(), "spam.com".into()],
+            ..filters()
+        };
+        let v = f.to_json();
+        assert_eq!(v["exclude_domains"], json!(["blogs.un.org", "spam.com"]));
+        assert!(v.get("site").is_none());
+    }
+
+    #[test]
+    fn to_json_keeps_site_alongside_exclude_domains() {
+        let f = SearchFilters {
+            site: Some("docs.rs".into()),
+            exclude_domains: vec!["old.docs.rs".into()],
+            ..filters()
+        };
+        let v = f.to_json();
+        assert_eq!(v["site"], json!("docs.rs"));
+        assert_eq!(v["exclude_domains"], json!(["old.docs.rs"]));
+    }
+
+    #[test]
+    fn to_json_does_not_validate_entries() {
+        let f = SearchFilters {
+            exclude_domains: vec!["https://example.com".into(), "*".into()],
+            ..filters()
+        };
+        assert_eq!(
+            f.to_json()["exclude_domains"],
+            json!(["https://example.com", "*"])
+        );
+    }
+
+    #[test]
     fn config_mode_accepts_valid_and_legacy_standard() {
         assert_eq!(
             config_mode(&json!({"m": "pro"}), "m").as_deref(),
@@ -480,5 +596,205 @@ mod tests {
     fn config_mode_ignores_invalid_or_missing() {
         assert_eq!(config_mode(&json!({"m": "bogus"}), "m"), None);
         assert_eq!(config_mode(&json!({}), "m"), None);
+    }
+
+    #[test]
+    fn response_warning_is_surfaced_only_when_set() {
+        assert_eq!(
+            response_warning(
+                &json!({"warning": "Some results were removed by the domain filter."})
+            ),
+            Some("Some results were removed by the domain filter.")
+        );
+        assert_eq!(response_warning(&json!({"warning": "  "})), None);
+        assert_eq!(response_warning(&json!({"warning": null})), None);
+        assert_eq!(response_warning(&json!({"results": []})), None);
+    }
+
+    #[test]
+    fn tidy_domain_list_leaves_absent_flags_absent() {
+        assert!(tidy_domain_list(vec![]).is_empty());
+        assert_eq!(tidy_domain_list(vec!["a.com".into()]), vec!["a.com"]);
+    }
+
+    #[test]
+    fn tidy_domain_list_drops_blanks_beside_a_real_entry() {
+        for raw in [
+            vec!["", "a.com"],
+            vec![" ", "a.com", ""],
+            vec!["a.com", "  "],
+        ] {
+            let raw: Vec<String> = raw.into_iter().map(String::from).collect();
+            assert_eq!(tidy_domain_list(raw.clone()), vec!["a.com"], "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn build_search_body_merges_filters_with_request_fields() {
+        let f = SearchFilters {
+            exclude_domains: vec!["old.docs.rs".into()],
+            published_after: Some("2024-01-01".into()),
+            ..filters()
+        };
+        let body = build_search_body("rust async", Some("pro"), &f, Some(500), Some(20));
+        assert_eq!(
+            body,
+            json!({
+                "query": "rust async",
+                "mode": "pro",
+                "snippet_max_length": 500,
+                "max_results": 20,
+                "exclude_domains": ["old.docs.rs"],
+                "published_after": "2024-01-01",
+            })
+        );
+    }
+
+    #[test]
+    fn build_search_body_sends_only_the_query_by_default() {
+        let body = build_search_body("q", None, &filters(), None, None);
+        assert_eq!(body, json!({"query": "q"}));
+    }
+
+    #[test]
+    fn fold_description_keeps_top_level_fields() {
+        let mut data = json!({
+            "query": "q",
+            "mode": "realtime",
+            "warning": "Some results were removed by the domain filter.",
+            "results": [{"url": "https://a.com", "description": "d"}],
+        });
+        fold_description_into_snippet(&mut data);
+        assert_eq!(
+            data,
+            json!({
+                "query": "q",
+                "mode": "realtime",
+                "warning": "Some results were removed by the domain filter.",
+                "results": [{"url": "https://a.com", "snippet": "d"}],
+            })
+        );
+    }
+
+    fn invalid_filter() -> ApiError {
+        ApiError {
+            status: 400,
+            error: "invalid_filter".into(),
+            message: Some(
+                r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#.into(),
+            ),
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn invalid_filter_is_neither_auth_nor_rate_limit() {
+        let err = invalid_filter();
+        assert!(!err.is_auth_error());
+        assert!(!err.is_rate_limit());
+        assert_eq!(login_hint(&err, true), None);
+        assert_eq!(login_hint(&err, false), None);
+    }
+
+    #[test]
+    fn invalid_filter_yaml_keeps_the_message_and_has_no_hint() {
+        let err = invalid_filter();
+        let v = error_yaml(&err, login_hint(&err, false));
+        assert_eq!(
+            v,
+            json!({
+                "error": "invalid_filter",
+                "message": r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#,
+            })
+        );
+    }
+
+    #[test]
+    fn auth_and_rate_limit_errors_get_a_login_hint() {
+        let auth = ApiError {
+            status: 401,
+            error: "Authentication failed".into(),
+            message: None,
+            retry_after: None,
+        };
+        let v = error_yaml(&auth, login_hint(&auth, true));
+        assert!(v["hint"].as_str().unwrap().contains("keenable login"));
+
+        let limited = ApiError {
+            status: 429,
+            error: "Too many requests".into(),
+            message: None,
+            retry_after: Some(7),
+        };
+        assert!(
+            login_hint(&limited, true)
+                .unwrap()
+                .contains("Retry after 7s")
+        );
+        assert!(
+            login_hint(&limited, false)
+                .unwrap()
+                .contains("increase your limits")
+        );
+    }
+
+    #[test]
+    fn human_blocks_show_the_warning_before_empty_results() {
+        let data = json!({"warning": "site: was dropped", "results": []});
+        assert_eq!(
+            human_blocks(&data),
+            vec![
+                HumanBlock::Warning("site: was dropped"),
+                HumanBlock::NoResults
+            ]
+        );
+    }
+
+    #[test]
+    fn human_blocks_show_the_warning_when_results_are_missing() {
+        let data = json!({"warning": "site: was dropped"});
+        assert_eq!(
+            human_blocks(&data),
+            vec![
+                HumanBlock::Warning("site: was dropped"),
+                HumanBlock::NoResults
+            ]
+        );
+    }
+
+    #[test]
+    fn human_blocks_list_results_after_the_warning() {
+        let data = json!({"warning": "w", "results": [{"url": "a"}, {"url": "b"}]});
+        let blocks = human_blocks(&data);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], HumanBlock::Warning("w"));
+        assert_eq!(blocks[1], HumanBlock::Result(0, &data["results"][0]));
+        assert_eq!(blocks[2], HumanBlock::Result(1, &data["results"][1]));
+    }
+
+    #[test]
+    fn human_blocks_show_the_normalization_warning_verbatim() {
+        let warning = "Normalized exclude_domains: \"https://UN.org/\" -> \"un.org\", \"WWW.spam.com\" -> \"spam.com\"\nSome results were removed by the domain filter.";
+        let data = json!({"warning": warning, "results": [{"url": "a"}]});
+        assert_eq!(
+            human_blocks(&data),
+            vec![
+                HumanBlock::Warning(warning),
+                HumanBlock::Result(0, &data["results"][0])
+            ]
+        );
+    }
+
+    #[test]
+    fn human_blocks_without_a_warning() {
+        assert_eq!(
+            human_blocks(&json!({"results": []})),
+            vec![HumanBlock::NoResults]
+        );
+        let data = json!({"results": [{"url": "a"}]});
+        assert_eq!(
+            human_blocks(&data),
+            vec![HumanBlock::Result(0, &data["results"][0])]
+        );
     }
 }
