@@ -196,11 +196,11 @@ struct SearchArgs {
     #[arg(long)]
     site: Option<String>,
 
-    /// Only return results from this host and its subdomains. Repeatable, or a comma list (a.com,b.com). Hosts only, no paths or suffixes like .gov; at most 50 distinct hosts
+    /// Only return results from this host and its subdomains. Repeatable, or a comma list (a.com,b.com). Hosts only, no paths or suffixes like .gov; at most 50 distinct hosts. Private-suffix hosts like github.io are accepted; com, co.uk and localhost are not
     #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
     include_domain: Vec<String>,
 
-    /// Never return results from this host or its subdomains. Repeatable, or a comma list; at most 200 distinct hosts. Wins over a broader --include-domain host (include a.com, exclude docs.a.com); the same host in both is an error
+    /// Never return results from this host or its subdomains. Repeatable, or a comma list; at most 200 distinct hosts. Wins over a broader --include-domain host (include a.com, exclude docs.a.com); the same host in both is an error. Private-suffix hosts like github.io are accepted; com, co.uk and localhost are not
     #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
     exclude_domain: Vec<String>,
 

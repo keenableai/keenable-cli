@@ -74,6 +74,11 @@ keenable search "security council vote" --include-domain press.un.org --include-
 Each entry is a host, and it covers that host and every subdomain
 (`yahoo.com` also matches `finance.yahoo.com`). Paths (`un.org/press`) and
 suffixes or wildcards (`.gov`, `*.gov`, `*`) are not supported.
+Hosts that are public suffixes only in the private section of the Public
+Suffix List (`github.io`, `blogspot.com`, `s3.amazonaws.com`) are accepted,
+while ICANN suffixes and non-registrable names (`com`, `co.uk`, `localhost`)
+are rejected; a leading `www.` is kept when the rest would be a public suffix
+(`www.github.io` stays as is).
 
 - Limits per request, counted on distinct hosts: at most 50 in
   `--include-domain` and at most 200 in `--exclude-domain`.
