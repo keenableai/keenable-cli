@@ -404,13 +404,13 @@ mod tests {
             "--include-domain",
             "press.un.org,undocs.org",
             "--include-domain",
-            ".gov",
+            "who.int",
             "--exclude-domain",
             "blogs.un.org",
         ]);
         assert_eq!(
             v["include_domains"],
-            json!(["press.un.org", "undocs.org", ".gov"])
+            json!(["press.un.org", "undocs.org", "who.int"])
         );
         assert_eq!(v["exclude_domains"], json!(["blogs.un.org"]));
     }
@@ -441,6 +441,18 @@ mod tests {
         ]);
         assert_eq!(v["include_domains"], json!(["a.com", "b.com", "c.com"]));
         assert_eq!(v["exclude_domains"], json!(["spam.com"]));
+    }
+
+    #[test]
+    fn domain_entries_are_sent_as_typed_for_the_server_to_normalize() {
+        let v = search_filters(&[
+            "--include-domain",
+            " https://WWW.UN.org/ ",
+            "--exclude-domain",
+            "un.org/press,.gov",
+        ]);
+        assert_eq!(v["include_domains"], json!(["https://WWW.UN.org/"]));
+        assert_eq!(v["exclude_domains"], json!(["un.org/press", ".gov"]));
     }
 
     #[test]

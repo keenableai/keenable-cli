@@ -549,14 +549,14 @@ mod tests {
     #[test]
     fn to_json_serializes_domain_lists_as_arrays() {
         let f = SearchFilters {
-            include_domains: vec!["press.un.org".into(), "undocs.org".into(), ".gov".into()],
+            include_domains: vec!["press.un.org".into(), "undocs.org".into(), "who.int".into()],
             exclude_domains: vec!["blogs.un.org".into()],
             ..filters()
         };
         let v = f.to_json();
         assert_eq!(
             v["include_domains"],
-            json!(["press.un.org", "undocs.org", ".gov"])
+            json!(["press.un.org", "undocs.org", "who.int"])
         );
         assert_eq!(v["exclude_domains"], json!(["blogs.un.org"]));
         assert!(v.get("site").is_none());
@@ -566,12 +566,12 @@ mod tests {
     fn to_json_keeps_site_alongside_exclude_domains() {
         let f = SearchFilters {
             site: Some("docs.rs".into()),
-            exclude_domains: vec!["docs.rs/old".into()],
+            exclude_domains: vec!["old.docs.rs".into()],
             ..filters()
         };
         let v = f.to_json();
         assert_eq!(v["site"], json!("docs.rs"));
-        assert_eq!(v["exclude_domains"], json!(["docs.rs/old"]));
+        assert_eq!(v["exclude_domains"], json!(["old.docs.rs"]));
     }
 
     #[test]
@@ -644,7 +644,7 @@ mod tests {
     fn build_search_body_merges_filters_with_request_fields() {
         let f = SearchFilters {
             include_domains: vec!["docs.rs".into()],
-            exclude_domains: vec!["docs.rs/old".into()],
+            exclude_domains: vec!["old.docs.rs".into()],
             published_after: Some("2024-01-01".into()),
             ..filters()
         };
@@ -657,7 +657,7 @@ mod tests {
                 "snippet_max_length": 500,
                 "max_results": 20,
                 "include_domains": ["docs.rs"],
-                "exclude_domains": ["docs.rs/old"],
+                "exclude_domains": ["old.docs.rs"],
                 "published_after": "2024-01-01",
             })
         );
@@ -783,6 +783,19 @@ mod tests {
         assert_eq!(blocks[0], HumanBlock::Warning("w"));
         assert_eq!(blocks[1], HumanBlock::Result(0, &data["results"][0]));
         assert_eq!(blocks[2], HumanBlock::Result(1, &data["results"][1]));
+    }
+
+    #[test]
+    fn human_blocks_show_the_normalization_warning_verbatim() {
+        let warning = "Normalized include_domains: \"https://UN.org/\" -> \"un.org\"; exclude_domains: \"WWW.spam.com\" -> \"spam.com\"\nSome results were removed by the domain filter.";
+        let data = json!({"warning": warning, "results": [{"url": "a"}]});
+        assert_eq!(
+            human_blocks(&data),
+            vec![
+                HumanBlock::Warning(warning),
+                HumanBlock::Result(0, &data["results"][0])
+            ]
+        );
     }
 
     #[test]
