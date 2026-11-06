@@ -9,7 +9,6 @@ use crate::ui;
 
 pub struct SearchFilters {
     pub site: Option<String>,
-    pub include_domains: Vec<String>,
     pub exclude_domains: Vec<String>,
     pub acquired_after: Option<String>,
     pub acquired_before: Option<String>,
@@ -23,9 +22,6 @@ impl SearchFilters {
         let mut map = serde_json::Map::new();
         if let Some(v) = &self.site {
             map.insert("site".into(), json!(v));
-        }
-        if !self.include_domains.is_empty() {
-            map.insert("include_domains".into(), json!(self.include_domains));
         }
         if !self.exclude_domains.is_empty() {
             map.insert("exclude_domains".into(), json!(self.exclude_domains));
@@ -508,7 +504,6 @@ mod tests {
     fn filters() -> SearchFilters {
         SearchFilters {
             site: None,
-            include_domains: vec![],
             exclude_domains: vec![],
             acquired_after: None,
             acquired_before: None,
@@ -540,25 +535,19 @@ mod tests {
     }
 
     #[test]
-    fn to_json_omits_empty_domain_lists() {
+    fn to_json_omits_an_empty_exclude_list() {
         let v = filters().to_json();
-        assert!(v.get("include_domains").is_none());
         assert!(v.get("exclude_domains").is_none());
     }
 
     #[test]
-    fn to_json_serializes_domain_lists_as_arrays() {
+    fn to_json_serializes_exclude_domains_as_an_array() {
         let f = SearchFilters {
-            include_domains: vec!["press.un.org".into(), "undocs.org".into(), "who.int".into()],
-            exclude_domains: vec!["blogs.un.org".into()],
+            exclude_domains: vec!["blogs.un.org".into(), "spam.com".into()],
             ..filters()
         };
         let v = f.to_json();
-        assert_eq!(
-            v["include_domains"],
-            json!(["press.un.org", "undocs.org", "who.int"])
-        );
-        assert_eq!(v["exclude_domains"], json!(["blogs.un.org"]));
+        assert_eq!(v["exclude_domains"], json!(["blogs.un.org", "spam.com"]));
         assert!(v.get("site").is_none());
     }
 
@@ -577,11 +566,11 @@ mod tests {
     #[test]
     fn to_json_does_not_validate_entries() {
         let f = SearchFilters {
-            include_domains: vec!["https://example.com".into(), "*".into()],
+            exclude_domains: vec!["https://example.com".into(), "*".into()],
             ..filters()
         };
         assert_eq!(
-            f.to_json()["include_domains"],
+            f.to_json()["exclude_domains"],
             json!(["https://example.com", "*"])
         );
     }
@@ -643,7 +632,6 @@ mod tests {
     #[test]
     fn build_search_body_merges_filters_with_request_fields() {
         let f = SearchFilters {
-            include_domains: vec!["docs.rs".into()],
             exclude_domains: vec!["old.docs.rs".into()],
             published_after: Some("2024-01-01".into()),
             ..filters()
@@ -656,7 +644,6 @@ mod tests {
                 "mode": "pro",
                 "snippet_max_length": 500,
                 "max_results": 20,
-                "include_domains": ["docs.rs"],
                 "exclude_domains": ["old.docs.rs"],
                 "published_after": "2024-01-01",
             })
@@ -694,7 +681,7 @@ mod tests {
             status: 400,
             error: "invalid_filter".into(),
             message: Some(
-                r#"Invalid exclude_domains value "docs.rs": also in include_domains"#.into(),
+                r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#.into(),
             ),
             retry_after: None,
         }
@@ -717,7 +704,7 @@ mod tests {
             v,
             json!({
                 "error": "invalid_filter",
-                "message": r#"Invalid exclude_domains value "docs.rs": also in include_domains"#,
+                "message": r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#,
             })
         );
     }
@@ -787,7 +774,7 @@ mod tests {
 
     #[test]
     fn human_blocks_show_the_normalization_warning_verbatim() {
-        let warning = "Normalized include_domains: \"https://UN.org/\" -> \"un.org\"; exclude_domains: \"WWW.spam.com\" -> \"spam.com\"\nSome results were removed by the domain filter.";
+        let warning = "Normalized exclude_domains: \"https://UN.org/\" -> \"un.org\", \"WWW.spam.com\" -> \"spam.com\"\nSome results were removed by the domain filter.";
         let data = json!({"warning": warning, "results": [{"url": "a"}]});
         assert_eq!(
             human_blocks(&data),

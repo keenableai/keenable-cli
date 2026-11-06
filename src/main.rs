@@ -41,7 +41,6 @@ enum ConfigAction {
     },
 }
 
-#[expect(clippy::large_enum_variant, reason = "parsed once per process")]
 #[derive(Subcommand)]
 enum Commands {
     /// Authenticate with Keenable and provision an API key
@@ -138,7 +137,7 @@ enum Commands {
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --include-domain a.com,b.com          Only these domains (repeatable)\n  keenable search \"AI news\" --exclude-domain spam.com             Never these domains\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --exclude-domain spam.com,ads.net     Never these domains (repeatable)\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
     )]
     Search(SearchArgs),
 
@@ -192,15 +191,11 @@ struct SearchArgs {
     #[arg(long)]
     mode: Option<String>,
 
-    /// Restrict results to a specific site (e.g. "docs.rs"). Single-domain alias; use --include-domain for several
+    /// Restrict results to a specific site (e.g. "docs.rs")
     #[arg(long)]
     site: Option<String>,
 
-    /// Only return results from this host and its subdomains. Repeatable, or a comma list (a.com,b.com). Hosts only, no paths or suffixes like .gov; at most 50 distinct hosts. Private-suffix hosts like github.io are accepted; com, co.uk and localhost are not
-    #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
-    include_domain: Vec<String>,
-
-    /// Never return results from this host or its subdomains. Repeatable, or a comma list; at most 200 distinct hosts. Wins over a broader --include-domain host (include a.com, exclude docs.a.com); the same host in both is an error. Private-suffix hosts like github.io are accepted; com, co.uk and localhost are not
+    /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct hosts. Hosts only, no paths, suffixes like .gov, wildcards or IPs. Private-suffix hosts like github.io are accepted
     #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
     exclude_domain: Vec<String>,
 
@@ -245,7 +240,6 @@ impl SearchArgs {
     fn filters(&self) -> commands::search::SearchFilters {
         commands::search::SearchFilters {
             site: self.site.clone(),
-            include_domains: commands::search::tidy_domain_list(self.include_domain.clone()),
             exclude_domains: commands::search::tidy_domain_list(self.exclude_domain.clone()),
             acquired_after: self.acquired_after.clone(),
             acquired_before: self.acquired_before.clone(),
@@ -392,91 +386,80 @@ mod tests {
     }
 
     #[test]
-    fn domain_flags_absent_by_default() {
+    fn exclude_flag_absent_by_default() {
         let v = search_filters(&[]);
-        assert!(v.get("include_domains").is_none());
         assert!(v.get("exclude_domains").is_none());
     }
 
     #[test]
-    fn domain_flags_accept_repeats_and_comma_lists() {
+    fn exclude_flag_accepts_repeats_and_comma_lists() {
         let v = search_filters(&[
-            "--include-domain",
-            "press.un.org,undocs.org",
-            "--include-domain",
-            "who.int",
             "--exclude-domain",
-            "blogs.un.org",
+            "press.un.org,undocs.org",
+            "--exclude-domain",
+            "who.int",
         ]);
         assert_eq!(
-            v["include_domains"],
+            v["exclude_domains"],
             json!(["press.un.org", "undocs.org", "who.int"])
         );
-        assert_eq!(v["exclude_domains"], json!(["blogs.un.org"]));
     }
 
     #[test]
     fn site_flag_is_kept() {
         let v = search_filters(&["--site", "docs.rs"]);
         assert_eq!(v["site"], json!("docs.rs"));
-        assert!(v.get("include_domains").is_none());
+        assert!(v.get("exclude_domains").is_none());
     }
 
     #[test]
-    fn site_and_include_domain_both_forwarded_for_server_to_reject() {
-        let v = search_filters(&["--site", "a.com", "--include-domain", "b.com"]);
+    fn site_and_exclude_domain_are_both_forwarded() {
+        let v = search_filters(&["--site", "a.com", "--exclude-domain", "old.a.com"]);
         assert_eq!(v["site"], json!("a.com"));
-        assert_eq!(v["include_domains"], json!(["b.com"]));
+        assert_eq!(v["exclude_domains"], json!(["old.a.com"]));
     }
 
     #[test]
     fn comma_lists_tolerate_spaces_and_stray_commas() {
         let v = search_filters(&[
-            "--include-domain",
+            "--exclude-domain",
             " a.com , b.com",
-            "--include-domain",
+            "--exclude-domain",
             "c.com,",
             "--exclude-domain",
             ",spam.com,,",
         ]);
-        assert_eq!(v["include_domains"], json!(["a.com", "b.com", "c.com"]));
-        assert_eq!(v["exclude_domains"], json!(["spam.com"]));
+        assert_eq!(
+            v["exclude_domains"],
+            json!(["a.com", "b.com", "c.com", "spam.com"])
+        );
     }
 
     #[test]
     fn domain_entries_are_sent_as_typed_for_the_server_to_normalize() {
         let v = search_filters(&[
-            "--include-domain",
-            " https://WWW.UN.org/ ",
             "--exclude-domain",
-            "un.org/press,.gov",
+            " https://WWW.UN.org/ ,un.org/press,.gov",
         ]);
-        assert_eq!(v["include_domains"], json!(["https://WWW.UN.org/"]));
-        assert_eq!(v["exclude_domains"], json!(["un.org/press", ".gov"]));
+        assert_eq!(
+            v["exclude_domains"],
+            json!(["https://WWW.UN.org/", "un.org/press", ".gov"])
+        );
     }
 
     #[test]
     fn blank_domain_flag_still_reaches_the_server() {
-        for (flag, field) in [
-            ("--include-domain", "include_domains"),
-            ("--exclude-domain", "exclude_domains"),
-        ] {
-            for blank in ["", " ", ","] {
-                let v = search_filters(&[&format!("{flag}={blank}")]);
-                assert_eq!(v[field], json!([""]), "{flag}={blank:?}");
-            }
+        for blank in ["", " ", ","] {
+            let v = search_filters(&[&format!("--exclude-domain={blank}")]);
+            assert_eq!(v["exclude_domains"], json!([""]), "{blank:?}");
         }
     }
 
     #[test]
     fn blank_domain_flag_beside_a_real_one_is_dropped() {
-        for (flag, field) in [
-            ("--include-domain", "include_domains"),
-            ("--exclude-domain", "exclude_domains"),
-        ] {
-            let v = search_filters(&[&format!("{flag}="), flag, "a.com", flag, " "]);
-            assert_eq!(v[field], json!(["a.com"]), "{flag}");
-        }
+        let flag = "--exclude-domain";
+        let v = search_filters(&["--exclude-domain=", flag, "a.com", flag, " "]);
+        assert_eq!(v["exclude_domains"], json!(["a.com"]));
     }
 
     #[test]
