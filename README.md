@@ -49,7 +49,6 @@ keenable configure-mcp --all
 keenable search "query"                                    # YAML output (for agents)
 keenable search "query" -p                                 # Pretty output (for humans)
 keenable search "AI news" --site techcrunch.com            # Restrict to site
-keenable search "query" --include-domain a.com,b.com       # Only these domains
 keenable search "query" --exclude-domain spam.com          # Never these domains
 keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
@@ -60,48 +59,32 @@ keenable search "query" --api-key KEY                      # Use a specific API 
 
 Works without login (free tier). Log in for higher rate limits.
 
-#### Domain filters
+#### Excluding domains
 
-`--include-domain` keeps results to an allow-list of hosts; `--exclude-domain`
-drops a block-list. Both are repeatable and each also takes a comma list, so
-these are equivalent:
+`--exclude-domain` drops results from a block-list of hosts. It is repeatable
+and also takes a comma list, so these are equivalent:
 
 ```bash
-keenable search "security council vote" --include-domain press.un.org,undocs.org --include-domain who.int
-keenable search "security council vote" --include-domain press.un.org --include-domain undocs.org --include-domain who.int
+keenable search "security council vote" --exclude-domain blogs.un.org,reddit.com
+keenable search "security council vote" --exclude-domain blogs.un.org --exclude-domain reddit.com
 ```
 
-Each entry is a host, and it covers that host and every subdomain
-(`yahoo.com` also matches `finance.yahoo.com`). Paths (`un.org/press`) and
-suffixes or wildcards (`.gov`, `*.gov`, `*`) are not supported.
-Hosts that are public suffixes only in the private section of the Public
-Suffix List (`github.io`, `blogspot.com`, `s3.amazonaws.com`) are accepted,
-while ICANN suffixes and non-registrable names (`com`, `co.uk`, `localhost`)
-are rejected; a leading `www.` is kept when the rest would be a public suffix
-(`www.github.io` stays as is).
-
-- Limits per request, counted on distinct hosts: at most 50 in
-  `--include-domain` and at most 200 in `--exclude-domain`.
-- The server tidies harmless noise for you and says so: case, an `http://` or
-  `https://` scheme, a port, a trailing `/`, a trailing dot, a leading `www.`
-  and duplicates are cleaned up (`https://WWW.UN.org/` becomes `un.org`), and
-  the response `warning` lists what was changed.
-- Spaces around comma-separated entries and stray commas are ignored
-  (`"a.com, b.com"` and `a.com,` both work). A blank value such as
-  `--include-domain ""` is still sent, so the server rejects it instead of
-  running an unfiltered search.
-- Both flags together keep results that are included and not excluded:
-  an exclude host wins over a broader include host (include `a.com`,
-  exclude `docs.a.com`). A narrow list can return fewer than `--max-results`.
-  When the filter actually removed results, the response `warning` says so.
-  Warnings are printed in YAML and shown above the results with `-p`.
-- `--site` still works as a single-domain alias, but cannot be combined with
-  `--include-domain`.
-- The CLI does not validate entries itself. An entry the server cannot fix (a
-  path, a suffix or wildcard, another scheme such as `ftp://`, `user@host`, an
-  IP address, `localhost` or an unknown top-level domain, the same host in both
-  lists, a list over its limit, ...) comes back as an `invalid_filter` error
-  naming the flag's field, the entry and how to fix it, and the command exits 1.
+- Each entry is a host and covers that host and every subdomain
+  (`yahoo.com` also excludes `finance.yahoo.com`). At most 1,000 distinct
+  hosts per request.
+- The server cleans up harmless noise: scheme, a leading `www.`, case, port,
+  a trailing `/`, a query string and surrounding whitespace
+  (`https://WWW.UN.org/` becomes `un.org`).
+- Anything else is rejected with an `invalid_filter` error naming the field,
+  the entry and the reason, and the command exits 1: paths (`un.org/press`),
+  suffixes (`.com`), wildcards (`*.gov`), IP addresses, `user@host` and
+  invalid hosts. Private-suffix hosts such as `github.io` or `blogspot.com`
+  are accepted.
+- Spaces around comma-separated entries and stray commas are ignored. A blank
+  value such as `--exclude-domain ""` is still sent, so the server rejects it
+  instead of running an unfiltered search.
+- If every result is excluded, the response can be empty. Response warnings
+  are printed in YAML and shown above the results with `-p`.
 
 ### Fetch
 
