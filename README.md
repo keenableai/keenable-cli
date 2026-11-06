@@ -62,38 +62,41 @@ Works without login (free tier). Log in for higher rate limits.
 
 #### Domain filters
 
-`--include-domain` keeps results to an allow-list; `--exclude-domain` drops a
-block-list. Both are repeatable and each also takes a comma list, so these are
-equivalent:
+`--include-domain` keeps results to an allow-list of hosts; `--exclude-domain`
+drops a block-list. Both are repeatable and each also takes a comma list, so
+these are equivalent:
 
 ```bash
-keenable search "security council vote" --include-domain press.un.org,undocs.org --include-domain .gov
-keenable search "security council vote" --include-domain press.un.org --include-domain undocs.org --include-domain .gov
+keenable search "security council vote" --include-domain press.un.org,undocs.org --include-domain who.int
+keenable search "security council vote" --include-domain press.un.org --include-domain undocs.org --include-domain who.int
 ```
 
-Each entry is one of:
+Each entry is a host, and it covers that host and every subdomain
+(`yahoo.com` also matches `finance.yahoo.com`). Paths (`un.org/press`) and
+suffixes or wildcards (`.gov`, `*.gov`, `*`) are not supported.
 
-| Entry | Matches |
-|---|---|
-| `example.com` | the host and its subdomains |
-| `example.com/docs` | that path prefix (`/docs/x`, not `/docsx`) |
-| `.gov`, `*.gov`, `.gov.uk` | any host under that suffix |
-
+- Limits per request, counted on distinct hosts: at most 50 in
+  `--include-domain` and at most 200 in `--exclude-domain`.
+- The server tidies harmless noise for you and says so: case, an `http://` or
+  `https://` scheme, a port, a trailing `/`, a trailing dot, a leading `www.`
+  and duplicates are cleaned up (`https://WWW.UN.org/` becomes `un.org`), and
+  the response `warning` lists what was changed.
 - Spaces around comma-separated entries and stray commas are ignored
   (`"a.com, b.com"` and `a.com,` both work). A blank value such as
   `--include-domain ""` is still sent, so the server rejects it instead of
   running an unfiltered search.
 - Both flags together keep results that are included and not excluded:
-  an exclude entry wins over a broader include entry (include `a.com`,
+  an exclude host wins over a broader include host (include `a.com`,
   exclude `docs.a.com`). A narrow list can return fewer than `--max-results`.
-  When the filter actually removed results, the response carries a `warning`
-  that says so (printed in YAML, and shown above the results with `-p`).
+  When the filter actually removed results, the response `warning` says so.
+  Warnings are printed in YAML and shown above the results with `-p`.
 - `--site` still works as a single-domain alias, but cannot be combined with
   `--include-domain`.
-- The CLI does not validate entries itself. A bad entry (scheme, port, bare
-  `*`, the same entry in both lists, ...) comes back from the server as an
-  error naming the flag's field, the entry and the reason, and the command
-  exits 1.
+- The CLI does not validate entries itself. An entry the server cannot fix (a
+  path, a suffix or wildcard, another scheme such as `ftp://`, `user@host`, an
+  IP address, `localhost` or an unknown top-level domain, the same host in both
+  lists, a list over its limit, ...) comes back as an `invalid_filter` error
+  naming the flag's field, the entry and how to fix it, and the command exits 1.
 
 ### Fetch
 
