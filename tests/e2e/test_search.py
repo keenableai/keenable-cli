@@ -262,20 +262,74 @@ def test_blank_domain_flag_is_rejected(kn, domain_flags, flag, field, blank):
     _assert_filter_rejected(kn("search", "x", f"{flag}={blank}"), field, "")
 
 
+REJECTED_ENTRIES = [
+    "*", ".gov", "*.gov", "*.docs.rs", "docs.rs/releases", "ftp://docs.rs",
+    "user@docs.rs", "127.0.0.1", "doc s.rs", "localhost", "co.uk", "docs.notarealtld",
+]
+
+
 @pytest.mark.parametrize("flag,field", [
     ("--include-domain", "include_domains"),
     ("--exclude-domain", "exclude_domains"),
 ])
-@pytest.mark.parametrize("entry", ["https://docs.rs", "docs.rs:443", "*"])
+@pytest.mark.parametrize("entry", REJECTED_ENTRIES)
 def test_bad_domain_entry_is_rejected_as_sent(kn, domain_flags, flag, field, entry):
     _assert_filter_rejected(kn("search", "x", flag, entry), field, entry)
 
 
-def test_more_than_200_domain_entries_is_rejected(kn, domain_flags):
-    include = ",".join(f"d{i}.example.com" for i in range(150))
-    exclude = ",".join(f"d{i}.example.com" for i in range(150, 201))
-    res = kn("search", "x", "--include-domain", include, "--exclude-domain", exclude)
-    _assert_filter_rejected(res, "include_domains+exclude_domains", "201")
+def test_path_rejection_names_the_host_to_use(kn, domain_flags):
+    res = kn("search", "x", "--include-domain", "docs.rs/releases")
+    _assert_filter_rejected(res, "include_domains", "docs.rs/releases")
+    assert "docs.rs" in res.yaml()["message"].split(":", 1)[1], res.out
+
+
+def test_fixable_entries_are_normalized_with_a_warning(kn, domain_flags):
+    res = kn("search", "async", "--include-domain", " HTTPS://WWW.Docs.RS:443/ ")
+    assert res.code == 0, res.out + res.err
+    data = res.yaml()
+    for r in data.get("results") or []:
+        assert host_under(host_of(r["url"]), "docs.rs"), r["url"]
+    warning = data.get("warning") or ""
+    assert "Normalized include_domains" in warning, data
+    assert '"docs.rs"' in warning, data
+
+
+def test_clean_entries_get_no_normalization_warning(kn, domain_flags):
+    data = kn("search", "async", "--include-domain", "docs.rs").yaml()
+    assert "Normalized" not in (data.get("warning") or ""), data
+
+
+def _hosts(start, stop):
+    return ",".join(f"d{i}.example.com" for i in range(start, stop))
+
+
+def _assert_limit_rejected(res, field, cap):
+    assert res.code == 1, res.out
+    data = res.yaml()
+    assert data["error"] == "invalid_filter", data
+    assert data["message"].startswith(f"Invalid {field} value"), data
+    assert str(cap) in data["message"], data
+
+
+def test_more_than_50_include_hosts_is_rejected(kn, domain_flags):
+    res = kn("search", "x", "--include-domain", _hosts(0, 51))
+    _assert_limit_rejected(res, "include_domains", 50)
+
+
+def test_more_than_200_exclude_hosts_is_rejected(kn, domain_flags):
+    res = kn("search", "x", "--exclude-domain", _hosts(0, 201))
+    _assert_limit_rejected(res, "exclude_domains", 200)
+
+
+def test_full_include_and_exclude_lists_are_accepted(kn, domain_flags):
+    res = kn("search", "x", "--include-domain", _hosts(0, 50), "--exclude-domain", _hosts(50, 250))
+    assert res.code == 0, res.out + res.err
+
+
+def test_limit_counts_hosts_after_normalizing(kn, domain_flags):
+    include = _hosts(0, 50) + ",WWW.D0.example.com,https://d1.example.com/"
+    res = kn("search", "x", "--include-domain", include)
+    assert res.code == 0, res.out + res.err
 
 
 INLINE_SITE_ARGS = ("search", "site:docs.rs async", "--include-domain", "crates.io")
