@@ -417,14 +417,14 @@ mod tests {
     #[test]
     fn unknown_errors_show_the_server_reason_and_fix() {
         let body = json!({
-            "error": "invalid_client",
+            "error": "invalid_grant",
             "error_description": "This device_code was issued to a different client_id.",
             "fix": "Poll with the same client_id."
         });
         assert_eq!(
             classify_poll(400, None, Some(&body), 5),
             PollStep::Fail(
-                "Authorization error: This device_code was issued to a different client_id. Poll with the same client_id. (invalid_client)".into()
+                "Authorization error: This device_code was issued to a different client_id. Poll with the same client_id. (invalid_grant)".into()
             )
         );
     }
