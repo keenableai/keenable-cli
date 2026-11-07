@@ -1,6 +1,10 @@
 """T-23..T-29 — fetch. Single-URL by design since 0.1.16 (clap rejects extras)."""
 
+from datetime import datetime
+
 import pytest
+
+from conftest import parse_ts, search_results
 
 # Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
 # <h1> and reworded this paragraph (was "...for use in illustrative examples in
@@ -45,6 +49,26 @@ def test_fetch_prompt(kn):
     assert "testing" in data["content"].lower()
     assert "monitoring" in data["content"].lower()
     assert EXAMPLE_BODY not in data["content"]
+
+
+def test_fetch_dates_are_iso(kn):
+    # The API sends fetch's published_at as a Unix number; the CLI rewrites it
+    # as RFC 3339 so it matches search. Recent news pages carry a date.
+    results = search_results(kn, "AI news", "--published-after", "30d", "--max-results", "5")
+    dated = [r for r in results if r.get("published_at") is not None]
+    if not dated:
+        pytest.skip("no dated result to fetch")
+    res = kn("fetch", dated[0]["url"], "--max-chars", "100")
+    assert res.code == 0, res.out + res.err
+    data = res.yaml()
+    for field in ("published_at", "acquired_at"):
+        value = data.get(field)
+        if value is None:
+            continue
+        # PyYAML loads an unquoted ISO timestamp as datetime; a raw epoch
+        # would load as int.
+        assert isinstance(value, (datetime, str)), (field, value)
+        assert parse_ts(value).year >= 1990, (field, value)
 
 
 def test_fetch_max_chars(kn):
