@@ -220,7 +220,7 @@
     "type": "billing_error",
     "status": 402,
     "title": "Payment required",
-    "summary": "A pay-per-request (x402) endpoint was called without a payment.",
+    "summary": "A pay-per-request endpoint (x402, or ZeroClick on /v1/zeroclick/*) was called without a payment.",
     "fix": "Sign one of the \"accepts\" offers with an x402 client and send the same request again with the PAYMENT-SIGNATURE header. Without a wallet, use an API key on /v1/search and /v1/fetch instead.",
     "retryable": false,
     "docs_anchor": "payment-required",
