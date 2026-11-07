@@ -19,6 +19,7 @@ fn machine_name() -> String {
 const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const LEGACY_AGENT_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:agent_code";
 const SLOW_DOWN_STEP_SECS: u64 = 5;
+const MAX_SERVER_ERROR_RETRIES: u32 = 3;
 const EXPIRED_MESSAGE: &str = "Code expired. Please run `keenable login` again.";
 
 struct DeviceCode {
@@ -119,6 +120,31 @@ fn body_retry_after(body: &serde_json::Value) -> Option<u64> {
         .or_else(|| body["retry_after_seconds"].as_u64())
 }
 
+fn unknown_error_message(error: &str, body: &serde_json::Value) -> String {
+    match error_detail(body) {
+        Some(detail) => format!("Authorization error: {}. {}", error, detail),
+        None => format!("Authorization error: {}", error),
+    }
+}
+
+fn grant_rejected_message(body: Option<&serde_json::Value>) -> String {
+    let base = "Authorization error: the server rejected the login request.";
+    match body.and_then(error_detail) {
+        Some(detail) => format!("{} {}", base, detail),
+        None => base.to_string(),
+    }
+}
+
+fn server_error_failure(status: u16, body: Option<&serde_json::Value>) -> Option<String> {
+    if status < 500 {
+        return None;
+    }
+    let body = body?;
+    body["error"]
+        .as_str()
+        .map(|error| unknown_error_message(error, body))
+}
+
 fn wait_before_poll(next_wait: u64, remaining: Duration) -> Option<Duration> {
     let wait = Duration::from_secs(next_wait);
     (wait < remaining).then_some(wait)
@@ -186,10 +212,7 @@ fn classify_poll(
         }
         Some("access_denied") => PollStep::Fail("Authorization was denied.".to_string()),
         Some("expired_token") => PollStep::Fail(EXPIRED_MESSAGE.to_string()),
-        Some(e) => PollStep::Fail(match error_detail(body) {
-            Some(detail) => format!("Authorization error: {}. {}", e, detail),
-            None => format!("Authorization error: {}", e),
-        }),
+        Some(e) => PollStep::Fail(unknown_error_message(e, body)),
         None => keep,
     }
 }
@@ -204,6 +227,7 @@ async fn poll_for_token(
     let mut interval = interval.max(1); // a server-sent 0 must not busy-poll
     let mut next_wait = interval;
     let mut legacy = false;
+    let mut server_errors = 0;
 
     loop {
         // A server-sent Retry-After must not keep login waiting past the code's lifetime.
@@ -252,6 +276,13 @@ async fn poll_for_token(
             .and_then(|v| v.trim().parse::<u64>().ok());
         let body: Option<serde_json::Value> = resp.json().await.ok();
 
+        // A backend that keeps failing must not hang login until the code expires.
+        match server_error_failure(status, body.as_ref()) {
+            Some(message) if server_errors >= MAX_SERVER_ERROR_RETRIES => return Err(message),
+            Some(_) => server_errors += 1,
+            None => server_errors = 0,
+        }
+
         match classify_poll(status, retry_after, body.as_ref(), interval) {
             PollStep::Done(key) => return Ok(key),
             PollStep::Wait {
@@ -266,11 +297,7 @@ async fn poll_for_token(
                 legacy = true;
                 next_wait = 0;
             }
-            PollStep::UseLegacyGrant => {
-                return Err(
-                    "Authorization error: the server rejected the login request.".to_string(),
-                );
-            }
+            PollStep::UseLegacyGrant => return Err(grant_rejected_message(body.as_ref())),
             PollStep::Fail(message) => return Err(message),
         }
     }
@@ -531,6 +558,49 @@ mod tests {
         assert_eq!(
             wait_before_poll(0, Duration::from_secs(1)),
             Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn persistent_server_errors_fail_with_the_old_message() {
+        assert_eq!(
+            server_error_failure(500, Some(&json!({"error": "Internal server error"}))),
+            Some("Authorization error: Internal server error".to_string())
+        );
+        let body = json!({
+            "error": "temporarily_unavailable",
+            "error_description": "Try again shortly.",
+            "retry_after_seconds": 3
+        });
+        assert_eq!(
+            server_error_failure(503, Some(&body)),
+            Some("Authorization error: temporarily_unavailable. Try again shortly.".to_string())
+        );
+        assert_eq!(server_error_failure(502, None), None);
+        assert_eq!(
+            server_error_failure(502, Some(&json!({"message": "x"}))),
+            None
+        );
+        assert_eq!(
+            server_error_failure(429, Some(&json!({"error": "Too many requests"}))),
+            None
+        );
+        assert_eq!(
+            server_error_failure(400, Some(&json!({"error": "authorization_pending"}))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_second_grant_rejection_keeps_the_server_reason() {
+        let base = "Authorization error: the server rejected the login request.";
+        assert_eq!(grant_rejected_message(None), base);
+        assert_eq!(grant_rejected_message(Some(&json!({"error": "x"}))), base);
+        let body =
+            json!({"error": "Invalid parameter", "message": "\"grant_type\": must be agent_code"});
+        assert_eq!(
+            grant_rejected_message(Some(&body)),
+            format!("{} \"grant_type\": must be agent_code", base)
         );
     }
 
