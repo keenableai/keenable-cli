@@ -157,9 +157,14 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
 - API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's `{error, message, retryAfter}` format
-- In YAML mode, errors are output as structured YAML to stdout (with `hint` field for auth/rate-limit errors)
-- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr
-- Auth errors (401, 400 auth failed) and rate limit errors (429) include a `keenable login` hint
+- In YAML mode, errors are output as structured YAML to stdout: `error`, `message`, `retry_after`, `request_id` (the API's `X-Request-Id`, for support), and a `hint` with the next step
+- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus a `Request ID: …` hint when the API sent one
+- Hints come from `ApiError::hint(authenticated)`. `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
+  - 401 / 400 "Authentication failed" → `keenable login`
+  - 400 / 422 → fix the request (the message says what was rejected); retrying unchanged fails
+  - 402 → out of credits, add credits at https://keenable.ai/console
+  - 403 → anonymous: `keenable login` (the feature needs an account); authenticated: the key or plan does not allow this — `keenable login` if the key was revoked, else check the plan at the console
+  - 429 → anonymous: `keenable login` for higher limits; authenticated: retry later or switch accounts
 
 ### Help Text & Hints
 

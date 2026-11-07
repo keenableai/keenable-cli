@@ -97,9 +97,15 @@ fn print_yaml(data: &Value) {
     }
 }
 
+/// A failed request, with whether it was sent with an API key. Captured at
+/// send time so the hint matches the request even if a concurrent login or
+/// logout changes the stored key before the error is shown. Boxed: it is
+/// only built on the error path, and keeps `Result` small as ApiError grows.
+type Failure = Box<(ApiError, bool)>;
+
 /// Execute a request. When an API key override is provided, go direct (skip daemon).
 /// Otherwise try daemon first, fall back to direct HTTP.
-async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, ApiError> {
+async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, Failure> {
     // If no override, try daemon first
     if api_key_override.is_none() && daemon::ensure_daemon().is_ok() {
         match daemon::daemon_request(req).await {
@@ -119,13 +125,20 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         Some(key) => api_key_client(key),
         None => bare_client(),
     };
+    send_direct(&client, req, authenticated)
+        .await
+        .map_err(|e| Box::new((e, authenticated)))
+}
 
+async fn send_direct(
+    client: &reqwest::Client,
+    req: &DaemonRequest,
+    authenticated: bool,
+) -> Result<Value, ApiError> {
     let send_err = |e: reqwest::Error| ApiError::request_failed(e.to_string());
     let missing = |field: &str| ApiError {
-        status: 0,
         error: format!("Missing {}", field),
-        message: None,
-        retry_after: None,
+        ..Default::default()
     };
 
     match req.command.as_str() {
@@ -150,17 +163,26 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
             handle_response(resp).await
         }
         _ => Err(ApiError {
-            status: 0,
             error: format!("Unknown command: {}", req.command),
-            message: None,
-            retry_after: None,
+            ..Default::default()
         }),
     }
 }
 
-/// Reconstruct an ApiError from a failed DaemonResponse.
-/// The daemon forwards the structured error value in `data`.
-fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
+/// Reconstruct an ApiError from a failed DaemonResponse, with the auth state
+/// the daemon sent it with. The daemon forwards the structured error value
+/// (and `authenticated`) in `data`; a daemon from an older version omits
+/// `authenticated`, so fall back to the stored key it would have loaded.
+fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> Failure {
+    let authenticated = resp
+        .data
+        .as_ref()
+        .and_then(|d| d["authenticated"].as_bool())
+        .unwrap_or_else(|| config::get_api_key().is_some());
+    Box::new((daemon_error(resp), authenticated))
+}
+
+fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
     if let Some(data) = &resp.data {
         // Daemon forwards the structured error from handle_response
         let error = data["error"]
@@ -170,48 +192,28 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
         let message = data["message"].as_str().map(|s| s.to_string());
         let retry_after = data["retry_after"].as_u64();
         let status = data["status"].as_u64().unwrap_or(0) as u16;
+        let request_id = data["request_id"].as_str().map(|s| s.to_string());
         return ApiError {
             status,
             error,
             message,
             retry_after,
+            request_id,
         };
     }
     // Fallback: use the plain error string
     ApiError {
-        status: 0,
         error: resp.error.unwrap_or("Unknown error".to_string()),
-        message: None,
-        retry_after: None,
+        ..Default::default()
     }
 }
 
 /// Display an ApiError according to output mode (human vs YAML).
-/// Auth and rate-limit errors always carry a `keenable login` hint (a
-/// structured `hint` field in YAML mode), but the wording is auth-aware:
-/// login can't raise limits for a key that's already in use, so an
-/// authenticated 429 suggests retrying or switching accounts instead of
-/// falsely promising higher limits.
-fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
-    let authenticated = resolve_api_key(api_key_override).is_some();
-    let login_hint = if err.is_auth_error() {
-        Some("Run `keenable login` to authenticate.".to_string())
-    } else if err.is_rate_limit() {
-        if authenticated {
-            let retry = err
-                .retry_after
-                .map(|s| format!("Retry after {}s", s))
-                .unwrap_or_else(|| "Retry later".to_string());
-            Some(format!(
-                "Rate limit reached for your API key. {}, or run `keenable login` to switch accounts.",
-                retry
-            ))
-        } else {
-            Some("Run `keenable login` to authenticate and increase your limits.".to_string())
-        }
-    } else {
-        None
-    };
+/// The next step comes from `ApiError::hint`, worded for the auth state the
+/// request was sent with (a structured `hint` field in YAML mode). The API's
+/// request id is shown too, so users can quote it to support.
+fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
+    let hint = err.hint(authenticated);
 
     if human {
         ui::error(&err.display());
@@ -221,14 +223,21 @@ fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) 
         {
             ui::hint(&format!("Retry after {}s.", secs));
         }
-        if let Some(hint) = &login_hint {
+        if let Some(hint) = &hint {
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
+        }
+        if let Some(id) = &err.request_id {
+            ui::hint(&format!(
+                "Request ID: {} (quote it when contacting support)",
+                id
+            ));
         }
         eprintln!();
     } else {
-        // YAML error output for agents (retry_after is already a field)
+        // YAML error output for agents (retry_after and request_id are
+        // already fields)
         let mut val = err.to_yaml_value();
-        if let Some(hint) = login_hint {
+        if let Some(hint) = hint {
             val["hint"] = Value::String(hint);
         }
         print_yaml(&val);
@@ -376,7 +385,7 @@ pub async fn search(
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human, api_key),
+        Err(e) => handle_api_error(*e, human),
     }
 }
 
@@ -419,7 +428,7 @@ pub async fn fetch(
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human, api_key),
+        Err(e) => handle_api_error(*e, human),
     }
 }
 
@@ -474,6 +483,31 @@ mod tests {
             config_mode(&json!({"m": "standard"}), "m").as_deref(),
             Some("standard")
         );
+    }
+
+    fn daemon_403(data: Value) -> daemon::DaemonResponse {
+        daemon::DaemonResponse {
+            ok: false,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn daemon_error_hint_follows_the_auth_state_it_was_sent_with() {
+        let forbidden = json!({"status": 403, "error": "Forbidden", "message": "no"});
+        let mut keyed = forbidden.clone();
+        keyed["authenticated"] = json!(true);
+        let (err, authed) = *daemon_response_to_api_error(daemon_403(keyed));
+        assert!(authed);
+        assert_eq!(err.status, 403);
+        assert!(err.hint(authed).unwrap().contains("revoked"));
+
+        let mut anon = forbidden;
+        anon["authenticated"] = json!(false);
+        let (err, authed) = *daemon_response_to_api_error(daemon_403(anon));
+        assert!(!authed);
+        assert!(!err.hint(authed).unwrap().contains("revoked"));
     }
 
     #[test]
