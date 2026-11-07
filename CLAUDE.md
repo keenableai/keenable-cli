@@ -166,10 +166,11 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 - All human output to `stderr` via `eprintln!` or `ui::` helpers; machine output to `stdout` via `println!`
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
-- API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's `{error, message, retryAfter}` format
-- In YAML mode, errors are output as structured YAML to stdout: `error`, `message`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `request_id` (the API's `X-Request-Id`, for support), and a `hint` with the next step
-- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus a `Request ID: …` hint when the API sent one
-- Hints come from `ApiError::hint(authenticated)`. `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
+- API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's flat error body: the legacy `{error, message, retryAfter}` plus the error format v1 fields `type`, `code`, `fix`, `docs_url` (and `retry_after_seconds`). The v1 fields are optional: older servers don't send them, and nothing changes then
+- In YAML mode, errors are output as structured YAML to stdout: `error`, `type`, `code`, `message`, `fix`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `docs_url`, `request_id` (the API's `X-Request-Id`, for support), and a `hint` with the next step. `type`/`code`/`fix`/`docs_url` appear only when the server sent them; the legacy keys never change
+- In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus `Docs: …` and `Request ID: …` hints when the API sent them
+- The vendored backend catalog (`tests/fixtures/error-catalog.json`, a copy of the backend's `docs/error-catalog.json`) drives the error tests in `api.rs`; refresh it by copying the backend file over it
+- Hints come from `ApiError::hint(authenticated)`. When the server sent a `fix`, that is the hint (it knows the exact code). Otherwise it is the CLI's own hint, by status. `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
   - 401 / 400 "Authentication failed" → `keenable login`
   - 400 / 422 → fix the request (the message says what was rejected); retrying unchanged fails
   - 402 → out of credits, add credits at https://keenable.ai/console

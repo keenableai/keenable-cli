@@ -295,18 +295,20 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
     };
     send_direct(&client, req, authenticated)
         .await
-        .map_err(|e| Box::new((e, authenticated)))
+        .map_err(|e| Box::new((*e, authenticated)))
 }
 
 async fn send_direct(
     client: &reqwest::Client,
     req: &DaemonRequest,
     authenticated: bool,
-) -> Result<Value, ApiError> {
-    let send_err = |e: reqwest::Error| ApiError::request_failed(e.to_string());
-    let missing = |field: &str| ApiError {
-        error: format!("Missing {}", field),
-        ..Default::default()
+) -> Result<Value, Box<ApiError>> {
+    let send_err = |e: reqwest::Error| Box::new(ApiError::request_failed(e.to_string()));
+    let missing = |field: &str| {
+        Box::new(ApiError {
+            error: format!("Missing {}", field),
+            ..Default::default()
+        })
     };
 
     match req.command.as_str() {
@@ -330,10 +332,10 @@ async fn send_direct(
                 .map_err(send_err)?;
             handle_response(resp).await
         }
-        _ => Err(ApiError {
+        _ => Err(Box::new(ApiError {
             error: format!("Unknown command: {}", req.command),
             ..Default::default()
-        }),
+        })),
     }
 }
 
@@ -369,7 +371,9 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
             retry_after,
             rate_limit_reset,
             request_id,
-        };
+            ..Default::default()
+        }
+        .with_v1_fields(data);
     }
     // Fallback: use the plain error string
     ApiError {
@@ -390,6 +394,9 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         if let Some(hint) = &hint {
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
         }
+        if let Some(url) = &err.docs_url {
+            ui::hint(&format!("Docs: {}", url));
+        }
         if let Some(id) = &err.request_id {
             ui::hint(&format!(
                 "Request ID: {} (quote it when contacting support)",
@@ -398,8 +405,9 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         }
         eprintln!();
     } else {
-        // YAML error output for agents (retry_after and request_id are
-        // already fields)
+        // YAML error output for agents (retry_after, request_id and the v1
+        // type/code/fix/docs_url are already fields; `hint` repeats `fix`
+        // when the server sent one, so agents reading `hint` get it too)
         let mut val = err.to_yaml_value();
         if let Some(hint) = hint {
             val["hint"] = Value::String(hint);
@@ -724,6 +732,34 @@ mod tests {
         let (err, authed) = *daemon_response_to_api_error(daemon_403(anon));
         assert!(!authed);
         assert!(!err.hint(authed).unwrap().contains("revoked"));
+    }
+
+    /// The daemon forwards `to_yaml_value`, so the v1 fields survive the
+    /// round trip and the server fix stays the hint.
+    #[test]
+    fn daemon_error_keeps_the_v1_fields() {
+        let sent = ApiError {
+            status: 401,
+            error: "Authentication failed".into(),
+            message: Some("Invalid API key.".into()),
+            request_id: Some("req-1".into()),
+            ..Default::default()
+        }
+        .with_v1_fields(&json!({
+            "type": "authentication_error",
+            "code": "invalid_api_key",
+            "fix": "Copy the full key and retry.",
+            "docs_url": "https://docs.keenable.ai/errors#invalid-api-key",
+        }));
+        let mut data = sent.to_yaml_value();
+        data["status"] = json!(401);
+        data["authenticated"] = json!(true);
+        let (err, authed) = *daemon_response_to_api_error(daemon_403(data));
+        assert_eq!(err.to_yaml_value(), sent.to_yaml_value());
+        assert_eq!(
+            err.hint(authed).as_deref(),
+            Some("Copy the full key and retry.")
+        );
     }
 
     #[test]

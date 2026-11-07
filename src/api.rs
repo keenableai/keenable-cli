@@ -42,12 +42,23 @@ fn base_headers() -> reqwest::header::HeaderMap {
 /// Where users add credits or check what their plan includes.
 const CONSOLE_URL: &str = "https://keenable.ai/console";
 
-/// Structured API error matching the backend's `{error, message, retryAfter}` format.
+/// Structured API error matching the backend's flat error body: the legacy
+/// `{error, message, retryAfter}` plus the v1 fields (`type`, `code`, `fix`,
+/// `docs_url`), which older servers do not send.
 #[derive(Default)]
 pub struct ApiError {
     pub status: u16,
     pub error: String,
+    /// v1 `type`: the closed category (`authentication_error`,
+    /// `rate_limit_error`, `target_error`, ...).
+    pub error_type: Option<String>,
+    /// v1 `code`: stable snake_case id, e.g. `invalid_api_key`.
+    pub code: Option<String>,
     pub message: Option<String>,
+    /// v1 `fix`: the server's next step. Preferred over the CLI's own hint.
+    pub fix: Option<String>,
+    /// v1 `docs_url`: the docs entry for `code`.
+    pub docs_url: Option<String>,
     pub retry_after: Option<u64>,
     /// `X-RateLimit-Reset` on a 429: when the window reopens (ISO 8601). The
     /// API sends this rather than `Retry-After`, so it is the only retry time
@@ -66,18 +77,49 @@ impl ApiError {
         }
     }
 
-    /// Structured YAML output for agent consumption.
+    /// Read the v1 fields (`type`, `code`, `fix`, `docs_url`) from an API
+    /// error body, or from a daemon-forwarded `to_yaml_value`, which uses the
+    /// same names. Missing or blank fields (older servers) stay None.
+    pub fn with_v1_fields(mut self, body: &Value) -> Self {
+        let field = |key: &str| {
+            body[key]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        self.error_type = field("type");
+        self.code = field("code");
+        self.fix = field("fix");
+        self.docs_url = field("docs_url");
+        self
+    }
+
+    /// Structured YAML output for agent consumption. The v1 fields are only
+    /// present when the server sent them.
     pub fn to_yaml_value(&self) -> Value {
         let mut map = serde_json::Map::new();
         map.insert("error".into(), Value::String(self.error.clone()));
+        if let Some(t) = &self.error_type {
+            map.insert("type".into(), Value::String(t.clone()));
+        }
+        if let Some(code) = &self.code {
+            map.insert("code".into(), Value::String(code.clone()));
+        }
         if let Some(msg) = &self.message {
             map.insert("message".into(), Value::String(msg.clone()));
+        }
+        if let Some(fix) = &self.fix {
+            map.insert("fix".into(), Value::String(fix.clone()));
         }
         if let Some(ra) = self.retry_after {
             map.insert("retry_after".into(), Value::Number(ra.into()));
         }
         if let Some(reset) = &self.rate_limit_reset {
             map.insert("rate_limit_reset".into(), Value::String(reset.clone()));
+        }
+        if let Some(url) = &self.docs_url {
+            map.insert("docs_url".into(), Value::String(url.clone()));
         }
         if let Some(id) = &self.request_id {
             map.insert("request_id".into(), Value::String(id.clone()));
@@ -114,11 +156,16 @@ impl ApiError {
             || (self.status == 400 && self.error.to_lowercase().contains("authentication"))
     }
 
-    /// The single next step for this error, worded for the caller's auth
-    /// state. `keenable login` is suggested only where it can help: a
-    /// rejected key, a feature that needs an account, or the keyless rate
-    /// limit. Commands are wrapped in backticks so pretty mode can color them.
+    /// The single next step for this error. The server's `fix` wins when it
+    /// sent one (it knows the exact code); otherwise the CLI's own hint,
+    /// worded for the caller's auth state, so older servers keep theirs.
+    /// `keenable login` is suggested only where it can help: a rejected key,
+    /// a feature that needs an account, or the keyless rate limit. Commands
+    /// are wrapped in backticks so pretty mode can color them.
     pub fn hint(&self, authenticated: bool) -> Option<String> {
+        if let Some(fix) = &self.fix {
+            return Some(fix.clone());
+        }
         if self.is_auth_error() {
             return Some("Run `keenable login` to authenticate.".into());
         }
@@ -314,7 +361,9 @@ pub fn api_url(path: &str) -> String {
     format!("{}{}", api_base(), path)
 }
 
-pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError> {
+/// The error is boxed: it is only built on the error path, and keeps
+/// `Result` small as ApiError grows.
+pub async fn handle_response(resp: reqwest::Response) -> Result<Value, Box<ApiError>> {
     let status = resp.status();
     let request_id = resp
         .headers()
@@ -325,12 +374,14 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         .map(str::to_string);
 
     if status.is_success() {
-        return resp.json::<Value>().await.map_err(|e| ApiError {
-            status: status.as_u16(),
-            error: "Failed to parse response".into(),
-            message: Some(e.to_string()),
-            request_id,
-            ..Default::default()
+        return resp.json::<Value>().await.map_err(|e| {
+            Box::new(ApiError {
+                status: status.as_u16(),
+                error: "Failed to parse response".into(),
+                message: Some(e.to_string()),
+                request_id,
+                ..Default::default()
+            })
         });
     }
 
@@ -367,18 +418,29 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         .and_then(|v| v["message"].as_str())
         .map(|s| s.to_string());
 
-    // Also check retryAfter in body (backend may include it)
-    let retry_after =
-        retry_after.or_else(|| body_json.as_ref().and_then(|v| v["retryAfter"].as_u64()));
+    // Also check the body: v1 `retry_after_seconds`, else the deprecated
+    // `retryAfter` alias.
+    let retry_after = retry_after.or_else(|| {
+        body_json.as_ref().and_then(|v| {
+            v["retry_after_seconds"]
+                .as_u64()
+                .or_else(|| v["retryAfter"].as_u64())
+        })
+    });
 
-    Err(ApiError {
+    let err = ApiError {
         status: status.as_u16(),
         error,
         message,
         retry_after,
         rate_limit_reset,
         request_id,
-    })
+        ..Default::default()
+    };
+    Err(Box::new(match &body_json {
+        Some(body) => err.with_v1_fields(body),
+        None => err,
+    }))
 }
 
 #[cfg(test)]
@@ -705,5 +767,185 @@ mod tests {
         assert_eq!(e.rate_limit_reset, None);
         assert!(e.to_yaml_value().get("rate_limit_reset").is_none());
         assert!(e.retry_phrase().is_none());
+    }
+
+    /// The backend's error catalog (`docs/error-catalog.json` in the backend
+    /// repo), vendored. Refresh by copying the backend file over it.
+    const ERROR_CATALOG: &str = include_str!("../tests/fixtures/error-catalog.json");
+
+    const ERROR_TYPES: [&str; 7] = [
+        "invalid_request_error",
+        "authentication_error",
+        "permission_error",
+        "billing_error",
+        "rate_limit_error",
+        "target_error",
+        "api_error",
+    ];
+
+    fn catalog() -> Vec<Value> {
+        serde_json::from_str::<Value>(ERROR_CATALOG)
+            .expect("catalog is JSON")
+            .as_array()
+            .expect("catalog is an array")
+            .clone()
+    }
+
+    /// The error body a v1 server sends for a catalog entry.
+    fn v1_body(entry: &Value) -> Value {
+        let mut body = serde_json::json!({
+            "error": entry["title"],
+            "type": entry["type"],
+            "code": entry["code"],
+            "message": entry["summary"],
+            "fix": entry["fix"],
+            "docs_url": entry["docs_url"],
+            "request_id": "req_v1",
+            "retryable": entry["retryable"],
+        });
+        if entry["retryable"] == true {
+            body["retry_after_seconds"] = serde_json::json!(2);
+        }
+        body
+    }
+
+    async fn respond(status: u16, body: &Value) -> ApiError {
+        let http_resp = reqwest::Response::from(
+            ::http::Response::builder()
+                .status(status)
+                .header("x-request-id", "req_v1")
+                .body(body.to_string())
+                .unwrap(),
+        );
+        *handle_response(http_resp).await.unwrap_err()
+    }
+
+    /// Fails when the vendored catalog drifts from the shape the CLI reads.
+    #[test]
+    fn vendored_catalog_has_the_fields_the_cli_reads() {
+        let entries = catalog();
+        assert!(!entries.is_empty());
+        for e in &entries {
+            let code = e["code"].as_str().expect("code");
+            for key in ["title", "summary", "fix", "docs_url"] {
+                assert!(
+                    e[key].as_str().is_some_and(|s| !s.is_empty()),
+                    "{code}: {key}"
+                );
+            }
+            assert!(
+                ERROR_TYPES.contains(&e["type"].as_str().unwrap()),
+                "{code}: type"
+            );
+            assert!(e["status"].as_u64().is_some(), "{code}: status");
+            assert!(e["retryable"].is_boolean(), "{code}: retryable");
+            assert_eq!(
+                e["docs_url"].as_str().unwrap(),
+                format!("https://docs.keenable.ai/errors#{}", code.replace('_', "-"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_catalog_error_parses_into_v1_yaml_with_the_server_fix() {
+        for entry in catalog() {
+            let status = entry["status"].as_u64().unwrap() as u16;
+            let e = respond(status, &v1_body(&entry)).await;
+            let code = entry["code"].as_str().unwrap();
+            let y = e.to_yaml_value();
+            // Legacy fields exactly as before.
+            assert_eq!(y["error"], entry["title"], "{code}");
+            assert_eq!(y["message"], entry["summary"], "{code}");
+            assert_eq!(y["request_id"], "req_v1", "{code}");
+            // v1 fields, added.
+            assert_eq!(y["type"], entry["type"], "{code}");
+            assert_eq!(y["code"], entry["code"], "{code}");
+            assert_eq!(y["fix"], entry["fix"], "{code}");
+            assert_eq!(y["docs_url"], entry["docs_url"], "{code}");
+            if entry["retryable"] == true {
+                assert_eq!(y["retry_after"], 2, "{code}");
+            }
+            // The server fix beats the CLI hint in both auth states.
+            for authed in [true, false] {
+                assert_eq!(e.hint(authed).as_deref(), entry["fix"].as_str(), "{code}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn yaml_field_order_keeps_legacy_fields_and_adds_v1_ones() {
+        let entry = catalog()
+            .into_iter()
+            .find(|e| e["code"] == "invalid_api_key")
+            .unwrap();
+        let e = respond(401, &v1_body(&entry)).await;
+        let keys: Vec<String> = e
+            .to_yaml_value()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "error",
+                "type",
+                "code",
+                "message",
+                "fix",
+                "docs_url",
+                "request_id"
+            ]
+        );
+    }
+
+    /// An old server sends no v1 fields: no new keys, and the CLI hint stays.
+    #[tokio::test]
+    async fn old_server_body_keeps_the_cli_hint_and_adds_no_v1_keys() {
+        let e = respond(
+            401,
+            &serde_json::json!({"error": "Authentication failed", "message": "Invalid API key"}),
+        )
+        .await;
+        let y = e.to_yaml_value();
+        for key in ["type", "code", "fix", "docs_url"] {
+            assert!(y.get(key).is_none(), "{key}");
+        }
+        assert_eq!(
+            e.hint(true).as_deref(),
+            Some("Run `keenable login` to authenticate.")
+        );
+    }
+
+    /// Blank v1 strings count as absent, so they never blank out the hint.
+    #[tokio::test]
+    async fn blank_fix_falls_back_to_the_cli_hint() {
+        let e = respond(
+            402,
+            &serde_json::json!({"error": "Insufficient credits", "code": "insufficient_credits", "fix": "  "}),
+        )
+        .await;
+        assert!(e.fix.is_none());
+        assert_eq!(e.code.as_deref(), Some("insufficient_credits"));
+        assert!(e.hint(true).unwrap().contains("Out of credits"));
+    }
+
+    /// Retry-After header wins; the body's v1 `retry_after_seconds` wins
+    /// over the deprecated `retryAfter`.
+    #[tokio::test]
+    async fn retry_after_seconds_in_body_is_read() {
+        let e = respond(
+            429,
+            &serde_json::json!({"error": "Rate limit exceeded", "retry_after_seconds": 3, "retryAfter": 9}),
+        )
+        .await;
+        assert_eq!(e.retry_after, Some(3));
+        let e = respond(
+            429,
+            &serde_json::json!({"error": "Rate limit exceeded", "retryAfter": 9}),
+        )
+        .await;
+        assert_eq!(e.retry_after, Some(9));
     }
 }
