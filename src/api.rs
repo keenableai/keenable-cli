@@ -55,7 +55,8 @@ pub struct ApiError {
     /// v1 `code`: stable snake_case id, e.g. `invalid_api_key`.
     pub code: Option<String>,
     pub message: Option<String>,
-    /// v1 `fix`: the server's next step. Preferred over the CLI's own hint.
+    /// v1 `fix`: the server's next step, worded for raw HTTP callers. Shown
+    /// as `hint` only where the CLI has no hint of its own.
     pub fix: Option<String>,
     /// v1 `docs_url`: the docs entry for `code`.
     pub docs_url: Option<String>,
@@ -156,16 +157,20 @@ impl ApiError {
             || (self.status == 400 && self.error.to_lowercase().contains("authentication"))
     }
 
-    /// The single next step for this error. The server's `fix` wins when it
-    /// sent one (it knows the exact code); otherwise the CLI's own hint,
-    /// worded for the caller's auth state, so older servers keep theirs.
+    /// The single next step for this error, worded for the caller's auth
+    /// state. The CLI's own hint stays where it has one: agents match on its
+    /// wording (`keenable login`, "retrying unchanged fails", the retry time),
+    /// and the server's `fix` talks about HTTP headers the CLI does not
+    /// expose. The server `fix` fills in for statuses the CLI has no hint
+    /// for, and is always in YAML as its own `fix` field.
     /// `keenable login` is suggested only where it can help: a rejected key,
     /// a feature that needs an account, or the keyless rate limit. Commands
     /// are wrapped in backticks so pretty mode can color them.
     pub fn hint(&self, authenticated: bool) -> Option<String> {
-        if let Some(fix) = &self.fix {
-            return Some(fix.clone());
-        }
+        self.cli_hint(authenticated).or_else(|| self.fix.clone())
+    }
+
+    fn cli_hint(&self, authenticated: bool) -> Option<String> {
         if self.is_auth_error() {
             return Some("Run `keenable login` to authenticate.".into());
         }
@@ -865,9 +870,23 @@ mod tests {
             if entry["retryable"] == true {
                 assert_eq!(y["retry_after"], 2, "{code}");
             }
-            // The server fix beats the CLI hint in both auth states.
+            // The CLI hint stays where it has one (released wording, retry
+            // time); the server fix fills in only where it has none.
             for authed in [true, false] {
-                assert_eq!(e.hint(authed).as_deref(), entry["fix"].as_str(), "{code}");
+                let h = e.hint(authed).unwrap_or_default();
+                match e.cli_hint(authed) {
+                    Some(cli) => assert_eq!(h, cli, "{code}"),
+                    None => assert_eq!(Some(h.as_str()), entry["fix"].as_str(), "{code}"),
+                }
+                if status == 401 || status == 429 {
+                    assert!(h.contains("`keenable login`"), "{code}: {h}");
+                }
+                if status == 429 {
+                    assert!(h.contains("Retry after 2s"), "{code}: {h}");
+                }
+                if status == 400 || status == 422 {
+                    assert!(h.contains("retrying unchanged fails"), "{code}: {h}");
+                }
             }
         }
     }

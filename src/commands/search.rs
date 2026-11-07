@@ -406,8 +406,8 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         eprintln!();
     } else {
         // YAML error output for agents (retry_after, request_id and the v1
-        // type/code/fix/docs_url are already fields; `hint` repeats `fix`
-        // when the server sent one, so agents reading `hint` get it too)
+        // type/code/fix/docs_url are already fields; `hint` keeps the CLI's
+        // wording and repeats `fix` only where the CLI has no hint)
         let mut val = err.to_yaml_value();
         if let Some(hint) = hint {
             val["hint"] = Value::String(hint);
@@ -735,7 +735,7 @@ mod tests {
     }
 
     /// The daemon forwards `to_yaml_value`, so the v1 fields survive the
-    /// round trip and the server fix stays the hint.
+    /// round trip; the hint stays the CLI's own (`keenable login` on a 401).
     #[test]
     fn daemon_error_keeps_the_v1_fields() {
         let sent = ApiError {
@@ -756,9 +756,10 @@ mod tests {
         data["authenticated"] = json!(true);
         let (err, authed) = *daemon_response_to_api_error(daemon_403(data));
         assert_eq!(err.to_yaml_value(), sent.to_yaml_value());
+        assert_eq!(err.fix.as_deref(), Some("Copy the full key and retry."));
         assert_eq!(
             err.hint(authed).as_deref(),
-            Some("Copy the full key and retry.")
+            Some("Run `keenable login` to authenticate.")
         );
     }
 
