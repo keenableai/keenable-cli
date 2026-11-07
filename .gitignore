@@ -11,3 +11,6 @@ scripts/
 
 # Claude Code
 .claude/
+
+# gstack local state
+.gstack/
