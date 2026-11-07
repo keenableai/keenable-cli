@@ -98,11 +98,30 @@ enum PollStep {
 }
 
 fn grant_type_rejected(status: u16, body: &serde_json::Value) -> bool {
-    status == 400
-        && body["error"].as_str() == Some("Invalid parameter")
-        && body["message"]
+    if status != 400 {
+        return false;
+    }
+    if body["error"].as_str() == Some("unsupported_grant_type")
+        || body["param"].as_str() == Some("grant_type")
+    {
+        return true;
+    }
+    ["message", "error_description"].iter().any(|field| {
+        body[*field]
             .as_str()
             .is_some_and(|m| m.contains("grant_type"))
+    })
+}
+
+fn body_retry_after(body: &serde_json::Value) -> Option<u64> {
+    body["retryAfter"]
+        .as_u64()
+        .or_else(|| body["retry_after_seconds"].as_u64())
+}
+
+fn wait_before_poll(next_wait: u64, remaining: Duration) -> Option<Duration> {
+    let wait = Duration::from_secs(next_wait);
+    (wait < remaining).then_some(wait)
 }
 
 fn classify_poll(
@@ -115,6 +134,7 @@ fn classify_poll(
         interval,
         next_wait: interval,
     };
+    let retry_after = retry_after.or_else(|| body.and_then(body_retry_after));
 
     if status == 429 {
         let backed_off = interval + SLOW_DOWN_STEP_SECS;
@@ -167,7 +187,7 @@ fn classify_poll(
         Some("access_denied") => PollStep::Fail("Authorization was denied.".to_string()),
         Some("expired_token") => PollStep::Fail(EXPIRED_MESSAGE.to_string()),
         Some(e) => PollStep::Fail(match error_detail(body) {
-            Some(detail) => format!("Authorization error: {} ({})", detail, e),
+            Some(detail) => format!("Authorization error: {}. {}", e, detail),
             None => format!("Authorization error: {}", e),
         }),
         None => keep,
@@ -186,11 +206,15 @@ async fn poll_for_token(
     let mut legacy = false;
 
     loop {
-        if std::time::Instant::now() > deadline {
-            return Err(EXPIRED_MESSAGE.to_string());
+        // A server-sent Retry-After must not keep login waiting past the code's lifetime.
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match wait_before_poll(next_wait, remaining) {
+            Some(wait) => tokio::time::sleep(wait).await,
+            None => {
+                tokio::time::sleep(remaining).await;
+                return Err(EXPIRED_MESSAGE.to_string());
+            }
         }
-
-        tokio::time::sleep(Duration::from_secs(next_wait)).await;
         next_wait = interval;
 
         let payload = if legacy {
@@ -372,7 +396,8 @@ mod tests {
     fn rate_limit_backs_off_and_respects_retry_after() {
         let body = json!({"error": "Too many requests. Please try again later.", "retryAfter": 30});
         assert_eq!(classify_poll(429, Some(30), Some(&body), 5), wait(10, 30));
-        assert_eq!(classify_poll(429, None, Some(&body), 5), wait(10, 10));
+        let no_hint = json!({"error": "Too many requests. Please try again later."});
+        assert_eq!(classify_poll(429, None, Some(&no_hint), 5), wait(10, 10));
         assert_eq!(classify_poll(429, Some(2), None, 5), wait(10, 10));
     }
 
@@ -424,7 +449,7 @@ mod tests {
         assert_eq!(
             classify_poll(400, None, Some(&body), 5),
             PollStep::Fail(
-                "Authorization error: This device_code was issued to a different client_id. Poll with the same client_id. (invalid_grant)".into()
+                "Authorization error: invalid_grant. This device_code was issued to a different client_id. Poll with the same client_id.".into()
             )
         );
     }
@@ -438,6 +463,74 @@ mod tests {
         assert_eq!(
             classify_poll(400, None, Some(&body), 5),
             PollStep::UseLegacyGrant
+        );
+    }
+
+    #[test]
+    fn body_retry_after_is_used_when_the_header_is_missing() {
+        let body = json!({"error": "Too many requests. Please try again later.", "retryAfter": 30});
+        assert_eq!(classify_poll(429, None, Some(&body), 5), wait(10, 30));
+        let body = json!({"error": "temporarily_unavailable", "retry_after_seconds": 12});
+        assert_eq!(classify_poll(503, None, Some(&body), 5), wait(5, 12));
+        let body = json!({"error": "x", "retryAfter": 60});
+        assert_eq!(classify_poll(429, Some(20), Some(&body), 5), wait(10, 20));
+    }
+
+    #[test]
+    fn unknown_errors_without_detail_keep_the_old_message() {
+        assert_eq!(
+            classify_poll(404, None, Some(&json!({"error": "Not found"})), 5),
+            PollStep::Fail("Authorization error: Not found".into())
+        );
+    }
+
+    #[test]
+    fn grant_rejection_is_detected_across_error_shapes() {
+        let current = json!({
+            "error": "Invalid parameter",
+            "message": "\"grant_type\": must be \"urn:ietf:params:oauth:grant-type:agent_code\""
+        });
+        let with_code = json!({
+            "error": "Invalid parameter",
+            "code": "invalid_parameter",
+            "param": "grant_type",
+            "message": "\"grant_type\": must be \"urn:ietf:params:oauth:grant-type:agent_code\""
+        });
+        let rfc = json!({"error": "unsupported_grant_type"});
+        for body in [current, with_code, rfc] {
+            assert_eq!(
+                classify_poll(400, None, Some(&body), 5),
+                PollStep::UseLegacyGrant
+            );
+        }
+        let missing_code = json!({
+            "error": "invalid_request",
+            "code": "missing_parameter",
+            "param": "device_code"
+        });
+        assert_ne!(
+            classify_poll(400, None, Some(&missing_code), 5),
+            PollStep::UseLegacyGrant
+        );
+        let rejected = json!({"error": "Invalid parameter", "message": "\"grant_type\": bad"});
+        assert_ne!(
+            classify_poll(429, None, Some(&rejected), 5),
+            PollStep::UseLegacyGrant
+        );
+    }
+
+    #[test]
+    fn waits_never_outlive_the_code() {
+        assert_eq!(
+            wait_before_poll(5, Duration::from_secs(600)),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(wait_before_poll(3600, Duration::from_secs(30)), None);
+        assert_eq!(wait_before_poll(30, Duration::from_secs(30)), None);
+        assert_eq!(wait_before_poll(0, Duration::ZERO), None);
+        assert_eq!(
+            wait_before_poll(0, Duration::from_secs(1)),
+            Some(Duration::ZERO)
         );
     }
 
