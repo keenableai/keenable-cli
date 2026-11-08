@@ -22,6 +22,7 @@ pub struct DaemonRequest {
     /// and CA settings when it was spawned; on a mismatch it exits so the
     /// next command spawns one with the current settings.
     #[serde(default)]
+    #[cfg_attr(not(unix), allow(dead_code))] // read only by the Unix daemon
     pub net_env: Option<String>,
 }
 
@@ -73,10 +74,11 @@ mod platform {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, Notify};
     use tokio::time::Instant;
 
     use crate::api::{ApiError, api_key_client, api_url, bare_client, handle_response};
@@ -84,6 +86,7 @@ mod platform {
     use crate::net;
 
     const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+    const DRAIN_TIMEOUT: Duration = Duration::from_secs(75);
 
     fn socket_path() -> PathBuf {
         config::home_dir()
@@ -149,12 +152,17 @@ mod platform {
         let client = match client {
             Ok(c) => Arc::new(c),
             Err(e) => {
-                eprintln!("Invalid SSL_CERT_FILE: {}", e);
-                fs::remove_file(&sock).ok();
+                crate::ui::error(&format!("Invalid SSL_CERT_FILE: {}", e));
+                crate::ui::hint(net::CERT_FILE_HINT);
+                remove_own_files();
                 std::process::exit(1);
             }
         };
         let own_env = Arc::new(net::env_fingerprint());
+        // Requests being served right now, and the signal that a caller with
+        // different network settings asked us to step aside.
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(Notify::new());
         let authenticated = Arc::new(authenticated);
         let last_activity = Arc::new(Mutex::new(Instant::now()));
 
@@ -188,13 +196,19 @@ mod platform {
         });
 
         loop {
-            match listener.accept().await {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                _ = stop.notified() => break,
+            };
+            match accepted {
                 Ok((stream, _)) => {
                     *last_activity.lock().await = Instant::now();
                     let client = client.clone();
                     let authenticated = authenticated.clone();
                     let last_activity = last_activity.clone();
                     let own_env = own_env.clone();
+                    let in_flight = in_flight.clone();
+                    let stop = stop.clone();
                     tokio::spawn(async move {
                         let (reader, mut writer) = stream.into_split();
                         let mut lines = BufReader::new(reader).lines();
@@ -216,20 +230,32 @@ mod platform {
                                 // Proxy/CA env changed since this daemon was
                                 // spawned: its client is stale. The caller
                                 // goes direct; the next command respawns us.
+                                // Other connections' requests still finish.
                                 Ok(req)
                                     if req
                                         .net_env
                                         .as_ref()
                                         .is_some_and(|fp| fp != own_env.as_str()) =>
                                 {
-                                    let resp = DaemonResponse {
+                                    DaemonResponse {
                                         ok: false,
                                         data: Some(serde_json::json!({ "restart": true })),
                                         error: Some("Network settings changed".into()),
-                                    };
-                                    reply_and_exit(&mut writer, &resp).await;
+                                    }
                                 }
-                                Ok(req) => handle_request(&client, *authenticated, req).await,
+                                Ok(req) => {
+                                    in_flight.fetch_add(1, Ordering::SeqCst);
+                                    let resp = handle_request(&client, *authenticated, req).await;
+                                    let mut resp_line =
+                                        serde_json::to_string(&resp).unwrap_or_default();
+                                    resp_line.push('\n');
+                                    let written = writer.write_all(resp_line.as_bytes()).await;
+                                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                                    if written.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
                                 Err(e) => DaemonResponse {
                                     ok: false,
                                     data: None,
@@ -237,10 +263,16 @@ mod platform {
                                 },
                             };
 
+                            let restart =
+                                response.data.as_ref().is_some_and(|d| d["restart"] == true);
                             let mut resp_line =
                                 serde_json::to_string(&response).unwrap_or_default();
                             resp_line.push('\n');
                             if writer.write_all(resp_line.as_bytes()).await.is_err() {
+                                break;
+                            }
+                            if restart {
+                                stop.notify_one();
                                 break;
                             }
                         }
@@ -251,6 +283,33 @@ mod platform {
                 }
             }
         }
+
+        // Stepping aside for a caller with different network settings: stop
+        // accepting and give up the socket so the next command spawns a
+        // fresh daemon, then let requests already in flight finish (bounded
+        // by the HTTP client's 60s timeout plus slack) before exiting.
+        drop(listener);
+        remove_own_files();
+        let deadline = Instant::now() + DRAIN_TIMEOUT;
+        // A connection accepted just before the stop may not have read its
+        // request yet; give it a moment to register.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        while in_flight.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        std::process::exit(0);
+    }
+
+    /// Remove the socket and PID file, but only while the PID file still
+    /// names this process — a newer daemon may already have replaced them.
+    fn remove_own_files() {
+        let owns_files = fs::read_to_string(pid_path())
+            .map(|p| p.trim() == std::process::id().to_string())
+            .unwrap_or(false);
+        if owns_files {
+            fs::remove_file(socket_path()).ok();
+            fs::remove_file(pid_path()).ok();
+        }
     }
 
     async fn reply_and_exit(
@@ -260,13 +319,7 @@ mod platform {
         let mut resp_line = serde_json::to_string(resp).unwrap_or_default();
         resp_line.push('\n');
         let _ = writer.write_all(resp_line.as_bytes()).await;
-        let owns_files = fs::read_to_string(pid_path())
-            .map(|p| p.trim() == std::process::id().to_string())
-            .unwrap_or(false);
-        if owns_files {
-            fs::remove_file(socket_path()).ok();
-            fs::remove_file(pid_path()).ok();
-        }
+        remove_own_files();
         std::process::exit(0);
     }
 
@@ -361,6 +414,12 @@ mod platform {
     /// Called after login/logout so the daemon restarts with the new auth state.
     pub fn kill_daemon() {
         use std::io::{BufRead, Write};
+        let read_pid = || {
+            fs::read_to_string(pid_path())
+                .ok()
+                .map(|p| p.trim().to_string())
+        };
+        let stopped = read_pid();
         // Ask over the socket rather than signaling the pid file's process —
         // a stale pid may have been recycled by an unrelated process.
         if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(socket_path()) {
@@ -375,9 +434,13 @@ mod platform {
         }
         // A pre-shutdown-command daemon answers "Unknown command" and stays
         // up; removing its files orphans it until its idle exit, while new
-        // commands spawn a fresh daemon with the right auth state.
-        fs::remove_file(socket_path()).ok();
-        fs::remove_file(pid_path()).ok();
+        // commands spawn a fresh daemon with the right auth state. But if
+        // another command already started a replacement (the PID file names
+        // a different process), its files must stay.
+        if still_ours(stopped.as_deref(), read_pid().as_deref()) {
+            fs::remove_file(socket_path()).ok();
+            fs::remove_file(pid_path()).ok();
+        }
     }
 
     pub fn is_daemon_running() -> bool {
@@ -467,6 +530,13 @@ mod platform {
     }
 }
 
+/// Whether the socket/PID files still belong to the daemon `kill_daemon`
+/// stopped: the PID file is unchanged since before the shutdown request.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn still_ours(stopped: Option<&str>, now: Option<&str>) -> bool {
+    stopped == now
+}
+
 // ── Windows stubs (no daemon support) ───────────────────────────────────────
 
 #[cfg(not(unix))]
@@ -491,3 +561,18 @@ mod platform {
 
 // Re-export platform functions at module level
 pub use platform::*;
+
+#[cfg(test)]
+mod tests {
+    use super::still_ours;
+
+    #[test]
+    fn kill_daemon_keeps_a_replacement_daemons_files() {
+        assert!(still_ours(Some("100"), Some("100")));
+        assert!(still_ours(None, None));
+        assert!(!still_ours(Some("100"), Some("200")));
+        assert!(!still_ours(None, Some("200")));
+        // The stopped daemon cleaned up after itself: nothing left to remove.
+        assert!(!still_ours(Some("100"), None));
+    }
+}
