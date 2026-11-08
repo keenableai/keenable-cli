@@ -48,8 +48,6 @@ pub struct ApiError {
     pub error: String,
     pub message: Option<String>,
     pub retry_after: Option<u64>,
-    /// The error's `source()` chain below `message`, joined with " → ".
-    pub cause: Option<String>,
     /// Fix suggestion, e.g. set SSL_CERT_FILE or HTTPS_PROXY.
     pub hint: Option<String>,
     /// Every message in the chain, outermost first (shown with --verbose).
@@ -80,8 +78,8 @@ impl ApiError {
         if let Some(ra) = self.retry_after {
             map.insert("retry_after".into(), Value::Number(ra.into()));
         }
-        if let Some(cause) = &self.cause {
-            map.insert("cause".into(), Value::String(cause.clone()));
+        if let Some(cause) = self.cause() {
+            map.insert("cause".into(), Value::String(cause));
         }
         if let Some(hint) = &self.hint {
             map.insert("hint".into(), Value::String(hint.clone()));
@@ -96,11 +94,9 @@ impl ApiError {
     }
 
     fn from_chain(chain: Vec<String>, hint: Option<String>, timeout: bool) -> Self {
-        let cause = (chain.len() > 1).then(|| chain[1..].join(CAUSE_SEPARATOR));
         ApiError {
             error: "Request failed".into(),
             message: chain.first().cloned(),
-            cause,
             hint,
             chain,
             transport: true,
@@ -117,12 +113,17 @@ impl ApiError {
             for (i, msg) in self.chain.iter().enumerate() {
                 ui::sub_info(&format!("{}. {}", i + 1, msg));
             }
-        } else if let Some(cause) = &self.cause {
+        } else if let Some(cause) = self.cause() {
             ui::sub_info(&format!("Cause: {}", cause));
         }
         if let Some(hint) = &self.hint {
             ui::hint(hint);
         }
+    }
+
+    /// The error's `source()` chain below `message`, joined with " → ".
+    pub fn cause(&self) -> Option<String> {
+        (self.chain.len() > 1).then(|| self.chain[1..].join(CAUSE_SEPARATOR))
     }
 
     pub fn is_rate_limit(&self) -> bool {
@@ -263,6 +264,25 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_error_stays_under_clippy_large_err_threshold() {
+        assert!(
+            std::mem::size_of::<ApiError>() <= 128,
+            "{}",
+            std::mem::size_of::<ApiError>()
+        );
+    }
+
+    #[test]
+    fn cause_joins_the_chain_below_the_message() {
+        let e = ApiError {
+            chain: vec!["top".into(), "a".into(), "b".into()],
+            ..Default::default()
+        };
+        assert_eq!(e.cause().as_deref(), Some("a → b"));
+        assert_eq!(ApiError::default().cause(), None);
+    }
 
     fn err(status: u16, error: &str) -> ApiError {
         ApiError {

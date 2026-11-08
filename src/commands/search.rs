@@ -189,16 +189,18 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
         let status = data["status"].as_u64().unwrap_or(0) as u16;
         let text = |key: &str| data[key].as_str().map(str::to_string);
         let cause = text("cause");
-        let mut chain: Vec<String> = message.iter().cloned().collect();
+        let mut chain: Vec<String> = Vec::new();
         if let Some(c) = &cause {
+            chain.push(message.clone().unwrap_or_else(|| error.clone()));
             chain.extend(c.split(CAUSE_SEPARATOR).map(str::to_string));
+        } else {
+            chain.extend(message.iter().cloned());
         }
         return ApiError {
             status,
             error,
             message,
             retry_after,
-            cause,
             hint: text("hint"),
             chain,
             transport: data["transport"] == true,
