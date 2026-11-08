@@ -169,18 +169,34 @@ impl ApiError {
     /// a feature that needs an account, or the keyless rate limit. Commands
     /// are wrapped in backticks so pretty mode can color them.
     pub fn hint(&self, authenticated: bool) -> Option<String> {
-        self.cli_hint(authenticated).or_else(|| self.fix.clone())
+        if let Some(cli) = self.cli_hint(authenticated) {
+            return Some(cli);
+        }
+        let fix = self.fix.clone()?;
+        // A 429 fix says "wait for Retry-After"; lead with the actual time,
+        // as the CLI's own 429 hint does.
+        match self.retry_phrase() {
+            Some(retry) if self.status == 429 => Some(format!("{}. {}", retry, fix)),
+            _ => Some(fix),
+        }
     }
 
     /// Codes whose cause is not what the CLI's status-based hint assumes:
     /// a fetch target refusing or failing (not the key, plan or request), a
-    /// private URL (not the key), or a pay-per-request payment (not account
-    /// credits). For these the server's `fix` is the right next step.
+    /// private URL (not the key), a pay-per-request payment (not account
+    /// credits), or a rate limit on Keenable's side (not the caller's key).
+    /// For these the server's `fix` is the right next step.
     fn status_hint_misleads(&self) -> bool {
         self.error_type.as_deref() == Some("target_error")
             || matches!(
                 self.code.as_deref(),
-                Some("private_url_not_allowed" | "payment_required" | "payment_settlement_failed")
+                Some(
+                    "private_url_not_allowed"
+                        | "payment_required"
+                        | "payment_settlement_failed"
+                        | "search_rate_limited"
+                        | "fetch_rate_limited"
+                )
             )
     }
 
@@ -891,17 +907,26 @@ mod tests {
             // time); the server fix fills in only where it has none.
             for authed in [true, false] {
                 let h = e.hint(authed).unwrap_or_default();
+                let fix = entry["fix"].as_str().unwrap();
                 match e.cli_hint(authed) {
                     Some(cli) => assert_eq!(h, cli, "{code}"),
-                    None => assert_eq!(Some(h.as_str()), entry["fix"].as_str(), "{code}"),
+                    None if status == 429 => {
+                        assert_eq!(h, format!("Retry after 2s. {fix}"), "{code}")
+                    }
+                    None => assert_eq!(h, fix, "{code}"),
                 }
                 if e.status_hint_misleads() {
-                    // Target, private-URL and pay-per-request errors take the
-                    // server fix: the status hint would blame the key, the
-                    // plan, the request or the credit balance.
-                    assert_eq!(Some(h.as_str()), entry["fix"].as_str(), "{code}");
+                    // Target, private-URL, pay-per-request and Keenable-side
+                    // rate-limit errors take the server fix: the status hint
+                    // would blame the key, the plan, the request or the
+                    // credit balance.
+                    assert!(h.ends_with(fix), "{code}: {h}");
                     assert!(!h.contains("Out of credits"), "{code}: {h}");
                     assert!(!h.contains("API key or plan"), "{code}: {h}");
+                    assert!(!h.contains("for your API key"), "{code}: {h}");
+                    if status == 429 {
+                        assert!(h.starts_with("Retry after 2s. "), "{code}: {h}");
+                    }
                     continue;
                 }
                 if status == 401 || status == 429 {
