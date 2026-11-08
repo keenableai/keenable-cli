@@ -258,8 +258,24 @@ fn collect_client_flags(
         .collect()
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Before any thread exists (the tokio runtime is built below), so
+    // removing env vars is sound. An empty SSL_CERT_FILE/SSL_CERT_DIR would
+    // make rustls-native-certs skip the OS store for an empty path; drop it
+    // so empty means unset everywhere, including in the spawned daemon.
+    for name in net::empty_cert_vars(|n| std::env::var_os(n)) {
+        // SAFETY: single-threaded at this point; no other code reads or
+        // writes the environment concurrently.
+        unsafe { std::env::remove_var(name) };
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to start the async runtime")
+        .block_on(run());
+}
+
+async fn run() {
     let cli = Cli::parse();
     net::set_verbose(cli.verbose);
 

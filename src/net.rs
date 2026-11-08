@@ -67,17 +67,35 @@ pub fn env_fingerprint() -> String {
         meta.len().hash(&mut h);
         meta.modified().ok().hash(&mut h);
     }
+    // Adding or removing a CA in SSL_CERT_DIR changes the directory's mtime
+    // and entry count.
+    if let Some(dirs) = std::env::var_os("SSL_CERT_DIR") {
+        for dir in std::env::split_paths(&dirs) {
+            dir.hash(&mut h);
+            std::fs::metadata(&dir)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .hash(&mut h);
+            std::fs::read_dir(&dir).map(|d| d.count()).ok().hash(&mut h);
+        }
+    }
     format!("{:016x}", h.finish())
+}
+
+/// Cert env vars that are set but empty. OpenSSL and this CLI treat those
+/// as unset, but rustls-native-certs would read "" as a path and skip the
+/// OS store; `main` removes them before anything reads the environment.
+pub fn empty_cert_vars(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<&'static str> {
+    ["SSL_CERT_FILE", "SSL_CERT_DIR"]
+        .into_iter()
+        .filter(|n| get(n).is_some_and(|v| v.is_empty()))
+        .collect()
 }
 
 fn cert_file_path() -> Option<PathBuf> {
     std::env::var_os("SSL_CERT_FILE")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-}
-
-fn env_set(name: &str) -> bool {
-    std::env::var_os(name).is_some_and(|v| !v.is_empty())
 }
 
 // ── SSL_CERT_FILE ───────────────────────────────────────────────────
@@ -200,16 +218,20 @@ fn load_roots() -> Result<Roots, CertFileError> {
         .into_iter()
         .filter(|c| set.add(c.clone()))
         .count();
-    if let Some(dir) = std::env::var_os("SSL_CERT_DIR").filter(|v| !v.is_empty()) {
+    // Describe what rustls-native-certs actually read: it switches on the
+    // variables being present at all, so mirror that (main drops empty ones).
+    let file_var = std::env::var_os("SSL_CERT_FILE");
+    let dir_var = std::env::var_os("SSL_CERT_DIR");
+    if let Some(dir) = &dir_var {
         sources.push(format!(
             "SSL_CERT_DIR {} ({})",
             PathBuf::from(dir).display(),
             certificates(added)
         ));
-    } else if !env_set("SSL_CERT_FILE") {
+    } else if file_var.is_none() {
         sources.push(format!("OS certificate store ({})", certificates(added)));
     }
-    if env_set("SSL_CERT_FILE") || env_set("SSL_CERT_DIR") {
+    if file_var.is_some() || dir_var.is_some() {
         sources.push("OS certificate store skipped (SSL_CERT_FILE/SSL_CERT_DIR is set)".into());
     }
     for e in native.errors {
@@ -271,15 +293,26 @@ pub struct ProxyInfo {
 pub fn proxy_for_api() -> Option<ProxyInfo> {
     let uri: http::Uri = API_BASE_URL.parse().ok()?;
     let intercept = hyper_util::client::proxy::matcher::Matcher::from_system().intercept(&uri)?;
-    let source = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
-        .iter()
-        .find(|n| std::env::var(n).is_ok())
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "system proxy settings".to_string());
+    let source = proxy_env_source(|n| std::env::var(n).ok())
+        .unwrap_or("system proxy settings")
+        .to_string();
     Some(ProxyInfo {
         url: redact_userinfo(&intercept.uri().to_string()),
         source,
     })
+}
+
+/// The env var the HTTPS proxy comes from, using hyper-util's selection: the
+/// first *present* of HTTPS_PROXY/https_proxy, used only if it parses as a
+/// URI, else the first present of ALL_PROXY/all_proxy under the same rule.
+/// None means no env proxy (reqwest then falls back to the OS settings).
+fn proxy_env_source(get: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
+    let usable = |names: [&'static str; 2]| {
+        let name = names.into_iter().find(|n| get(n).is_some())?;
+        let value = get(name)?;
+        (!value.trim().is_empty() && value.parse::<http::Uri>().is_ok()).then_some(name)
+    };
+    usable(["HTTPS_PROXY", "https_proxy"]).or_else(|| usable(["ALL_PROXY", "all_proxy"]))
 }
 
 /// Mask the password in `scheme://user:pass@host` URLs.
@@ -600,6 +633,44 @@ mod tests {
     fn unrelated_errors_get_no_hint() {
         let c = chain(&["error decoding response body", "expected value at line 1"]);
         assert_eq!(transport_hint(&c, &FailureContext::default()), None);
+    }
+
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |n| map.get(n).cloned()
+    }
+
+    #[test]
+    fn proxy_source_skips_an_empty_https_proxy() {
+        let get = env_of(&[("HTTPS_PROXY", ""), ("ALL_PROXY", "http://proxy:3128")]);
+        assert_eq!(proxy_env_source(get), Some("ALL_PROXY"));
+    }
+
+    #[test]
+    fn proxy_source_follows_hyper_precedence() {
+        let get = env_of(&[("https_proxy", "http://a:1"), ("ALL_PROXY", "http://b:2")]);
+        assert_eq!(proxy_env_source(get), Some("https_proxy"));
+        // The first *present* name wins even when empty, like hyper-util.
+        let get = env_of(&[("HTTPS_PROXY", ""), ("https_proxy", "http://a:1")]);
+        assert_eq!(proxy_env_source(get), None);
+        assert_eq!(proxy_env_source(env_of(&[])), None);
+    }
+
+    #[test]
+    fn empty_cert_vars_are_flagged_for_removal() {
+        use std::ffi::OsString;
+        let get = |n: &str| match n {
+            "SSL_CERT_FILE" => Some(OsString::new()),
+            "SSL_CERT_DIR" => Some(OsString::from("/etc/ssl/certs")),
+            _ => None,
+        };
+        assert_eq!(empty_cert_vars(get), vec!["SSL_CERT_FILE"]);
+        let get = |n: &str| (n == "SSL_CERT_DIR").then(OsString::new);
+        assert_eq!(empty_cert_vars(get), vec!["SSL_CERT_DIR"]);
+        assert!(empty_cert_vars(|_| None).is_empty());
     }
 
     #[test]
