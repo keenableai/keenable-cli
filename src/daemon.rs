@@ -268,11 +268,12 @@ mod platform {
                             let mut resp_line =
                                 serde_json::to_string(&response).unwrap_or_default();
                             resp_line.push('\n');
-                            if writer.write_all(resp_line.as_bytes()).await.is_err() {
-                                break;
-                            }
+                            let written = writer.write_all(resp_line.as_bytes()).await;
                             if restart {
                                 stop.notify_one();
+                                break;
+                            }
+                            if written.is_err() {
                                 break;
                             }
                         }
