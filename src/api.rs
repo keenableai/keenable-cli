@@ -162,7 +162,9 @@ impl ApiError {
     /// wording (`keenable login`, "retrying unchanged fails", the retry time),
     /// and the server's `fix` talks about HTTP headers the CLI does not
     /// expose. The server `fix` fills in for statuses the CLI has no hint
-    /// for, and is always in YAML as its own `fix` field.
+    /// for, replaces the CLI hint where the status alone points at the wrong
+    /// cause (`status_hint_misleads`), and is always in YAML as its own `fix`
+    /// field.
     /// `keenable login` is suggested only where it can help: a rejected key,
     /// a feature that needs an account, or the keyless rate limit. Commands
     /// are wrapped in backticks so pretty mode can color them.
@@ -170,7 +172,22 @@ impl ApiError {
         self.cli_hint(authenticated).or_else(|| self.fix.clone())
     }
 
+    /// Codes whose cause is not what the CLI's status-based hint assumes:
+    /// a fetch target refusing or failing (not the key, plan or request), a
+    /// private URL (not the key), or a pay-per-request payment (not account
+    /// credits). For these the server's `fix` is the right next step.
+    fn status_hint_misleads(&self) -> bool {
+        self.error_type.as_deref() == Some("target_error")
+            || matches!(
+                self.code.as_deref(),
+                Some("private_url_not_allowed" | "payment_required" | "payment_settlement_failed")
+            )
+    }
+
     fn cli_hint(&self, authenticated: bool) -> Option<String> {
+        if self.fix.is_some() && self.status_hint_misleads() {
+            return None;
+        }
         if self.is_auth_error() {
             return Some("Run `keenable login` to authenticate.".into());
         }
@@ -877,6 +894,15 @@ mod tests {
                 match e.cli_hint(authed) {
                     Some(cli) => assert_eq!(h, cli, "{code}"),
                     None => assert_eq!(Some(h.as_str()), entry["fix"].as_str(), "{code}"),
+                }
+                if e.status_hint_misleads() {
+                    // Target, private-URL and pay-per-request errors take the
+                    // server fix: the status hint would blame the key, the
+                    // plan, the request or the credit balance.
+                    assert_eq!(Some(h.as_str()), entry["fix"].as_str(), "{code}");
+                    assert!(!h.contains("Out of credits"), "{code}: {h}");
+                    assert!(!h.contains("API key or plan"), "{code}: {h}");
+                    continue;
                 }
                 if status == 401 || status == 429 {
                     assert!(h.contains("`keenable login`"), "{code}: {h}");
