@@ -57,7 +57,8 @@ pub fn install_hint() -> String {
 }
 
 async fn fetch_latest_version() -> Option<String> {
-    let client = reqwest::Client::builder()
+    let client = crate::net::client_builder()
+        .ok()?
         .user_agent("keenable-cli")
         .build()
         .ok()?;

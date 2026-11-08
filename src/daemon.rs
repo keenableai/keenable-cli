@@ -18,6 +18,11 @@ pub struct DaemonRequest {
     /// Fetch only: content-length cap; the API defaults to 50000 when unset.
     #[serde(default)]
     pub max_chars: Option<u64>,
+    /// The client's `net::env_fingerprint()`. The daemon captured its proxy
+    /// and CA settings when it was spawned; on a mismatch it exits so the
+    /// next command spawns one with the current settings.
+    #[serde(default)]
+    pub net_env: Option<String>,
 }
 
 impl DaemonRequest {
@@ -74,8 +79,9 @@ mod platform {
     use tokio::sync::Mutex;
     use tokio::time::Instant;
 
-    use crate::api::{api_key_client, api_url, bare_client, handle_response};
+    use crate::api::{ApiError, api_key_client, api_url, bare_client, handle_response};
     use crate::config;
+    use crate::net;
 
     const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
@@ -134,10 +140,21 @@ mod platform {
         // Write PID file
         fs::write(pid_path(), std::process::id().to_string()).ok();
 
-        let client = Arc::new(match &api_key {
+        let client = match &api_key {
             Some(key) => api_key_client(key),
             None => bare_client(),
-        });
+        };
+        // Clients validate SSL_CERT_FILE before using the daemon, so this
+        // only trips if the file broke in between; they fall back to direct.
+        let client = match client {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                eprintln!("Invalid SSL_CERT_FILE: {}", e);
+                fs::remove_file(&sock).ok();
+                std::process::exit(1);
+            }
+        };
+        let own_env = Arc::new(net::env_fingerprint());
         let authenticated = Arc::new(authenticated);
         let last_activity = Arc::new(Mutex::new(Instant::now()));
 
@@ -177,6 +194,7 @@ mod platform {
                     let client = client.clone();
                     let authenticated = authenticated.clone();
                     let last_activity = last_activity.clone();
+                    let own_env = own_env.clone();
                     tokio::spawn(async move {
                         let (reader, mut writer) = stream.into_split();
                         let mut lines = BufReader::new(reader).lines();
@@ -193,18 +211,23 @@ mod platform {
                                         data: None,
                                         error: None,
                                     };
-                                    let mut resp_line =
-                                        serde_json::to_string(&resp).unwrap_or_default();
-                                    resp_line.push('\n');
-                                    let _ = writer.write_all(resp_line.as_bytes()).await;
-                                    let owns_files = fs::read_to_string(pid_path())
-                                        .map(|p| p.trim() == std::process::id().to_string())
-                                        .unwrap_or(false);
-                                    if owns_files {
-                                        fs::remove_file(socket_path()).ok();
-                                        fs::remove_file(pid_path()).ok();
-                                    }
-                                    std::process::exit(0);
+                                    reply_and_exit(&mut writer, &resp).await;
+                                }
+                                // Proxy/CA env changed since this daemon was
+                                // spawned: its client is stale. The caller
+                                // goes direct; the next command respawns us.
+                                Ok(req)
+                                    if req
+                                        .net_env
+                                        .as_ref()
+                                        .is_some_and(|fp| fp != own_env.as_str()) =>
+                                {
+                                    let resp = DaemonResponse {
+                                        ok: false,
+                                        data: Some(serde_json::json!({ "restart": true })),
+                                        error: Some("Network settings changed".into()),
+                                    };
+                                    reply_and_exit(&mut writer, &resp).await;
                                 }
                                 Ok(req) => handle_request(&client, *authenticated, req).await,
                                 Err(e) => DaemonResponse {
@@ -230,6 +253,23 @@ mod platform {
         }
     }
 
+    async fn reply_and_exit(
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        resp: &DaemonResponse,
+    ) -> ! {
+        let mut resp_line = serde_json::to_string(resp).unwrap_or_default();
+        resp_line.push('\n');
+        let _ = writer.write_all(resp_line.as_bytes()).await;
+        let owns_files = fs::read_to_string(pid_path())
+            .map(|p| p.trim() == std::process::id().to_string())
+            .unwrap_or(false);
+        if owns_files {
+            fs::remove_file(socket_path()).ok();
+            fs::remove_file(pid_path()).ok();
+        }
+        std::process::exit(0);
+    }
+
     /// Send an API request and convert the result into a DaemonResponse.
     async fn send_api(request: reqwest::RequestBuilder) -> DaemonResponse {
         match request.send().await {
@@ -239,22 +279,24 @@ mod platform {
                     data: Some(data),
                     error: None,
                 },
-                Err(api_err) => {
-                    // Forward the structured error so the client can reconstruct ApiError
-                    let mut data = api_err.to_yaml_value();
-                    data["status"] = serde_json::json!(api_err.status);
-                    DaemonResponse {
-                        ok: false,
-                        data: Some(data),
-                        error: Some(api_err.display()),
-                    }
-                }
+                Err(api_err) => error_response(&api_err),
             },
-            Err(e) => DaemonResponse {
-                ok: false,
-                data: None,
-                error: Some(e.to_string()),
-            },
+            Err(e) => error_response(&ApiError::from_transport(&e)),
+        }
+    }
+
+    /// Forward the structured error so the client can reconstruct ApiError.
+    fn error_response(api_err: &ApiError) -> DaemonResponse {
+        let mut data = api_err.to_yaml_value();
+        data["status"] = serde_json::json!(api_err.status);
+        if api_err.transport {
+            data["transport"] = serde_json::json!(true);
+            data["timeout"] = serde_json::json!(api_err.timeout);
+        }
+        DaemonResponse {
+            ok: false,
+            data: Some(data),
+            error: Some(api_err.display()),
         }
     }
 
@@ -395,7 +437,11 @@ mod platform {
 
         let (reader, mut writer) = stream.into_split();
 
-        let mut req_line = serde_json::to_string(req).unwrap();
+        // Stamp every request with this process's network env, so a daemon
+        // spawned under different proxy/CA settings steps aside.
+        let mut payload = serde_json::to_value(req).map_err(|_| DaemonError::Unavailable)?;
+        payload["net_env"] = serde_json::json!(net::env_fingerprint());
+        let mut req_line = payload.to_string();
         req_line.push('\n');
         writer
             .write_all(req_line.as_bytes())
@@ -407,7 +453,15 @@ mod platform {
         // upstream yields the daemon's structured error instead of a client
         // timeout that falls back to a second, equally slow direct request.
         match tokio::time::timeout(Duration::from_secs(75), lines.next_line()).await {
-            Ok(Ok(Some(line))) => serde_json::from_str(&line).map_err(|_| DaemonError::Unavailable),
+            Ok(Ok(Some(line))) => {
+                let resp: DaemonResponse =
+                    serde_json::from_str(&line).map_err(|_| DaemonError::Unavailable)?;
+                // The daemon exited because its network settings were stale.
+                if resp.data.as_ref().is_some_and(|d| d["restart"] == true) {
+                    return Err(DaemonError::Unavailable);
+                }
+                Ok(resp)
+            }
             _ => Err(DaemonError::Unavailable),
         }
     }

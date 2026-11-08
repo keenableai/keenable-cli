@@ -224,8 +224,12 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
             }
             // Can't verify ≠ invalid: silently stripping the key from client
             // configs over a network blip would break working setups.
-            KeyCheck::Unreachable => {
+            KeyCheck::Unreachable(err) => {
                 ui::warning("Could not verify API key (network error) — using the stored key");
+                if let Some(err) = err {
+                    ui::sub_info(&err.display());
+                    err.print_details();
+                }
                 Some(key)
             }
         },

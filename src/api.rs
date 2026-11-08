@@ -2,6 +2,8 @@ use reqwest::Client;
 use serde_json::Value;
 
 use crate::constants::API_BASE_URL;
+use crate::net;
+use crate::ui;
 
 const USER_AGENT: &str = concat!("keenable-cli/", env!("CARGO_PKG_VERSION"));
 
@@ -38,12 +40,26 @@ fn base_headers() -> reqwest::header::HeaderMap {
 }
 
 /// Structured API error matching the backend's `{error, message, retryAfter}` format.
+/// Transport failures (no HTTP status) also carry the error's cause chain
+/// and a fix suggestion.
+#[derive(Default)]
 pub struct ApiError {
     pub status: u16,
     pub error: String,
     pub message: Option<String>,
     pub retry_after: Option<u64>,
+    /// The error's `source()` chain below `message`, joined with " → ".
+    pub cause: Option<String>,
+    /// Fix suggestion, e.g. set SSL_CERT_FILE or HTTPS_PROXY.
+    pub hint: Option<String>,
+    /// Every message in the chain, outermost first (shown with --verbose).
+    pub chain: Vec<String>,
+    /// The request failed before any HTTP response arrived.
+    pub transport: bool,
+    pub timeout: bool,
 }
+
+pub const CAUSE_SEPARATOR: &str = " → ";
 
 impl ApiError {
     /// Human-readable summary: "error: message" or just "error".
@@ -64,16 +80,48 @@ impl ApiError {
         if let Some(ra) = self.retry_after {
             map.insert("retry_after".into(), Value::Number(ra.into()));
         }
+        if let Some(cause) = &self.cause {
+            map.insert("cause".into(), Value::String(cause.clone()));
+        }
+        if let Some(hint) = &self.hint {
+            map.insert("hint".into(), Value::String(hint.clone()));
+        }
         Value::Object(map)
     }
 
-    /// Transport-level failure (no HTTP status).
-    pub fn request_failed(message: String) -> Self {
+    /// Transport-level failure (no HTTP status): keep the whole cause chain.
+    pub fn from_transport(err: &reqwest::Error) -> Self {
+        let failure = net::describe(err);
+        Self::from_chain(failure.chain, failure.hint, failure.timeout)
+    }
+
+    fn from_chain(chain: Vec<String>, hint: Option<String>, timeout: bool) -> Self {
+        let cause = (chain.len() > 1).then(|| chain[1..].join(CAUSE_SEPARATOR));
         ApiError {
-            status: 0,
             error: "Request failed".into(),
-            message: Some(message),
-            retry_after: None,
+            message: chain.first().cloned(),
+            cause,
+            hint,
+            chain,
+            transport: true,
+            timeout,
+            ..Default::default()
+        }
+    }
+
+    /// Print the cause and hint under an already-printed `ui::error` line.
+    /// With --verbose, the full chain replaces the one-line cause.
+    pub fn print_details(&self) {
+        if net::verbose() && self.chain.len() > 1 {
+            ui::sub_info("Error chain:");
+            for (i, msg) in self.chain.iter().enumerate() {
+                ui::sub_info(&format!("{}. {}", i + 1, msg));
+            }
+        } else if let Some(cause) = &self.cause {
+            ui::sub_info(&format!("Cause: {}", cause));
+        }
+        if let Some(hint) = &self.hint {
+            ui::hint(hint);
         }
     }
 
@@ -88,18 +136,33 @@ impl ApiError {
     }
 }
 
+impl From<net::CertFileError> for ApiError {
+    fn from(e: net::CertFileError) -> Self {
+        ApiError {
+            error: "Invalid SSL_CERT_FILE".into(),
+            message: Some(e.to_string()),
+            hint: Some(net::CERT_FILE_HINT.into()),
+            ..Default::default()
+        }
+    }
+}
+
 pub enum KeyCheck {
     Valid,
     /// The server rejected the key (401/403).
     Invalid,
-    /// Network failure or server error — validity unknown.
-    Unreachable,
+    /// Network failure or server error — validity unknown. Carries the
+    /// failure when there is one worth showing.
+    Unreachable(Option<ApiError>),
 }
 
 /// Ping the auth endpoint with a short timeout — this is a pre-flight check,
 /// not worth stalling a command for the full 60s client timeout.
 pub async fn validate_api_key(api_key: &str) -> KeyCheck {
-    let client = api_key_client(api_key);
+    let client = match api_key_client(api_key) {
+        Ok(c) => c,
+        Err(e) => return KeyCheck::Unreachable(Some(e.into())),
+    };
     let resp = client
         .get(api_url("/v1/auth/user"))
         .timeout(std::time::Duration::from_secs(5))
@@ -108,32 +171,42 @@ pub async fn validate_api_key(api_key: &str) -> KeyCheck {
     match resp {
         Ok(resp) if resp.status().is_success() => KeyCheck::Valid,
         Ok(resp) if resp.status() == 401 || resp.status() == 403 => KeyCheck::Invalid,
-        _ => KeyCheck::Unreachable,
+        Ok(_) => KeyCheck::Unreachable(None),
+        Err(e) => KeyCheck::Unreachable(Some(ApiError::from_transport(&e))),
     }
 }
 
-pub fn api_key_client(api_key: &str) -> Client {
+/// A client with the CLI's trust roots and proxy handling but no Keenable
+/// headers — for non-API hosts and endpoints that need no default headers.
+pub fn plain_client() -> Result<Client, net::CertFileError> {
+    Ok(net::client_builder()?
+        .user_agent(USER_AGENT)
+        .build()
+        .expect("HTTP client config is valid"))
+}
+
+pub fn api_key_client(api_key: &str) -> Result<Client, net::CertFileError> {
     let mut headers = base_headers();
     // Keys from --api-key or a hand-edited config may carry stray whitespace
     // or control chars; a bad header value must yield a 401, not a panic.
     if let Ok(value) = api_key.trim().parse() {
         headers.insert("X-API-Key", value);
     }
-    Client::builder()
+    Ok(net::client_builder()?
         .user_agent(USER_AGENT)
         .default_headers(headers)
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .unwrap()
+        .expect("HTTP client config is valid"))
 }
 
-pub fn bare_client() -> Client {
-    Client::builder()
+pub fn bare_client() -> Result<Client, net::CertFileError> {
+    Ok(net::client_builder()?
         .user_agent(USER_AGENT)
         .default_headers(base_headers())
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .unwrap()
+        .expect("HTTP client config is valid"))
 }
 
 pub fn api_url(path: &str) -> String {
@@ -148,7 +221,7 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
             status: status.as_u16(),
             error: "Failed to parse response".into(),
             message: Some(e.to_string()),
-            retry_after: None,
+            ..Default::default()
         });
     }
 
@@ -183,6 +256,7 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, ApiError>
         error,
         message,
         retry_after,
+        ..Default::default()
     })
 }
 
@@ -194,8 +268,7 @@ mod tests {
         ApiError {
             status,
             error: error.into(),
-            message: None,
-            retry_after: None,
+            ..Default::default()
         }
     }
 
@@ -234,6 +307,54 @@ mod tests {
             resolve_app_title(Some("  custom-app  ".into())),
             "custom-app"
         );
+    }
+
+    #[test]
+    fn transport_errors_split_message_and_cause() {
+        let e = ApiError::from_chain(
+            vec![
+                "error sending request for url (https://api.keenable.ai/v1/search)".into(),
+                "client error (Connect)".into(),
+                "invalid peer certificate: UnknownIssuer".into(),
+            ],
+            Some("set SSL_CERT_FILE".into()),
+            false,
+        );
+        assert!(e.transport);
+        assert_eq!(e.status, 0);
+        assert_eq!(
+            e.display(),
+            "Request failed: error sending request for url (https://api.keenable.ai/v1/search)"
+        );
+        let v = e.to_yaml_value();
+        assert_eq!(
+            v["cause"],
+            "client error (Connect) → invalid peer certificate: UnknownIssuer"
+        );
+        assert_eq!(v["hint"], "set SSL_CERT_FILE");
+    }
+
+    #[test]
+    fn single_message_transport_errors_have_no_cause() {
+        let e = ApiError::from_chain(vec!["boom".into()], None, false);
+        let v = e.to_yaml_value();
+        assert!(v.get("cause").is_none());
+        assert!(v.get("hint").is_none());
+    }
+
+    #[test]
+    fn bad_cert_file_becomes_a_clear_error() {
+        let e: ApiError = net::CertFileError {
+            path: "/nonexistent".into(),
+            reason: "No such file or directory (os error 2)".into(),
+        }
+        .into();
+        assert_eq!(
+            e.display(),
+            "Invalid SSL_CERT_FILE: /nonexistent: No such file or directory (os error 2)"
+        );
+        assert!(e.hint.unwrap().contains("SSL_CERT_FILE"));
+        assert!(!e.transport);
     }
 
     #[test]

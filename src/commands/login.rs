@@ -2,7 +2,7 @@ use colored::Colorize;
 use reqwest::Client;
 use std::time::Duration;
 
-use crate::api::api_url;
+use crate::api::{ApiError, api_url};
 use crate::config;
 use crate::constants::*;
 use crate::daemon;
@@ -43,8 +43,14 @@ fn error_detail(body: &serde_json::Value) -> Option<String> {
     }
 }
 
-async fn request_code(label: &str) -> Result<DeviceCode, String> {
-    let client = Client::new();
+fn login_error(msg: impl Into<String>) -> ApiError {
+    ApiError {
+        error: msg.into(),
+        ..Default::default()
+    }
+}
+
+async fn request_code(client: &Client, label: &str) -> Result<DeviceCode, ApiError> {
     let resp = client
         .post(api_url("/v1/auth/agent/code"))
         .json(&serde_json::json!({
@@ -54,7 +60,7 @@ async fn request_code(label: &str) -> Result<DeviceCode, String> {
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("Failed to request device code: {}", e))?;
+        .map_err(|e| ApiError::from_transport(&e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -63,27 +69,32 @@ async fn request_code(label: &str) -> Result<DeviceCode, String> {
             .ok()
             .and_then(|v| error_detail(&v))
             .unwrap_or(body);
-        return Err(format!("HTTP {}: {}", status, detail));
+        return Err(ApiError {
+            status: status.as_u16(),
+            error: format!("HTTP {}", status),
+            message: Some(detail),
+            ..Default::default()
+        });
     }
 
     let data: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse code response: {}", e))?;
+        .map_err(|e| login_error(format!("Failed to parse code response: {}", e)))?;
 
     Ok(DeviceCode {
         device_code: data["device_code"]
             .as_str()
             .or_else(|| data["agent_code"].as_str())
-            .ok_or("Missing device_code")?
+            .ok_or_else(|| login_error("Missing device_code"))?
             .to_string(),
         user_code: data["user_code"]
             .as_str()
-            .ok_or("Missing user_code")?
+            .ok_or_else(|| login_error("Missing user_code"))?
             .to_string(),
         verification_uri: data["verification_uri"]
             .as_str()
-            .ok_or("Missing verification_uri")?
+            .ok_or_else(|| login_error("Missing verification_uri"))?
             .to_string(),
         expires_in: data["expires_in"].as_u64().unwrap_or(600),
         interval: data["interval"].as_u64().unwrap_or(5),
@@ -218,11 +229,11 @@ fn classify_poll(
 }
 
 async fn poll_for_token(
+    client: &Client,
     device_code: &str,
     interval: u64,
     expires_in: u64,
 ) -> Result<String, String> {
-    let client = Client::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(expires_in);
     let mut interval = interval.max(1); // a server-sent 0 must not busy-poll
     let mut next_wait = interval;
@@ -319,8 +330,13 @@ pub async fn login(api_key: Option<&str>) {
                 eprintln!();
                 std::process::exit(1);
             }
-            crate::api::KeyCheck::Unreachable => {
+            crate::api::KeyCheck::Unreachable(err) => {
                 ui::warning("Could not verify API key (network error) — saving anyway");
+                if let Some(err) = err {
+                    ui::sub_info(&err.display());
+                    err.print_details();
+                    eprintln!();
+                }
             }
             crate::api::KeyCheck::Valid => {}
         }
@@ -332,14 +348,19 @@ pub async fn login(api_key: Option<&str>) {
         return;
     }
 
+    let fail = |e: ApiError| -> ! {
+        ui::error(&format!("Failed to start login: {}", e.display()));
+        e.print_details();
+        eprintln!();
+        std::process::exit(1);
+    };
+    let client = crate::api::plain_client().unwrap_or_else(|e| fail(e.into()));
+
     // Step 1: Request device code
     let label = format!("{}-cli", machine_name());
-    let code = match request_code(&label).await {
+    let code = match request_code(&client, &label).await {
         Ok(c) => c,
-        Err(e) => {
-            ui::error(&format!("Failed to start login: {}", e));
-            std::process::exit(1);
-        }
+        Err(e) => fail(e),
     };
     ui::step_done("Requested device code");
 
@@ -354,13 +375,14 @@ pub async fn login(api_key: Option<&str>) {
 
     // Step 3: Poll for approval
     let step_lines = ui::step("Waiting for approval...");
-    let api_key = match poll_for_token(&code.device_code, code.interval, code.expires_in).await {
-        Ok(key) => key,
-        Err(e) => {
-            ui::error(&e);
-            std::process::exit(1);
-        }
-    };
+    let api_key =
+        match poll_for_token(&client, &code.device_code, code.interval, code.expires_in).await {
+            Ok(key) => key,
+            Err(e) => {
+                ui::error(&e);
+                std::process::exit(1);
+            }
+        };
     ui::step_done_replace("Approved", step_lines);
 
     // Step 4: Save API key and restart daemon with new credentials
