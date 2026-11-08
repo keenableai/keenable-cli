@@ -1,8 +1,7 @@
 use colored::Colorize;
-use reqwest::Client;
 use std::time::Duration;
 
-use crate::api::api_url;
+use crate::api::{api_url, bare_client};
 use crate::config;
 use crate::constants::*;
 use crate::daemon;
@@ -44,7 +43,7 @@ fn error_detail(body: &serde_json::Value) -> Option<String> {
 }
 
 async fn request_code(label: &str) -> Result<DeviceCode, String> {
-    let client = Client::new();
+    let client = bare_client();
     let resp = client
         .post(api_url("/v1/auth/agent/code"))
         .json(&serde_json::json!({
@@ -222,7 +221,7 @@ async fn poll_for_token(
     interval: u64,
     expires_in: u64,
 ) -> Result<String, String> {
-    let client = Client::new();
+    let client = bare_client();
     let deadline = std::time::Instant::now() + Duration::from_secs(expires_in);
     let mut interval = interval.max(1); // a server-sent 0 must not busy-poll
     let mut next_wait = interval;
