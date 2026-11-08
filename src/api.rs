@@ -52,8 +52,11 @@ pub struct ApiError {
     pub hint: Option<String>,
     /// Every message in the chain, outermost first (shown with --verbose).
     pub chain: Vec<String>,
-    /// The request failed before any HTTP response arrived.
+    /// The request failed before any HTTP response arrived. Read only by the
+    /// Unix daemon (and tests) when forwarding errors.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub transport: bool,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub timeout: bool,
 }
 
@@ -145,6 +148,19 @@ impl From<net::CertFileError> for ApiError {
             hint: Some(net::CERT_FILE_HINT.into()),
             ..Default::default()
         }
+    }
+}
+
+/// Exit 1 with a clear error when SSL_CERT_FILE is set but unusable. For
+/// commands whose key validation would otherwise read it as a network blip,
+/// carry on and exit 0.
+pub fn exit_on_bad_cert_file() {
+    if let Err(e) = net::check_cert_file() {
+        let err = ApiError::from(e);
+        ui::error(&err.display());
+        err.print_details();
+        eprintln!();
+        std::process::exit(1);
     }
 }
 

@@ -319,6 +319,9 @@ pub async fn login(api_key: Option<&str>) {
 
     ui::header("keenable login");
 
+    // A bad SSL_CERT_FILE must not pass for "network error, saving anyway".
+    crate::api::exit_on_bad_cert_file();
+
     // Fast path: --api-key provided, skip browser login
     if let Some(key) = api_key {
         // Catch a typo'd key now rather than at first search; an unreachable
