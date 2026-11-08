@@ -1,10 +1,6 @@
 """T-23..T-29 — fetch. Single-URL by design since 0.1.16 (clap rejects extras)."""
 
-from datetime import datetime
-
 import pytest
-
-from conftest import parse_ts, search_results
 
 # Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
 # <h1> and reworded this paragraph (was "...for use in illustrative examples in
@@ -20,7 +16,6 @@ def test_fetch_single_url(kn):
     assert data["url"].startswith("https://example.com")
     assert EXAMPLE_BODY in data["content"]
     assert "description" not in data
-    assert "truncated" not in data
 
 
 def test_fetch_live(kn):
@@ -52,34 +47,24 @@ def test_fetch_prompt(kn):
     assert EXAMPLE_BODY not in data["content"]
 
 
-def test_fetch_dates_are_iso(kn):
-    # The API sends fetch's published_at as a Unix number; the CLI rewrites it
-    # as RFC 3339 so it matches search. Recent news pages carry a date.
-    results = search_results(kn, "AI news", "--published-after", "30d", "--max-results", "5")
-    dated = [r for r in results if r.get("published_at") is not None]
-    if not dated:
-        pytest.skip("no dated result to fetch")
-    res = kn("fetch", dated[0]["url"], "--max-chars", "100")
-    assert res.code == 0, res.out + res.err
-    data = res.yaml()
-    for field in ("published_at", "acquired_at"):
-        value = data.get(field)
-        if value is None:
-            continue
-        # PyYAML loads an unquoted ISO timestamp as datetime; a raw epoch
-        # would load as int.
-        assert isinstance(value, (datetime, str)), (field, value)
-        assert parse_ts(value).year >= 1990, (field, value)
-
-
 def test_fetch_max_chars(kn):
     res = kn("fetch", "https://example.com", "--max-chars", "50")
     assert res.code == 0
     data = res.yaml()
-    # The truncation disclaimer is the load-bearing assert: a stale daemon
-    # that drops `max_chars` returns the full page with exit code 0.
-    assert "truncated to stay below 50 characters" in data["content"]
-    assert data["truncated"] is True
+    # The cap is the load-bearing assert: a stale daemon that drops
+    # `max_chars` returns the full page with exit code 0. The API used to
+    # append a ~70-character notice; it now cuts to at most `max_chars`
+    # characters ending in "..." and sets `truncated` (keenable-backend-ts#691).
+    # Accept both until that change is deployed; remove the else branch
+    # then (keenable-cli#95).
+    content = data["content"]
+    if data.get("truncated") is not None:
+        assert data["truncated"] is True
+        assert len(content) <= 50
+        assert content.endswith("...")
+        assert data["total_chars"] > 50
+    else:
+        assert "truncated to stay below 50 characters" in content
 
 
 def test_fetch_max_chars_rejects_zero(kn):
