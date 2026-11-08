@@ -262,9 +262,13 @@ OAuth login callback pages (`login_success.html`, `login_failure.html`) are embe
 
 ## Public Docs and SDK
 
-Every user-facing change ships with its docs. A change is user-facing when it alters a command, a flag, an output format, an error message, or what `configure-mcp` writes into a client's config.
+Every user-facing change ships with its docs. A change is user-facing when it alters a command, a flag, an output format, an error message, or what `configure-mcp` writes into a client's config. For example, a new flag such as `--max-chars` or a new key in the YAML output is user-facing; an internal refactor, a new test, or a dependency bump that changes no behavior is not.
+
+The API surface is the Keenable HTTP API the SDKs wrap: endpoints, request parameters, response fields, error bodies and response headers. Changing how the CLI calls an endpoint without changing the request or response is not an API surface change.
+
+When it is unclear whether a change is user-facing or touches the API surface, treat it as if it does and ask the user (or the PR reviewer) to confirm.
 
 - **Docs:** update [keenable-external-docs](https://github.com/keenableai/keenable-external-docs) in the same change set: open a docs PR alongside this one and link it in the description.
-- **SDK:** if the change touches the API surface the SDKs wrap, also update [keenable-sdk](https://github.com/keenableai/keenable-sdk) (Python, TypeScript and Go), or open an issue there when it can't land in the same change set.
+- **SDK:** if the change touches the API surface, also update [keenable-sdk](https://github.com/keenableai/keenable-sdk) (Python, TypeScript and Go), or open an issue there when it can't land in the same change set.
 - **Docs reference the SDKs.** Code examples use the official SDKs, with the HTTP API (curl) shown next to them. If the docs describe something the SDK can't do, that's an SDK gap: fix it or file an issue.
-- **If it isn't in the public docs, it doesn't exist in the product.** Don't ship an undocumented user-facing feature: document it, or remove it.
+- **If it isn't in the public docs, it doesn't exist in the product.** Don't ship a new user-facing feature without its docs. If you find an existing feature or flag that has no docs, document it. Never remove an existing feature or flag without the user's explicit confirmation: propose the removal in the PR description and wait for the user to approve it.
