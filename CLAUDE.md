@@ -33,6 +33,7 @@ src/
   api.rs               # HTTP client factories (api_key_client, bare_client), ApiError, response handling
   update.rs            # GitHub Releases version check (cached, non-blocking)
   daemon.rs            # Background daemon for connection reuse (auth + unauth)
+  net.rs               # Shared HTTP client builder: trust roots, proxy reporting, error chains + hints, --verbose
   commands/
     login.rs           # Device code login + --api-key direct save; also logout
     config_cmd.rs      # CLI configuration settings
@@ -58,6 +59,7 @@ assets/
 All tool commands (`search`, `fetch`) output **YAML by default** (token-efficient for agents).
 Use `-p` / `--pretty` flag for pretty-printed human-readable output.
 Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct.
+Use the global `-v` / `--verbose` flag to print network details to stderr: the proxy in use and its source, the trusted CA sources, and the full error chain on failure. It also bypasses the daemon (see Daemon).
 
 ```bash
 keenable search "query"                        # YAML output (for agents)
@@ -98,6 +100,10 @@ Commands auto-start the daemon on first call. It auto-exits after 5 minutes of i
 
 The daemon works with or without an API key (authenticated vs public endpoints).
 It is automatically killed and restarted on `login` / `logout` so it picks up the new auth state.
+
+Commands that bypass the daemon on purpose and go direct: `--api-key` / `KEENABLE_API_KEY` (the daemon's cached auth differs) and `--verbose` (so the proxy/CA view and full error chain it reports are the client's own, not the daemon's).
+
+The daemon captures its environment when spawned. Each request carries `net::env_fingerprint()` (the proxy and CA env vars, `KEENABLE_APP_TITLE`, and the `SSL_CERT_FILE` / `SSL_CERT_DIR` metadata); a daemon whose fingerprint differs replies `restart`, stops accepting, lets in-flight requests finish (bounded) and exits, and that request goes direct. A transport failure seen through the daemon (except a timeout) stops it and is retried directly once, which also covers OS trust-store and system-proxy changes the fingerprint can't see.
 
 ### Terminal UI Design (`src/ui.rs`)
 
@@ -151,12 +157,20 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 
 **When adding or modifying commands**, always use `ui::` helpers rather than raw `println!`/`eprintln!` with ad-hoc formatting.
 
+### Network: Proxies and Certificates (`src/net.rs`)
+
+Build every HTTP client through `net::client_builder()` (or the `api::api_key_client` / `bare_client` / `plain_client` helpers), never `reqwest::Client::new()`.
+
+- **Trust:** bundled Mozilla roots + the OS certificate store. `SSL_CERT_FILE` / `SSL_CERT_DIR` (PEM) replace the OS store when set; the bundled roots always stay. Empty values are removed in `main` before the runtime starts and count as unset. An unusable `SSL_CERT_FILE` is an `Invalid SSL_CERT_FILE` error naming the file (exit 1); `login` and `configure-mcp` check it before key validation so it isn't mistaken for a network blip.
+- **Proxy:** reqwest honors `HTTPS_PROXY` / `https_proxy`, `ALL_PROXY` / `all_proxy`, `HTTP_PROXY`, `NO_PROXY` / `no_proxy`, and with the `system-proxy` feature the macOS/Windows proxy settings. Never call `.no_proxy()`. Proxy passwords are never printed.
+
 ### Error Handling
 
 - All human output to `stderr` via `eprintln!` or `ui::` helpers; machine output to `stdout` via `println!`
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
 - API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's `{error, message, retryAfter}` format
+- Transport errors keep their `source()` chain: build them with `ApiError::from_transport`. Pretty mode prints a `Cause:` line (the full chain with `-v`) via `ApiError::print_details()`; YAML adds `cause` and `hint` fields. Hints point at `SSL_CERT_FILE` for certificate errors and at `HTTPS_PROXY` / `NO_PROXY` for connect, proxy and timeout failures
 - In YAML mode, errors are output as structured YAML to stdout (with `hint` field for auth/rate-limit errors)
 - In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr
 - Auth errors (401, 400 auth failed) and rate limit errors (429) include a `keenable login` hint
@@ -251,7 +265,7 @@ Contains IDE definitions (`IDEDef`, `all_ides()`), config read/write helpers, an
 3. Add the clap variant in `src/main.rs` with `after_help` containing examples and hints
 4. If it's a tool command (agent-facing), default to YAML output and support `-p`/`--pretty`
 5. If it makes API calls, route through the daemon (supports both auth and unauth)
-6. Tool commands should accept `--api-key` for one-off use without stored config
+6. Tool commands should accept `--api-key` for one-off use without stored config; build HTTP clients via `net::client_builder()` (see Network)
 7. Tool commands should work without login (use public endpoints when no API key)
 8. Use `ui::` helpers for all human output (see Terminal UI Design above)
 9. All human output to `stderr`; only machine-readable output (YAML/JSON) to `stdout`
