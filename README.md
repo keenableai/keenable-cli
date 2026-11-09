@@ -72,7 +72,7 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
 
 - Each entry is a host and covers that host and every subdomain
   (`yahoo.com` also excludes `finance.yahoo.com`). At most 1,000 distinct
-  hosts per request.
+  hosts per request, 2,000 entries as sent, and 2,048 bytes per entry.
 - The server cleans up harmless noise: scheme, a leading `www.`, case, port,
   a trailing `/`, a query string and surrounding whitespace
   (`https://WWW.UN.org/` becomes `un.org`).
