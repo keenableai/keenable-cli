@@ -214,28 +214,30 @@ async fn rejects_proxy_ca_that_is_not_trusted() {
     let (proxy, _) = spawn_proxy(mitm.acceptor).await;
     let dir = temp_dir("untrusted");
 
-    // An empty SSL_CERT_FILE keeps the test independent of the host's trust
-    // store; only the bundled webpki roots remain, which don't know the CA.
-    let empty = dir.join("empty.pem");
-    std::fs::write(&empty, "").unwrap();
+    // A valid bundle holding some other CA keeps the test independent of the
+    // host's trust store (SSL_CERT_FILE replaces it); only the bundled roots
+    // and that unrelated CA remain, and neither signed the proxy's cert.
+    let other_ca = dir.join("other-ca.pem");
+    std::fs::write(&other_ca, self::mitm().ca_pem).unwrap();
 
-    let out = search_via_proxy(&proxy, &dir, Some(&empty), &[]).await;
+    let out = search_via_proxy(&proxy, &dir, Some(&other_ca), &[]).await;
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
     assert!(stdout.contains("Request failed"), "stdout: {stdout}");
+    assert!(stdout.contains("SSL_CERT_FILE"), "hint: {stdout}");
     assert!(!stdout.contains(CANNED_RESULT_URL), "stdout: {stdout}");
     std::fs::remove_dir_all(&dir).ok();
 }
 
 #[tokio::test]
-async fn corrupt_ssl_cert_file_falls_back_to_bundled_roots() {
+async fn corrupt_ssl_cert_file_is_a_clear_error() {
     let mitm = mitm();
-    let (proxy, _) = spawn_proxy(mitm.acceptor).await;
+    let (proxy, tunnels) = spawn_proxy(mitm.acceptor).await;
     let dir = temp_dir("corrupt");
 
-    // A PEM block that is not a certificate: every native cert fails to
-    // parse, which makes reqwest refuse to build the client. The CLI must
-    // fall back to webpki roots instead of panicking (exit 101).
+    // A PEM block that is not a certificate. The CLI must name the file and
+    // stop (exit 1) instead of panicking or quietly ignoring it, and send
+    // nothing: not the request, and not the update check (`-p`).
     let corrupt = dir.join("corrupt.pem");
     std::fs::write(
         &corrupt,
@@ -251,34 +253,16 @@ async fn corrupt_ssl_cert_file_falls_back_to_bundled_roots() {
         "stdout: {stdout}\nstderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(stdout.contains("Request failed"), "stdout: {stdout}");
-    std::fs::remove_dir_all(&dir).ok();
-}
+    assert!(stdout.contains("Invalid SSL_CERT_FILE"), "stdout: {stdout}");
 
-#[tokio::test]
-async fn corrupt_ssl_cert_file_keeps_the_update_check() {
-    let mitm = mitm();
-    let (proxy, tunnels) = spawn_proxy(mitm.acceptor).await;
-    let dir = temp_dir("corrupt-update");
-    let corrupt = dir.join("corrupt.pem");
-    std::fs::write(
-        &corrupt,
-        "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
-    )
-    .unwrap();
-
-    // `-p` runs the update check. Its client must also fall back to webpki
-    // roots; if it failed to build, it would never open a tunnel to GitHub.
     let out = search_via_proxy(&proxy, &dir, Some(&corrupt), &["-p"]).await;
-    let tunnels = tunnels.lock().unwrap().clone();
+    assert_eq!(out.status.code(), Some(1));
     assert!(
-        tunnels.iter().any(|t| t == "api.github.com:443"),
-        "update check never connected; tunnels: {tunnels:?}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr).contains("Invalid SSL_CERT_FILE"),
+        "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(
-        tunnels.iter().any(|t| t == "api.keenable.ai:443"),
-        "{tunnels:?}"
-    );
+    let tunnels = tunnels.lock().unwrap().clone();
+    assert!(tunnels.is_empty(), "{tunnels:?}");
     std::fs::remove_dir_all(&dir).ok();
 }

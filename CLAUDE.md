@@ -33,6 +33,7 @@ src/
   api.rs               # HTTP client factories (api_key_client, bare_client), ApiError, response handling
   update.rs            # GitHub Releases version check (cached, non-blocking)
   daemon.rs            # Background daemon for connection reuse (auth + unauth)
+  net.rs               # Shared HTTP client builder: trust roots, proxy reporting, error chains + hints, --verbose
   commands/
     login.rs           # Device code login + --api-key direct save; also logout
     config_cmd.rs      # CLI configuration settings
@@ -58,6 +59,7 @@ assets/
 All tool commands (`search`, `fetch`) output **YAML by default** (token-efficient for agents).
 Use `-p` / `--pretty` flag for pretty-printed human-readable output.
 Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct.
+Use the global `-v` / `--verbose` flag to print network details to stderr: the proxy in use and its source, the trusted CA sources, and the full error chain on failure. It also bypasses the daemon (see Daemon).
 
 ```bash
 keenable search "query"                        # YAML output (for agents)
@@ -91,10 +93,6 @@ All tool commands (`search`, `fetch`) work without login. When no API key is con
 
 Every path the CLI touches (config, credentials, daemon socket, MCP client configs) is resolved against `config::home_dir()`, which returns the `KEENABLE_HOME` env var when set and falls back to `dirs::home_dir()` otherwise. Set `KEENABLE_HOME` to relocate the entire `.keenable` tree — this is how the e2e suite isolates runs per-test (and the only reliable way on Windows, where `dirs::home_dir()` queries the real user profile and ignores `HOME`). Always go through `config::home_dir()`, never `dirs::home_dir()` directly.
 
-### HTTP Clients & TLS
-
-Build every HTTP client through `api::build_with_root_fallback` (`api_key_client` / `bare_client` / the update check already do). It trusts the bundled webpki roots plus the OS store — or `SSL_CERT_FILE` / `SSL_CERT_DIR` when set — so TLS-intercepting proxies work, and it retries with webpki roots only when the native bundle is unusable instead of panicking. Never call `Client::new()` / `Client::builder().build()` directly. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local MITM proxy to check all of this.
-
 ### Daemon
 
 The CLI uses a background daemon (`~/.keenable/daemon.sock`) to reuse HTTP connections.
@@ -108,6 +106,10 @@ Each connection starts with an `identity` handshake: current daemons answer with
 ### API Base URL (`KEENABLE_API_URL`)
 
 All API calls (search, fetch, public endpoints, key validation, login device flow) build URLs via `api::api_url()`, which uses `api::api_base()`: `KEENABLE_API_URL` when set, else `https://api.keenable.ai` (`DEFAULT_API_BASE_URL`). Rule: https only, except http to `localhost` or a loopback IP; trailing slashes are stripped, a path prefix is kept. Same variable as the SDKs, and the same core rule (https, or http to loopback); the CLI additionally rejects a query or fragment (the Go SDK does too, Python doesn't) and accepts any spelling of the loopback IPs (`127.1`, `[0:0::1]`), which the SDKs reject. `main` validates it before any API command and exits 1 with an error naming the variable and the fix — YAML on stdout only for search/fetch without `-p`, `ui::error` + `ui::hint` on stderr otherwise (`api::exit_invalid_api_base`). The MCP URL written by `configure-mcp` always uses the production base — an env override is never persisted into client configs. Never format URLs from the constant directly.
+
+Commands that bypass the daemon on purpose and go direct: `--api-key` / `KEENABLE_API_KEY` (the daemon's cached auth differs) and `--verbose` (so the proxy/CA view and full error chain it reports are the client's own, not the daemon's).
+
+The daemon captures its environment when spawned. Each request carries `net::env_fingerprint()` (the proxy and CA env vars, `KEENABLE_APP_TITLE`, and the `SSL_CERT_FILE` / `SSL_CERT_DIR` metadata); a daemon whose fingerprint differs replies `restart`, stops accepting, lets in-flight requests finish (bounded) and exits, and that request goes direct. A transport failure seen through the daemon (except a timeout) stops it and is retried directly once, which also covers OS trust-store and system-proxy changes the fingerprint can't see.
 
 ### Terminal UI Design (`src/ui.rs`)
 
@@ -161,13 +163,21 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 
 **When adding or modifying commands**, always use `ui::` helpers rather than raw `println!`/`eprintln!` with ad-hoc formatting.
 
+### Network: Proxies and Certificates (`src/net.rs`)
+
+Build every HTTP client through `net::client_builder()` (or the `api::api_key_client` / `bare_client` helpers, which add `X-Keenable-Title`), never `reqwest::Client::new()`. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local TLS-intercepting proxy to check trust, and `tests/e2e/test_network.py` covers the error output, proxies and `--verbose`.
+
+- **Trust:** bundled Mozilla roots + the OS certificate store. `SSL_CERT_FILE` / `SSL_CERT_DIR` (PEM) replace the OS store when set; the bundled roots always stay. Empty values are removed in `main` before the runtime starts and count as unset. An unusable `SSL_CERT_FILE` is an `Invalid SSL_CERT_FILE` error naming the file (exit 1); `login` and `configure-mcp` check it before key validation so it isn't mistaken for a network blip.
+- **Proxy:** reqwest honors `HTTPS_PROXY` / `https_proxy`, `ALL_PROXY` / `all_proxy`, `HTTP_PROXY`, `NO_PROXY` / `no_proxy`, and with the `system-proxy` feature the macOS/Windows proxy settings. Never call `.no_proxy()`. Proxy passwords are never printed.
+
 ### Error Handling
 
 - All human output to `stderr` via `eprintln!` or `ui::` helpers; machine output to `stdout` via `println!`
 - Exit with code 1 on errors
 - Always suggest the fix (e.g., "Run `keenable login` first") — use `ui::error()` + `ui::hint()`
 - API errors use the `ApiError` struct (`src/api.rs`) which parses the backend's flat error body: the legacy `{error, message, retryAfter}` plus the error format v1 fields `type`, `code`, `fix`, `docs_url` (and `retry_after_seconds`). The v1 fields are optional: older servers don't send them, and nothing changes then
-- In YAML mode, errors are output as structured YAML to stdout: `error`, `type`, `code`, `message`, `fix`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `docs_url`, `request_id` (the API's `X-Request-Id`, for support), and a `hint` with the next step. `type`/`code`/`fix`/`docs_url` appear only when the server sent them; the legacy keys never change
+- Transport errors keep their `source()` chain: build them with `ApiError::from_transport`. Pretty mode prints a `Cause:` line (the full chain with `-v`) via `ApiError::print_details()`; YAML adds `cause` and `hint` fields. Hints point at `SSL_CERT_FILE` for certificate errors and at `HTTPS_PROXY` / `NO_PROXY` for connect, proxy and timeout failures
+- In YAML mode, errors are output as structured YAML to stdout: `error`, `type`, `code`, `message`, `fix`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `docs_url`, `request_id` (the API's `X-Request-Id`, for support), `cause` (transport errors only), and a `hint` with the next step. `type`/`code`/`fix`/`docs_url` appear only when the server sent them; the legacy keys never change
 - In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus `Docs: …` and `Request ID: …` hints when the API sent them
 - The vendored backend catalog (`tests/fixtures/error-catalog.json`, a copy of the backend's `docs/error-catalog.json`) drives the error tests in `api.rs`; refresh it by copying the backend file over it
 - Hints come from `ApiError::hint(authenticated)`. The CLI's own hint, by status, comes first (it names CLI commands such as `keenable login`); the server's `fix` fills in only for statuses the CLI has no hint for, and replaces the CLI hint for codes whose cause the status hint gets wrong (`ApiError::status_hint_misleads`: any `target_error`, `private_url_not_allowed`, `payment_required`, `payment_settlement_failed`, and the Keenable-side 429s `search_rate_limited` and `fetch_rate_limited`) when the server sent a `fix`. A 429 that takes the server `fix` leads with the retry time ("Retry after 2s. …"). `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
@@ -267,7 +277,7 @@ Contains IDE definitions (`IDEDef`, `all_ides()`), config read/write helpers, an
 3. Add the clap variant in `src/main.rs` with `after_help` containing examples and hints
 4. If it's a tool command (agent-facing), default to YAML output and support `-p`/`--pretty`
 5. If it makes API calls, route through the daemon (supports both auth and unauth)
-6. Tool commands should accept `--api-key` for one-off use without stored config
+6. Tool commands should accept `--api-key` for one-off use without stored config; build HTTP clients via `net::client_builder()` (see Network)
 7. Tool commands should work without login (use public endpoints when no API key)
 8. Use `ui::` helpers for all human output (see Terminal UI Design above)
 9. All human output to `stderr`; only machine-readable output (YAML/JSON) to `stdout`

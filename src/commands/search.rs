@@ -1,10 +1,13 @@
 use colored::Colorize;
 use serde_json::{Value, json};
 
-use crate::api::{ApiError, api_key_client, api_url, bare_client, handle_response};
+use crate::api::{
+    ApiError, CAUSE_SEPARATOR, api_key_client, api_url, bare_client, handle_response,
+};
 use crate::config;
 use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
+use crate::net;
 use crate::ui;
 
 pub struct SearchFilters {
@@ -265,23 +268,41 @@ fn print_yaml(data: &Value) {
     }
 }
 
+/// A failed daemon round-trip that a direct request should retry: the
+/// daemon's network state (OS trust store, system proxy) may be stale, so a
+/// transport failure gets one fresh attempt. Timeouts are not retried — that
+/// would double an already long wait. A response without structured data
+/// comes from an older daemon or a malformed request; retry those too.
+fn retry_directly(resp: &daemon::DaemonResponse) -> bool {
+    match &resp.data {
+        None => true,
+        Some(d) => d["transport"] == true && d["timeout"] != true,
+    }
+}
+
 /// A failed request, with whether it was sent with an API key. Captured at
 /// send time so the hint matches the request even if a concurrent login or
 /// logout changes the stored key before the error is shown. Boxed: it is
 /// only built on the error path, and keeps `Result` small as ApiError grows.
 type Failure = Box<(ApiError, bool)>;
 
-/// Execute a request. When an API key override is provided, go direct (skip daemon).
-/// Otherwise try daemon first, fall back to direct HTTP.
+/// Execute a request. When an API key override is provided, or with
+/// --verbose (so the network details shown are this process's own), go
+/// direct (skip daemon). Otherwise try daemon first, fall back to direct HTTP.
 async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, Failure> {
-    // If no override, try daemon first
-    if api_key_override.is_none() && daemon::ensure_daemon().is_ok() {
+    let use_daemon = api_key_override.is_none() && !net::verbose();
+    // A bad SSL_CERT_FILE must surface as a clear error, not as a daemon
+    // that fails to start. Its hint doesn't depend on the auth state.
+    net::check_cert_file().map_err(|e| Box::new((ApiError::from(e), false)))?;
+    if use_daemon && daemon::ensure_daemon().is_ok() {
         match daemon::daemon_request(req).await {
             Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
-            Ok(resp) => return Err(daemon_response_to_api_error(resp)),
             // Every command is a read, so a daemon failure is always safe to
             // retry directly — regardless of whether it happened before or
-            // after the request may have reached the API.
+            // after the request may have reached the API. Stop the daemon so
+            // the next command gets one with fresh network state.
+            Ok(resp) if retry_directly(&resp) => daemon::kill_daemon(),
+            Ok(resp) => return Err(daemon_response_to_api_error(resp)),
             Err(_) => {} // Fall through to direct
         }
     }
@@ -293,6 +314,7 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         Some(key) => api_key_client(key),
         None => bare_client(),
     };
+    let client = client.map_err(|e| Box::new((ApiError::from(e), authenticated)))?;
     send_direct(&client, req, authenticated)
         .await
         .map_err(|e| Box::new((*e, authenticated)))
@@ -303,7 +325,7 @@ async fn send_direct(
     req: &DaemonRequest,
     authenticated: bool,
 ) -> Result<Value, Box<ApiError>> {
-    let send_err = |e: reqwest::Error| Box::new(ApiError::request_failed(e.to_string()));
+    let send_err = |e: reqwest::Error| Box::new(ApiError::from_transport(&e));
     let missing = |field: &str| {
         Box::new(ApiError {
             error: format!("Missing {}", field),
@@ -364,6 +386,15 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
         let status = data["status"].as_u64().unwrap_or(0) as u16;
         let request_id = data["request_id"].as_str().map(|s| s.to_string());
         let rate_limit_reset = data["rate_limit_reset"].as_str().map(|s| s.to_string());
+        let text = |key: &str| data[key].as_str().map(str::to_string);
+        let cause = text("cause");
+        let mut chain: Vec<String> = Vec::new();
+        if let Some(c) = &cause {
+            chain.push(message.clone().unwrap_or_else(|| error.clone()));
+            chain.extend(c.split(CAUSE_SEPARATOR).map(str::to_string));
+        } else {
+            chain.extend(message.iter().cloned());
+        }
         return ApiError {
             status,
             error,
@@ -371,6 +402,11 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
             retry_after,
             rate_limit_reset,
             request_id,
+            // The daemon adds `hint` only for transport and setup failures.
+            transport_hint: text("hint"),
+            chain,
+            transport: data["transport"] == true,
+            timeout: data["timeout"] == true,
             ..Default::default()
         }
         .with_v1_fields(data);
@@ -391,6 +427,7 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
 
     if human {
         ui::error(&err.display());
+        err.print_cause();
         if let Some(hint) = &hint {
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
         }
@@ -405,9 +442,15 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         }
         eprintln!();
     } else {
-        // YAML error output for agents (retry_after, request_id and the v1
-        // type/code/fix/docs_url are already fields; `hint` keeps the CLI's
-        // wording and repeats `fix` only where the CLI has no hint)
+        // YAML error output for agents (retry_after, request_id, cause and
+        // the v1 type/code/fix/docs_url are already fields; `hint` keeps the
+        // CLI's wording and repeats `fix` only where the CLI has no hint)
+        if net::verbose() && err.chain.len() > 1 {
+            ui::info("Error chain:");
+            for (i, msg) in err.chain.iter().enumerate() {
+                ui::sub_info(&format!("{}. {}", i + 1, msg));
+            }
+        }
         let mut val = err.to_yaml_value();
         if let Some(hint) = hint {
             val["hint"] = Value::String(hint);
@@ -715,6 +758,53 @@ mod tests {
             data: Some(data),
             error: None,
         }
+    }
+
+    fn daemon_err(data: Option<Value>) -> daemon::DaemonResponse {
+        daemon::DaemonResponse {
+            ok: false,
+            data,
+            error: Some("x".into()),
+        }
+    }
+
+    #[test]
+    fn daemon_transport_failures_retry_directly_except_timeouts() {
+        assert!(retry_directly(&daemon_err(Some(
+            json!({"error": "Request failed", "status": 0, "transport": true, "timeout": false})
+        ))));
+        assert!(!retry_directly(&daemon_err(Some(
+            json!({"error": "Request failed", "status": 0, "transport": true, "timeout": true})
+        ))));
+        // API errors are answers, not network trouble.
+        assert!(!retry_directly(&daemon_err(Some(
+            json!({"error": "Too many requests", "status": 429})
+        ))));
+        // Older daemons sent transport errors as a bare string.
+        assert!(retry_directly(&daemon_err(None)));
+    }
+
+    #[test]
+    fn daemon_errors_keep_cause_and_hint() {
+        let (err, _) = *daemon_response_to_api_error(daemon_err(Some(json!({
+            "error": "Request failed",
+            "message": "error sending request",
+            "cause": "client error (Connect) → invalid peer certificate: UnknownIssuer",
+            "hint": "set SSL_CERT_FILE",
+            "status": 0,
+            "transport": true,
+            "timeout": false,
+        }))));
+        assert_eq!(err.transport_hint.as_deref(), Some("set SSL_CERT_FILE"));
+        assert_eq!(
+            err.chain,
+            vec![
+                "error sending request",
+                "client error (Connect)",
+                "invalid peer certificate: UnknownIssuer"
+            ]
+        );
+        assert!(err.transport && !err.timeout);
     }
 
     #[test]

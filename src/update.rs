@@ -57,7 +57,11 @@ pub fn install_hint() -> String {
 }
 
 async fn fetch_latest_version() -> Option<String> {
-    let client = crate::api::build_with_root_fallback(|b| b.user_agent("keenable-cli"))?;
+    let client = crate::net::client_builder()
+        .ok()?
+        .user_agent("keenable-cli")
+        .build()
+        .ok()?;
     let url = format!(
         "https://api.github.com/repos/{}/releases/latest",
         GITHUB_REPO

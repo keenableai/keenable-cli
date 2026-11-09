@@ -17,10 +17,11 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-# Trust both the bundled webpki roots and the platform store / SSL_CERT_FILE /
-# SSL_CERT_DIR, so TLS-intercepting proxies work and minimal containers
-# without a system store still do. See `api::build_client`.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+rustls-native-certs = "0.8"
+hyper-util = { version = "0.1.12", default-features = false, features = ["client-proxy", "client-proxy-system"] }
+http = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -40,7 +41,6 @@ inherits = "release"
 lto = "thin"
 
 [dev-dependencies]
-http = "1"
 # tests/tls_proxy.rs: a local TLS-intercepting proxy with a throwaway CA.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
