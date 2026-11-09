@@ -50,7 +50,7 @@ fn login_error(msg: impl Into<String>) -> ApiError {
     }
 }
 
-async fn request_code(client: &Client, label: &str) -> Result<DeviceCode, ApiError> {
+async fn request_code(client: &Client, label: &str) -> Result<DeviceCode, Box<ApiError>> {
     let resp = client
         .post(api_url("/v1/auth/agent/code"))
         .json(&serde_json::json!({
@@ -69,12 +69,12 @@ async fn request_code(client: &Client, label: &str) -> Result<DeviceCode, ApiErr
             .ok()
             .and_then(|v| error_detail(&v))
             .unwrap_or(body);
-        return Err(ApiError {
+        return Err(Box::new(ApiError {
             status: status.as_u16(),
             error: format!("HTTP {}", status),
             message: Some(detail),
             ..Default::default()
-        });
+        }));
     }
 
     let data: serde_json::Value = resp
@@ -363,7 +363,7 @@ pub async fn login(api_key: Option<&str>) {
     let label = format!("{}-cli", machine_name());
     let code = match request_code(&client, &label).await {
         Ok(c) => c,
-        Err(e) => fail(e),
+        Err(e) => fail(*e),
     };
     ui::step_done("Requested device code");
 
