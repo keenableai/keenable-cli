@@ -48,12 +48,28 @@ impl SearchFilters {
     }
 }
 
+/// Splits one flag value on commas. Hosts never contain `?` or `#`, so from
+/// the first entry that does, the rest is one URL whose query may hold commas.
+fn split_domain_flag(value: &str) -> Vec<&str> {
+    let Some(q) = value.find(['?', '#']) else {
+        return value.split(',').collect();
+    };
+    let url_start = value[..q].rfind(',').map_or(0, |c| c + 1);
+    let mut parts: Vec<&str> = match url_start {
+        0 => vec![],
+        _ => value[..url_start - 1].split(',').collect(),
+    };
+    parts.push(&value[url_start..]);
+    parts
+}
+
 pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     if raw.is_empty() {
         return raw;
     }
     let tidy: Vec<String> = raw
         .iter()
+        .flat_map(|v| split_domain_flag(v))
         .map(|v| v.trim())
         .filter(|v| !v.is_empty())
         .map(str::to_string)
@@ -1158,6 +1174,25 @@ mod tests {
     fn tidy_domain_list_leaves_absent_flags_absent() {
         assert!(tidy_domain_list(vec![]).is_empty());
         assert_eq!(tidy_domain_list(vec!["a.com".into()]), vec!["a.com"]);
+    }
+
+    #[test]
+    fn split_domain_flag_keeps_commas_in_a_url_query() {
+        let cases: [(&str, &[&str]); 7] = [
+            ("a.com", &["a.com"]),
+            ("a.com,b.com", &["a.com", "b.com"]),
+            (",", &["", ""]),
+            ("", &[""]),
+            ("https://docs.rs/?a=1,b=2", &["https://docs.rs/?a=1,b=2"]),
+            (
+                "a.com,https://docs.rs/?a=1,b=2",
+                &["a.com", "https://docs.rs/?a=1,b=2"],
+            ),
+            ("a.com,docs.rs/#x,y", &["a.com", "docs.rs/#x,y"]),
+        ];
+        for (raw, want) in cases {
+            assert_eq!(split_domain_flag(raw), want, "{raw:?}");
+        }
     }
 
     #[test]

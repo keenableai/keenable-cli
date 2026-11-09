@@ -206,7 +206,7 @@ struct SearchArgs {
     site: Option<String>,
 
     /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct hosts. Hosts only, no paths, suffixes like .gov, wildcards or IPs. Private-suffix hosts like github.io are accepted
-    #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
+    #[arg(long = "exclude-domain", value_name = "DOMAIN")]
     exclude_domain: Vec<String>,
 
     /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
@@ -502,6 +502,15 @@ mod tests {
         assert_eq!(
             v["exclude_domains"],
             json!(["https://WWW.UN.org/", "un.org/press", ".gov"])
+        );
+    }
+
+    #[test]
+    fn commas_in_a_url_query_do_not_split_the_entry() {
+        let v = search_filters(&["--exclude-domain", "a.com,https://docs.rs/?a=1,b=2"]);
+        assert_eq!(
+            v["exclude_domains"],
+            json!(["a.com", "https://docs.rs/?a=1,b=2"])
         );
     }
 
