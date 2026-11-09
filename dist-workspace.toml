@@ -21,3 +21,9 @@ install-updater = false
 tap = "keenableai/homebrew-tap"
 # Publish Homebrew formula on release
 publish-jobs = ["homebrew"]
+
+[dist.github-custom-runners]
+# dist 0.31 builds Apple Silicon on macos-14 by default, which GitHub has
+# retired ("The configuration 'macos-14-arm64-us-default' is not supported"),
+# so the v0.3.0 release job was cancelled before it started.
+aarch64-apple-darwin = "macos-15"
