@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod constants;
 mod daemon;
+mod net;
 mod ui;
 mod update;
 
@@ -13,9 +14,14 @@ use clap::{Parser, Subcommand};
     name = "keenable",
     about = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web",
     version,
-    after_help = "Get started:\n  keenable search \"query\"                  Search the web (works without login)\n  keenable search \"query\" -p               Same, but pretty-printed for humans\n  keenable login                           Authenticate (agent-friendly device flow)\n  keenable login --api-key keen_***_*****  Save API key directly\n  keenable configure-mcp --all             Configure Keenable MCP in all detected clients"
+    after_help = "Get started:\n  keenable search \"query\"                  Search the web (works without login)\n  keenable search \"query\" -p               Same, but pretty-printed for humans\n  keenable login                           Authenticate (agent-friendly device flow)\n  keenable login --api-key keen_***_*****  Save API key directly\n  keenable configure-mcp --all             Configure Keenable MCP in all detected clients\n\nNetwork:\n  Trusts the bundled Mozilla roots plus your OS certificate store.\n  SSL_CERT_FILE / SSL_CERT_DIR  PEM CA certificates to trust instead of the OS store\n                                (e.g. your TLS-inspecting proxy's CA)\n  HTTPS_PROXY / ALL_PROXY       Proxy URL (http://user:password@host:port); NO_PROXY to bypass\n  keenable search \"query\" -p -v            Show the proxy, trusted CAs and the full error chain"
 )]
 struct Cli {
+    /// Show network details: proxy in use, trusted CA sources, and the full
+    /// error chain on failure (also bypasses the background daemon)
+    #[arg(short = 'v', long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -45,7 +51,7 @@ enum ConfigAction {
 enum Commands {
     /// Authenticate with Keenable and provision an API key
     #[command(
-        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY"
+        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY\n  keenable login -v                          Show proxy, trusted CAs and full errors\n\nBehind a corporate proxy: set HTTPS_PROXY, and SSL_CERT_FILE to your company's CA bundle\nif it inspects TLS."
     )]
     Login {
         /// API key to save directly (skips browser login)
@@ -137,13 +143,13 @@ enum Commands {
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --exclude-domain spam.com,ads.net     Never these domains (repeatable)\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --exclude-domain spam.com,ads.net     Never these domains (repeatable)\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --session-id agent-run-42           Group related calls in a session\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key\n  keenable search \"rust async\" -p -v                              Show proxy, trusted CAs and full errors"
     )]
     Search(SearchArgs),
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors"
     )]
     Fetch {
         /// URL to fetch
@@ -161,6 +167,10 @@ enum Commands {
         /// Truncate content at this many characters (default: 50000)
         #[arg(long = "max-chars", value_parser = clap::value_parser!(u64).range(1..))]
         max_chars: Option<u64>,
+
+        /// Session ID that groups related searches and fetches (e.g. one agent run)
+        #[arg(long = "session-id", value_name = "ID")]
+        session_id: Option<String>,
 
         /// Pretty-print output for humans instead of YAML
         #[arg(short = 'p', long = "pretty")]
@@ -227,6 +237,10 @@ struct SearchArgs {
     #[arg(long)]
     query_time: Option<String>,
 
+    /// Session ID that groups related searches and fetches (e.g. one agent run)
+    #[arg(long = "session-id", value_name = "ID")]
+    session_id: Option<String>,
+
     /// Pretty-print output for humans instead of YAML
     #[arg(short = 'p', long = "pretty")]
     pretty: bool,
@@ -273,9 +287,41 @@ fn collect_client_flags(
         .collect()
 }
 
-#[tokio::main]
-async fn main() {
+/// Fail fast on an invalid `KEENABLE_API_URL` before any command talks to
+/// the API. Agent-facing output (search/fetch without `-p`) also gets the
+/// error as YAML on stdout, like API errors.
+fn check_api_base(command: &Commands) {
+    let yaml = match command {
+        Commands::Search(SearchArgs { pretty, .. }) | Commands::Fetch { pretty, .. } => !*pretty,
+        Commands::Login { .. } | Commands::ConfigureMcp { .. } | Commands::Daemon => false,
+        _ => return,
+    };
+    if let Err(msg) = api::resolved_api_base() {
+        api::exit_invalid_api_base(msg, yaml);
+    }
+}
+
+fn main() {
+    // Before any thread exists (the tokio runtime is built below), so
+    // removing env vars is sound. An empty SSL_CERT_FILE/SSL_CERT_DIR would
+    // make rustls-native-certs skip the OS store for an empty path; drop it
+    // so empty means unset everywhere, including in the spawned daemon.
+    for name in net::empty_cert_vars(|n| std::env::var_os(n)) {
+        // SAFETY: single-threaded at this point; no other code reads or
+        // writes the environment concurrently.
+        unsafe { std::env::remove_var(name) };
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to start the async runtime")
+        .block_on(run());
+}
+
+async fn run() {
     let cli = Cli::parse();
+    net::set_verbose(cli.verbose);
+    check_api_base(&cli.command);
 
     // Update check only for human-facing output: awaiting it would add up to
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
@@ -332,8 +378,11 @@ async fn main() {
                 &args.query,
                 args.mode.as_deref(),
                 args.filters(),
-                args.snippet_max_length,
-                args.max_results,
+                commands::search::SearchOptions {
+                    snippet_max_length: args.snippet_max_length,
+                    max_results: args.max_results,
+                    session_id: args.session_id.clone(),
+                },
                 args.pretty,
                 args.api_key.as_deref(),
             )
@@ -344,11 +393,20 @@ async fn main() {
             live,
             prompt,
             max_chars,
+            session_id,
             pretty,
             api_key,
         } => {
-            commands::search::fetch(&url, live, prompt, max_chars, pretty, api_key.as_deref())
-                .await;
+            commands::search::fetch(
+                &url,
+                live,
+                prompt,
+                max_chars,
+                session_id,
+                pretty,
+                api_key.as_deref(),
+            )
+            .await;
         }
         Commands::Update => {
             commands::update_cmd::update().await;

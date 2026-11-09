@@ -284,6 +284,11 @@ def test_malformed_date(kn):
     # server wording drifted from "Invalid parameter" to "Bad request" (2026-06)
     assert data["error"] in ("Invalid parameter", "Bad request")
     assert "acquired_after" in data["message"]
+    # A rejected parameter says to fix the request (not to log in) and carries the
+    # API's request id for support.
+    assert "retrying unchanged fails" in data["hint"]
+    assert "keenable login" not in data["hint"]
+    assert data["request_id"]
 
 
 # --- 2.4 error/edge cases ---

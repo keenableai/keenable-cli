@@ -51,9 +51,20 @@ def test_fetch_max_chars(kn):
     res = kn("fetch", "https://example.com", "--max-chars", "50")
     assert res.code == 0
     data = res.yaml()
-    # The truncation disclaimer is the load-bearing assert: a stale daemon
-    # that drops `max_chars` returns the full page with exit code 0.
-    assert "truncated to stay below 50 characters" in data["content"]
+    # The cap is the load-bearing assert: a stale daemon that drops
+    # `max_chars` returns the full page with exit code 0. The API used to
+    # append a ~70-character notice; it now cuts to at most `max_chars`
+    # characters ending in "..." and sets `truncated` (keenable-backend-ts#691).
+    # Accept both until that change is deployed; remove the notice branch
+    # then (keenable-cli#95). Branch on the notice, not on `truncated`: since
+    # 0.3.0 the CLI adds `truncated: true` itself when it sees the old notice.
+    content = data["content"]
+    assert data["truncated"] is True
+    if "truncated to stay below 50 characters" in content:
+        return
+    assert len(content) <= 50
+    assert content.endswith("...")
+    assert data["total_chars"] > 50
 
 
 def test_fetch_max_chars_rejects_zero(kn):

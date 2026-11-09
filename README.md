@@ -54,6 +54,7 @@ keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
 keenable search "query" --snippet-max-length 2000          # Longer snippets (180-10000)
 keenable search "query" --query-time 2026-01-01T00:00:00Z  # Point-in-time search
+keenable search "query" --session-id agent-run-42          # Group related calls in a session
 keenable search "query" --api-key KEY                      # Use a specific API key
 ```
 
@@ -94,6 +95,17 @@ keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://example.com --live   # Fetch the live page (skip cache)
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
 keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char content cap
+keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
+```
+
+When content is cut at the character cap, it ends with the API's truncation note and the YAML output carries `truncated: true`.
+
+### API endpoint
+
+Set `KEENABLE_API_URL` to send API calls somewhere other than `https://api.keenable.ai`, e.g. a local gateway that adds credentials. It must be `https://`, except `http://` to `localhost`, `127.0.0.1` or `::1`. `configure-mcp` still writes the production MCP URL.
+
+```bash
+KEENABLE_API_URL=http://127.0.0.1:8080 keenable search "query"
 ```
 
 ### Authentication
@@ -114,6 +126,18 @@ keenable reset --all                    # Remove Keenable from all clients
 ```
 
 Supported clients: Claude Code, Cursor, Windsurf, Codex, OpenCode.
+
+### Behind a proxy
+
+The CLI honors `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`. It trusts its bundled Mozilla roots plus the OS certificate store; when `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, those replace the OS store. A TLS-intercepting proxy works once its CA is in that bundle:
+
+```bash
+export HTTPS_PROXY=http://proxy.internal:3128
+export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle-with-proxy-ca.pem
+keenable search "query"
+```
+
+The background daemon (macOS/Linux) keeps the environment it was started with and exits after 5 minutes idle. After changing these variables, stop it with `pkill -f "keenable daemon"` so the next command starts a fresh one. Commands run with `--api-key` or `KEENABLE_API_KEY` skip the daemon.
 
 ## Updating
 

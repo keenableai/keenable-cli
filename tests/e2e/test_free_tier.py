@@ -41,6 +41,28 @@ def test_free_tier_search_hits_public_endpoint(kn_fresh):
         assert "increase your limits" in hint
 
 
+def test_free_tier_bad_param_hint(kn_fresh):
+    """A 400 tells the user to fix the request, never to log in."""
+    res = kn_fresh("search", "x", "--max-results", "0", key=False)
+    assert res.code == 1
+    data = res.yaml()
+    if "increase your limits" in data.get("hint", ""):
+        return  # IP rate-limited; the 429 hint is covered above
+    assert '"max_results"' in data["message"]
+    assert "retrying unchanged fails" in data["hint"]
+    assert "keenable login" not in data["hint"]
+    assert data["request_id"]
+
+
+def test_free_tier_session_id(kn_fresh):
+    for args in (("search", "rust async", "--max-results", "1"), ("fetch", "https://example.com")):
+        res = kn_fresh(*args, "--session-id", "e2e-session", key=False)
+        if res.code != 0:
+            assert "increase your limits" in res.yaml().get("hint", ""), res.out
+            continue
+        assert "error" not in res.yaml()
+
+
 def test_free_tier_fetch_hits_public_endpoint(kn_fresh):
     res = kn_fresh("fetch", "https://example.com", key=False)
     if res.code == 0:

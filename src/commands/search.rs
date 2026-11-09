@@ -1,10 +1,13 @@
 use colored::Colorize;
 use serde_json::{Value, json};
 
-use crate::api::{ApiError, api_key_client, api_url, bare_client, handle_response};
+use crate::api::{
+    ApiError, CAUSE_SEPARATOR, api_key_client, api_url, bare_client, handle_response,
+};
 use crate::config;
 use crate::constants::SEARCH_MODES;
 use crate::daemon::{self, DaemonRequest};
+use crate::net;
 use crate::ui;
 
 pub struct SearchFilters {
@@ -99,8 +102,6 @@ fn print_human_result(i: usize, result: &Value) {
     let snippet = result["snippet"].as_str().unwrap_or("");
     let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
     let snippet_truncated: String = snippet_flat.chars().take(200).collect();
-    let published = result["published_at"].as_str().unwrap_or("");
-    let acquired = result["acquired_at"].as_str().unwrap_or("");
 
     let num = format!("{:>2}.", i + 1).dimmed();
     eprintln!("   {} {}", num, title.bold());
@@ -108,17 +109,35 @@ fn print_human_result(i: usize, result: &Value) {
     if !snippet_truncated.is_empty() {
         eprintln!("      {}", snippet_truncated.dimmed());
     }
-    if !published.is_empty() || !acquired.is_empty() {
-        let mut dates = Vec::new();
-        if !published.is_empty() {
-            dates.push(format!("published: {}", published));
-        }
-        if !acquired.is_empty() {
-            dates.push(format!("acquired: {}", acquired));
-        }
-        eprintln!("      {}", dates.join("  ").dimmed());
+    if let Some(dates) = dates_line(result) {
+        eprintln!("      {}", dates.dimmed());
     }
     eprintln!();
+}
+
+/// Non-filter search parameters; unset ones are left to the server default.
+#[derive(Default)]
+pub struct SearchOptions {
+    pub snippet_max_length: Option<u64>,
+    pub max_results: Option<u64>,
+    /// Groups related calls (search and fetch) under one session.
+    pub session_id: Option<String>,
+}
+
+impl SearchOptions {
+    fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        if let Some(n) = self.snippet_max_length {
+            map.insert("snippet_max_length".into(), json!(n));
+        }
+        if let Some(n) = self.max_results {
+            map.insert("max_results".into(), json!(n));
+        }
+        if let Some(id) = &self.session_id {
+            map.insert("session_id".into(), json!(id));
+        }
+        Value::Object(map)
+    }
 }
 
 /// Resolve the API key. Returns Some(key) for authenticated requests, None for public endpoints.
@@ -170,6 +189,142 @@ fn fold_description_into_snippet(data: &mut Value) {
     }
 }
 
+/// Values below this (1973-03-03 in seconds) are not treated as epochs:
+/// short digit runs like `2026` or `20261022` are more likely a year or a
+/// compact date than a 1970 timestamp, so they are left as sent.
+const EPOCH_MIN: f64 = 1e8;
+
+/// Epoch values at or above this are milliseconds: 1e11 seconds is the year
+/// 5138, while 1e11 milliseconds is 1973. Same thresholds as the SDKs.
+const EPOCH_MS_THRESHOLD: f64 = 1e11;
+
+/// Seconds since the Unix epoch as RFC 3339 UTC (`2026-10-22T19:00:00Z`).
+/// None outside years 1970..=9999, which no real page date falls in.
+fn epoch_to_rfc3339(secs: i64) -> Option<String> {
+    // 253402300800 = 10000-01-01T00:00:00Z
+    if !(0..253_402_300_800).contains(&secs) {
+        return None;
+    }
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil-from-days (Howard Hinnant's algorithm), proleptic Gregorian.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month,
+        day,
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    ))
+}
+
+/// Fetch returns dates as a Unix epoch number while search returns ISO
+/// strings. Normalize a numeric (or all-digit string) epoch to RFC 3339 UTC,
+/// treating values >= 1e11 as milliseconds. None leaves the value as-is:
+/// ISO strings, values below 1e8, and anything unparseable pass through
+/// untouched.
+fn epoch_value_to_rfc3339(value: &Value) -> Option<String> {
+    let raw = match value {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() || !t.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            t.parse::<f64>().ok()?
+        }
+        _ => return None,
+    };
+    if !raw.is_finite() || raw < EPOCH_MIN {
+        return None;
+    }
+    let secs = if raw >= EPOCH_MS_THRESHOLD {
+        raw / 1_000.0
+    } else {
+        raw
+    };
+    epoch_to_rfc3339(secs.floor() as i64)
+}
+
+/// Rewrite fetch's epoch `published_at` / `acquired_at` as RFC 3339 so both
+/// commands emit the same type for the same field.
+fn normalize_fetch_dates(data: &mut Value) {
+    let Some(obj) = data.as_object_mut() else {
+        return;
+    };
+    for key in ["published_at", "acquired_at"] {
+        if let Some(iso) = obj.get(key).and_then(epoch_value_to_rfc3339) {
+            obj.insert(key.into(), Value::String(iso));
+        }
+    }
+}
+
+/// The note the fetch API appends to content cut at `max_chars`:
+/// `..._This content has been truncated to stay below N characters_...`
+const TRUNCATION_NOTE_PREFIX: &str = "..._This content has been truncated to stay below ";
+const TRUNCATION_NOTE_SUFFIX: &str = " characters_...";
+
+/// Whether fetched content ends with the API's exact truncation sentence
+/// (N is one or more digits), optionally followed by whitespace.
+/// Best-effort: it reads false if the API's wording changes.
+fn is_truncated(content: &str) -> bool {
+    let Some(rest) = content.trim_end().strip_suffix(TRUNCATION_NOTE_SUFFIX) else {
+        return false;
+    };
+    let digits = rest.len() - rest.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    digits > 0 && rest[..rest.len() - digits].ends_with(TRUNCATION_NOTE_PREFIX)
+}
+
+/// Flag truncated fetch content with `truncated: true`, placed just before
+/// `content` so agents see it before the (long) text. Content stays verbatim.
+fn mark_truncated(data: &mut Value) {
+    let Some(obj) = data.as_object_mut() else {
+        return;
+    };
+    if !obj
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(is_truncated)
+    {
+        return;
+    }
+    let mut out = serde_json::Map::with_capacity(obj.len() + 1);
+    for (k, v) in std::mem::take(obj) {
+        if k == "content" {
+            out.insert("truncated".into(), Value::Bool(true));
+        }
+        if k != "truncated" {
+            out.insert(k, v);
+        }
+    }
+    *obj = out;
+}
+
+/// "published: …  acquired: …" for pretty output, or None when neither is set.
+/// Bare digit strings (an epoch too small to convert) are not dates to show.
+fn dates_line(item: &Value) -> Option<String> {
+    let mut dates = Vec::new();
+    for (key, label) in [("published_at", "published"), ("acquired_at", "acquired")] {
+        if let Some(v) = item[key]
+            .as_str()
+            .filter(|v| !v.trim().bytes().all(|b| b.is_ascii_digit()))
+        {
+            dates.push(format!("{}: {}", label, v));
+        }
+    }
+    (!dates.is_empty()).then(|| dates.join("  "))
+}
+
 fn print_yaml(data: &Value) {
     match serde_yaml::to_string(data) {
         Ok(yaml) => print!("{}", yaml),
@@ -177,17 +332,41 @@ fn print_yaml(data: &Value) {
     }
 }
 
-/// Execute a request. When an API key override is provided, go direct (skip daemon).
-/// Otherwise try daemon first, fall back to direct HTTP.
-async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, ApiError> {
-    // If no override, try daemon first
-    if api_key_override.is_none() && daemon::ensure_daemon().is_ok() {
+/// A failed daemon round-trip that a direct request should retry: the
+/// daemon's network state (OS trust store, system proxy) may be stale, so a
+/// transport failure gets one fresh attempt. Timeouts are not retried — that
+/// would double an already long wait. A response without structured data
+/// comes from an older daemon or a malformed request; retry those too.
+fn retry_directly(resp: &daemon::DaemonResponse) -> bool {
+    match &resp.data {
+        None => true,
+        Some(d) => d["transport"] == true && d["timeout"] != true,
+    }
+}
+
+/// A failed request, with whether it was sent with an API key. Captured at
+/// send time so the hint matches the request even if a concurrent login or
+/// logout changes the stored key before the error is shown. Boxed: it is
+/// only built on the error path, and keeps `Result` small as ApiError grows.
+type Failure = Box<(ApiError, bool)>;
+
+/// Execute a request. When an API key override is provided, or with
+/// --verbose (so the network details shown are this process's own), go
+/// direct (skip daemon). Otherwise try daemon first, fall back to direct HTTP.
+async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, Failure> {
+    let use_daemon = api_key_override.is_none() && !net::verbose();
+    // A bad SSL_CERT_FILE must surface as a clear error, not as a daemon
+    // that fails to start. Its hint doesn't depend on the auth state.
+    net::check_cert_file().map_err(|e| Box::new((ApiError::from(e), false)))?;
+    if use_daemon && daemon::ensure_daemon().is_ok() {
         match daemon::daemon_request(req).await {
             Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
-            Ok(resp) => return Err(daemon_response_to_api_error(resp)),
             // Every command is a read, so a daemon failure is always safe to
             // retry directly — regardless of whether it happened before or
-            // after the request may have reached the API.
+            // after the request may have reached the API. Stop the daemon so
+            // the next command gets one with fresh network state.
+            Ok(resp) if retry_directly(&resp) => daemon::kill_daemon(),
+            Ok(resp) => return Err(daemon_response_to_api_error(resp)),
             Err(_) => {} // Fall through to direct
         }
     }
@@ -199,13 +378,23 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
         Some(key) => api_key_client(key),
         None => bare_client(),
     };
+    let client = client.map_err(|e| Box::new((ApiError::from(e), authenticated)))?;
+    send_direct(&client, req, authenticated)
+        .await
+        .map_err(|e| Box::new((*e, authenticated)))
+}
 
-    let send_err = |e: reqwest::Error| ApiError::request_failed(e.to_string());
-    let missing = |field: &str| ApiError {
-        status: 0,
-        error: format!("Missing {}", field),
-        message: None,
-        retry_after: None,
+async fn send_direct(
+    client: &reqwest::Client,
+    req: &DaemonRequest,
+    authenticated: bool,
+) -> Result<Value, Box<ApiError>> {
+    let send_err = |e: reqwest::Error| Box::new(ApiError::from_transport(&e));
+    let missing = |field: &str| {
+        Box::new(ApiError {
+            error: format!("Missing {}", field),
+            ..Default::default()
+        })
     };
 
     match req.command.as_str() {
@@ -229,18 +418,27 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
                 .map_err(send_err)?;
             handle_response(resp).await
         }
-        _ => Err(ApiError {
-            status: 0,
+        _ => Err(Box::new(ApiError {
             error: format!("Unknown command: {}", req.command),
-            message: None,
-            retry_after: None,
-        }),
+            ..Default::default()
+        })),
     }
 }
 
-/// Reconstruct an ApiError from a failed DaemonResponse.
-/// The daemon forwards the structured error value in `data`.
-fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
+/// Reconstruct an ApiError from a failed DaemonResponse, with the auth state
+/// the daemon sent it with. The daemon forwards the structured error value
+/// (and `authenticated`) in `data`; a daemon from an older version omits
+/// `authenticated`, so fall back to the stored key it would have loaded.
+fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> Failure {
+    let authenticated = resp
+        .data
+        .as_ref()
+        .and_then(|d| d["authenticated"].as_bool())
+        .unwrap_or_else(|| config::get_api_key().is_some());
+    Box::new((daemon_error(resp), authenticated))
+}
+
+fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
     if let Some(data) = &resp.data {
         // Daemon forwards the structured error from handle_response
         let error = data["error"]
@@ -250,70 +448,78 @@ fn daemon_response_to_api_error(resp: daemon::DaemonResponse) -> ApiError {
         let message = data["message"].as_str().map(|s| s.to_string());
         let retry_after = data["retry_after"].as_u64();
         let status = data["status"].as_u64().unwrap_or(0) as u16;
+        let request_id = data["request_id"].as_str().map(|s| s.to_string());
+        let rate_limit_reset = data["rate_limit_reset"].as_str().map(|s| s.to_string());
+        let text = |key: &str| data[key].as_str().map(str::to_string);
+        let cause = text("cause");
+        let mut chain: Vec<String> = Vec::new();
+        if let Some(c) = &cause {
+            chain.push(message.clone().unwrap_or_else(|| error.clone()));
+            chain.extend(c.split(CAUSE_SEPARATOR).map(str::to_string));
+        } else {
+            chain.extend(message.iter().cloned());
+        }
         return ApiError {
             status,
             error,
             message,
             retry_after,
-        };
+            rate_limit_reset,
+            request_id,
+            // The daemon adds `hint` only for transport and setup failures.
+            transport_hint: text("hint"),
+            chain,
+            transport: data["transport"] == true,
+            timeout: data["timeout"] == true,
+            ..Default::default()
+        }
+        .with_v1_fields(data);
     }
     // Fallback: use the plain error string
     ApiError {
-        status: 0,
         error: resp.error.unwrap_or("Unknown error".to_string()),
-        message: None,
-        retry_after: None,
+        ..Default::default()
     }
-}
-
-fn login_hint(err: &ApiError, authenticated: bool) -> Option<String> {
-    if err.is_auth_error() {
-        Some("Run `keenable login` to authenticate.".to_string())
-    } else if err.is_rate_limit() {
-        if authenticated {
-            let retry = err
-                .retry_after
-                .map(|s| format!("Retry after {}s", s))
-                .unwrap_or_else(|| "Retry later".to_string());
-            Some(format!(
-                "Rate limit reached for your API key. {}, or run `keenable login` to switch accounts.",
-                retry
-            ))
-        } else {
-            Some("Run `keenable login` to authenticate and increase your limits.".to_string())
-        }
-    } else {
-        None
-    }
-}
-
-fn error_yaml(err: &ApiError, hint: Option<String>) -> Value {
-    let mut val = err.to_yaml_value();
-    if let Some(hint) = hint {
-        val["hint"] = Value::String(hint);
-    }
-    val
 }
 
 /// Display an ApiError according to output mode (human vs YAML).
-fn handle_api_error(err: ApiError, human: bool, api_key_override: Option<&str>) -> ! {
-    let authenticated = resolve_api_key(api_key_override).is_some();
-    let login_hint = login_hint(&err, authenticated);
+/// The next step comes from `ApiError::hint`, worded for the auth state the
+/// request was sent with (a structured `hint` field in YAML mode). The API's
+/// request id is shown too, so users can quote it to support.
+fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
+    let hint = err.hint(authenticated);
 
     if human {
         ui::error(&err.display());
-        if err.is_rate_limit()
-            && !authenticated
-            && let Some(secs) = err.retry_after
-        {
-            ui::hint(&format!("Retry after {}s.", secs));
-        }
-        if let Some(hint) = &login_hint {
+        err.print_cause();
+        if let Some(hint) = &hint {
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
+        }
+        if let Some(url) = &err.docs_url {
+            ui::hint(&format!("Docs: {}", url));
+        }
+        if let Some(id) = &err.request_id {
+            ui::hint(&format!(
+                "Request ID: {} (quote it when contacting support)",
+                id
+            ));
         }
         eprintln!();
     } else {
-        print_yaml(&error_yaml(&err, login_hint));
+        // YAML error output for agents (retry_after, request_id, cause and
+        // the v1 type/code/fix/docs_url are already fields; `hint` keeps the
+        // CLI's wording and repeats `fix` only where the CLI has no hint)
+        if net::verbose() && err.chain.len() > 1 {
+            ui::info("Error chain:");
+            for (i, msg) in err.chain.iter().enumerate() {
+                ui::sub_info(&format!("{}. {}", i + 1, msg));
+            }
+        }
+        let mut val = err.to_yaml_value();
+        if let Some(hint) = hint {
+            val["hint"] = Value::String(hint);
+        }
+        print_yaml(&val);
     }
     std::process::exit(1);
 }
@@ -355,37 +561,31 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
+/// The body goes to the API verbatim on both the daemon and the direct path.
 fn build_search_body(
     query: &str,
     mode: Option<&str>,
     filters: &SearchFilters,
-    snippet_max_length: Option<u64>,
-    max_results: Option<u64>,
+    options: &SearchOptions,
 ) -> Value {
-    let mut body = json!({ "query": query });
+    let mut body = serde_json::Map::new();
+    body.insert("query".into(), json!(query));
     if let Some(m) = mode {
-        body["mode"] = json!(m);
+        body.insert("mode".into(), json!(m));
     }
-    if let Some(n) = snippet_max_length {
-        body["snippet_max_length"] = json!(n);
+    for extra in [options.to_json(), filters.to_json()] {
+        if let Value::Object(map) = extra {
+            body.extend(map);
+        }
     }
-    if let Some(n) = max_results {
-        body["max_results"] = json!(n);
-    }
-    if let Value::Object(filter_map) = filters.to_json()
-        && let Value::Object(ref mut body_map) = body
-    {
-        body_map.extend(filter_map);
-    }
-    body
+    Value::Object(body)
 }
 
 pub async fn search(
     query: &str,
     mode: Option<&str>,
     filters: SearchFilters,
-    snippet_max_length: Option<u64>,
-    max_results: Option<u64>,
+    options: SearchOptions,
     human: bool,
     api_key: Option<&str>,
 ) {
@@ -412,13 +612,7 @@ pub async fn search(
         }
     });
 
-    let body = build_search_body(
-        query,
-        effective_mode.as_deref(),
-        &filters,
-        snippet_max_length,
-        max_results,
-    );
+    let body = build_search_body(query, effective_mode.as_deref(), &filters, &options);
 
     let req = DaemonRequest {
         command: "search".to_string(),
@@ -450,7 +644,7 @@ pub async fn search(
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human, api_key),
+        Err(e) => handle_api_error(*e, human),
     }
 }
 
@@ -459,6 +653,7 @@ pub async fn fetch(
     live: bool,
     prompt: Option<String>,
     max_chars: Option<u64>,
+    session_id: Option<String>,
     human: bool,
     api_key: Option<&str>,
 ) {
@@ -468,6 +663,7 @@ pub async fn fetch(
         live,
         prompt,
         max_chars,
+        session_id,
         ..Default::default()
     };
 
@@ -478,22 +674,31 @@ pub async fn fetch(
             if let Some(obj) = data.as_object_mut() {
                 obj.remove("description");
             }
+            normalize_fetch_dates(&mut data);
+            mark_truncated(&mut data);
             if human {
                 ui::header("keenable fetch");
                 let title = data["title"].as_str().unwrap_or("Untitled");
                 let url = data["url"].as_str().unwrap_or("");
                 let content = data["content"].as_str().unwrap_or("");
                 eprintln!("   {} {}", title.bold(), url.cyan());
+                if let Some(dates) = dates_line(&data) {
+                    eprintln!("   {}", dates.dimmed());
+                }
                 eprintln!("   {}", "─".repeat(60).dimmed());
                 for line in content.lines() {
                     eprintln!("   {}", line);
                 }
                 eprintln!();
+                if data["truncated"].as_bool() == Some(true) {
+                    ui::hint("Content was truncated; pass a larger --max-chars for more.");
+                    eprintln!();
+                }
                 return;
             }
             print_yaml(&data);
         }
-        Err(e) => handle_api_error(e, human, api_key),
+        Err(e) => handle_api_error(*e, human),
     }
 }
 
@@ -576,6 +781,58 @@ mod tests {
     }
 
     #[test]
+    fn search_options_omit_unset_fields() {
+        assert!(
+            SearchOptions::default()
+                .to_json()
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_options_include_session() {
+        let v = SearchOptions {
+            snippet_max_length: Some(500),
+            max_results: Some(5),
+            session_id: Some("sess-1".into()),
+        }
+        .to_json();
+        assert_eq!(
+            v,
+            json!({
+                "snippet_max_length": 500,
+                "max_results": 5,
+                "session_id": "sess-1",
+            })
+        );
+    }
+
+    #[test]
+    fn fetch_query_carries_session_id() {
+        let req = DaemonRequest {
+            command: "fetch".into(),
+            urls: Some(vec!["https://example.com".into()]),
+            session_id: Some("sess-1".into()),
+            ..Default::default()
+        };
+        let q = req.fetch_query().unwrap();
+        assert!(q.contains(&("session_id", "sess-1".to_string())), "{q:?}");
+        let bare = DaemonRequest {
+            urls: Some(vec!["https://example.com".into()]),
+            ..Default::default()
+        };
+        assert!(
+            !bare
+                .fetch_query()
+                .unwrap()
+                .iter()
+                .any(|(k, _)| *k == "session_id")
+        );
+    }
+
+    #[test]
     fn config_mode_accepts_valid_and_legacy_standard() {
         assert_eq!(
             config_mode(&json!({"m": "pro"}), "m").as_deref(),
@@ -590,6 +847,292 @@ mod tests {
             config_mode(&json!({"m": "standard"}), "m").as_deref(),
             Some("standard")
         );
+    }
+
+    fn daemon_403(data: Value) -> daemon::DaemonResponse {
+        daemon::DaemonResponse {
+            ok: false,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    fn daemon_err(data: Option<Value>) -> daemon::DaemonResponse {
+        daemon::DaemonResponse {
+            ok: false,
+            data,
+            error: Some("x".into()),
+        }
+    }
+
+    #[test]
+    fn daemon_transport_failures_retry_directly_except_timeouts() {
+        assert!(retry_directly(&daemon_err(Some(
+            json!({"error": "Request failed", "status": 0, "transport": true, "timeout": false})
+        ))));
+        assert!(!retry_directly(&daemon_err(Some(
+            json!({"error": "Request failed", "status": 0, "transport": true, "timeout": true})
+        ))));
+        // API errors are answers, not network trouble.
+        assert!(!retry_directly(&daemon_err(Some(
+            json!({"error": "Too many requests", "status": 429})
+        ))));
+        // Older daemons sent transport errors as a bare string.
+        assert!(retry_directly(&daemon_err(None)));
+    }
+
+    #[test]
+    fn daemon_errors_keep_cause_and_hint() {
+        let (err, _) = *daemon_response_to_api_error(daemon_err(Some(json!({
+            "error": "Request failed",
+            "message": "error sending request",
+            "cause": "client error (Connect) → invalid peer certificate: UnknownIssuer",
+            "hint": "set SSL_CERT_FILE",
+            "status": 0,
+            "transport": true,
+            "timeout": false,
+        }))));
+        assert_eq!(err.transport_hint.as_deref(), Some("set SSL_CERT_FILE"));
+        assert_eq!(
+            err.chain,
+            vec![
+                "error sending request",
+                "client error (Connect)",
+                "invalid peer certificate: UnknownIssuer"
+            ]
+        );
+        assert!(err.transport && !err.timeout);
+    }
+
+    #[test]
+    fn daemon_error_hint_follows_the_auth_state_it_was_sent_with() {
+        let forbidden = json!({"status": 403, "error": "Forbidden", "message": "no"});
+        let mut keyed = forbidden.clone();
+        keyed["authenticated"] = json!(true);
+        let (err, authed) = *daemon_response_to_api_error(daemon_403(keyed));
+        assert!(authed);
+        assert_eq!(err.status, 403);
+        assert!(err.hint(authed).unwrap().contains("revoked"));
+
+        let mut anon = forbidden;
+        anon["authenticated"] = json!(false);
+        let (err, authed) = *daemon_response_to_api_error(daemon_403(anon));
+        assert!(!authed);
+        assert!(!err.hint(authed).unwrap().contains("revoked"));
+    }
+
+    /// The daemon forwards `to_yaml_value`, so the v1 fields survive the
+    /// round trip; the hint stays the CLI's own (`keenable login` on a 401).
+    #[test]
+    fn daemon_error_keeps_the_v1_fields() {
+        let sent = ApiError {
+            status: 401,
+            error: "Authentication failed".into(),
+            message: Some("Invalid API key.".into()),
+            request_id: Some("req-1".into()),
+            ..Default::default()
+        }
+        .with_v1_fields(&json!({
+            "type": "authentication_error",
+            "code": "invalid_api_key",
+            "fix": "Copy the full key and retry.",
+            "docs_url": "https://docs.keenable.ai/errors#invalid-api-key",
+        }));
+        let mut data = sent.to_yaml_value();
+        data["status"] = json!(401);
+        data["authenticated"] = json!(true);
+        let (err, authed) = *daemon_response_to_api_error(daemon_403(data));
+        assert_eq!(err.to_yaml_value(), sent.to_yaml_value());
+        assert_eq!(err.fix.as_deref(), Some("Copy the full key and retry."));
+        assert_eq!(
+            err.hint(authed).as_deref(),
+            Some("Run `keenable login` to authenticate.")
+        );
+    }
+
+    #[test]
+    fn epoch_seconds_become_rfc3339() {
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        // The smallest value still read as an epoch.
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(100_000_000)).as_deref(),
+            Some("1973-03-03T09:46:40Z")
+        );
+        // Leap day, and the last second of a year.
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(951782400)).as_deref(),
+            Some("2000-02-29T00:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1735689599)).as_deref(),
+            Some("2024-12-31T23:59:59Z")
+        );
+    }
+
+    #[test]
+    fn epoch_milliseconds_are_detected() {
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600000_u64)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600999_u64)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        // Milliseconds before 2001 (below the old 1e12 threshold).
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(946684800000_u64)).as_deref(),
+            Some("2000-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!("946684800000")).as_deref(),
+            Some("2000-01-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn values_below_1e8_are_not_epochs() {
+        for v in [
+            json!("20261022"),
+            json!("2026"),
+            json!(20261022),
+            json!(2026),
+            json!(0),
+            json!("0"),
+            json!(99_999_999),
+        ] {
+            assert_eq!(epoch_value_to_rfc3339(&v), None, "{v}");
+        }
+        // Left exactly as sent, string or number, and hidden from -p.
+        let mut data = json!({"published_at": "20261022", "acquired_at": 2026});
+        normalize_fetch_dates(&mut data);
+        assert_eq!(data["published_at"], json!("20261022"));
+        assert_eq!(data["acquired_at"], json!(2026));
+        assert_eq!(dates_line(&data), None);
+    }
+
+    #[test]
+    fn numeric_string_and_float_epochs_convert() {
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!("1792695600")).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(" 1792695600 ")).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            epoch_value_to_rfc3339(&json!(1792695600.75)).as_deref(),
+            Some("2026-10-22T19:00:00Z")
+        );
+    }
+
+    #[test]
+    fn iso_strings_and_junk_pass_through() {
+        for v in [
+            json!("2026-10-22T19:00:00Z"),
+            json!("2026-10-22"),
+            json!(""),
+            json!("yesterday"),
+            json!("-5"),
+            json!(-5),
+            json!(true),
+            json!(null),
+            json!({"s": 1}),
+            json!(1e20),
+        ] {
+            assert_eq!(epoch_value_to_rfc3339(&v), None, "{v}");
+        }
+    }
+
+    #[test]
+    fn normalize_fetch_dates_rewrites_only_epoch_fields() {
+        let mut data = json!({
+            "url": "https://example.com",
+            "published_at": 1792695600,
+            "acquired_at": "2026-10-23T08:00:00Z",
+            "content": "1792695600",
+        });
+        normalize_fetch_dates(&mut data);
+        assert_eq!(data["published_at"], "2026-10-22T19:00:00Z");
+        assert_eq!(data["acquired_at"], "2026-10-23T08:00:00Z");
+        assert_eq!(data["content"], "1792695600");
+        // Absent fields stay absent rather than appearing as null.
+        let mut bare = json!({"url": "https://example.com"});
+        normalize_fetch_dates(&mut bare);
+        assert!(bare.get("published_at").is_none());
+    }
+
+    #[test]
+    fn dates_line_lists_whichever_dates_exist() {
+        assert_eq!(
+            dates_line(&json!({"published_at": "2026-10-22T19:00:00Z"})).as_deref(),
+            Some("published: 2026-10-22T19:00:00Z")
+        );
+        assert_eq!(
+            dates_line(&json!({"published_at": "a", "acquired_at": "b"})).as_deref(),
+            Some("published: a  acquired: b")
+        );
+        assert_eq!(dates_line(&json!({"published_at": ""})), None);
+        assert_eq!(dates_line(&json!({})), None);
+    }
+
+    const NOTE: &str = "\n\n..._This content has been truncated to stay below 50 characters_...";
+
+    #[test]
+    fn truncation_note_is_detected() {
+        assert!(is_truncated(&format!("Example Domain{NOTE}")));
+        // Trailing whitespace after the note doesn't hide it.
+        assert!(is_truncated(&format!("Example Domain{NOTE}\n")));
+        // Underscores in the page text before the note are fine.
+        assert!(is_truncated(&format!("snake_case_name{NOTE}")));
+        assert!(is_truncated(NOTE.trim()));
+    }
+
+    #[test]
+    fn content_without_the_note_is_not_truncated() {
+        assert!(!is_truncated(""));
+        assert!(!is_truncated("Example Domain"));
+        assert!(!is_truncated("ends with _..."));
+        // The note quoted mid-page, not at the end.
+        assert!(!is_truncated(&format!("{NOTE}\n\nmore text")));
+        assert!(!is_truncated(
+            "..._This content has been truncated_with_more_underscores_..."
+        ));
+        // Same opening words, but not the API's sentence.
+        assert!(!is_truncated(
+            "Notes\n\n..._This content has been truncated by the author_..."
+        ));
+        assert!(!is_truncated(
+            "..._This content has been truncated to stay below many characters_..."
+        ));
+        assert!(!is_truncated(
+            "..._This content has been truncated to stay below  characters_..."
+        ));
+    }
+
+    #[test]
+    fn mark_truncated_adds_flag_before_content_and_keeps_content() {
+        let content = format!("Example Domain{NOTE}");
+        let mut data = json!({"url": "u", "title": "t", "content": content, "author": "a"});
+        mark_truncated(&mut data);
+        assert_eq!(data["truncated"], json!(true));
+        assert_eq!(data["content"], json!(content));
+        let keys: Vec<_> = data.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["url", "title", "truncated", "content", "author"]);
+    }
+
+    #[test]
+    fn mark_truncated_leaves_full_content_alone() {
+        let mut data = json!({"url": "u", "content": "Example Domain"});
+        mark_truncated(&mut data);
+        assert!(data.get("truncated").is_none());
+        let mut no_content = json!({"url": "u"});
+        mark_truncated(&mut no_content);
+        assert!(no_content.get("truncated").is_none());
     }
 
     #[test]
@@ -636,7 +1179,12 @@ mod tests {
             published_after: Some("2024-01-01".into()),
             ..filters()
         };
-        let body = build_search_body("rust async", Some("pro"), &f, Some(500), Some(20));
+        let options = SearchOptions {
+            snippet_max_length: Some(500),
+            max_results: Some(20),
+            session_id: None,
+        };
+        let body = build_search_body("rust async", Some("pro"), &f, &options);
         assert_eq!(
             body,
             json!({
@@ -652,7 +1200,7 @@ mod tests {
 
     #[test]
     fn build_search_body_sends_only_the_query_by_default() {
-        let body = build_search_body("q", None, &filters(), None, None);
+        let body = build_search_body("q", None, &filters(), &SearchOptions::default());
         assert_eq!(body, json!({"query": "q"}));
     }
 
@@ -683,58 +1231,28 @@ mod tests {
             message: Some(
                 r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#.into(),
             ),
-            retry_after: None,
+            ..Default::default()
         }
     }
 
     #[test]
-    fn invalid_filter_is_neither_auth_nor_rate_limit() {
+    fn invalid_filter_gets_the_fix_the_request_hint() {
         let err = invalid_filter();
         assert!(!err.is_auth_error());
-        assert!(!err.is_rate_limit());
-        assert_eq!(login_hint(&err, true), None);
-        assert_eq!(login_hint(&err, false), None);
+        for authed in [true, false] {
+            let h = err.hint(authed).unwrap();
+            assert!(h.contains("retrying unchanged fails"), "{h}");
+            assert!(!h.contains("keenable login"), "{h}");
+        }
     }
 
     #[test]
-    fn invalid_filter_yaml_keeps_the_message_and_has_no_hint() {
-        let err = invalid_filter();
-        let v = error_yaml(&err, login_hint(&err, false));
+    fn invalid_filter_yaml_keeps_the_message() {
+        let v = invalid_filter().to_yaml_value();
+        assert_eq!(v["error"], "invalid_filter");
         assert_eq!(
-            v,
-            json!({
-                "error": "invalid_filter",
-                "message": r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#,
-            })
-        );
-    }
-
-    #[test]
-    fn auth_and_rate_limit_errors_get_a_login_hint() {
-        let auth = ApiError {
-            status: 401,
-            error: "Authentication failed".into(),
-            message: None,
-            retry_after: None,
-        };
-        let v = error_yaml(&auth, login_hint(&auth, true));
-        assert!(v["hint"].as_str().unwrap().contains("keenable login"));
-
-        let limited = ApiError {
-            status: 429,
-            error: "Too many requests".into(),
-            message: None,
-            retry_after: Some(7),
-        };
-        assert!(
-            login_hint(&limited, true)
-                .unwrap()
-                .contains("Retry after 7s")
-        );
-        assert!(
-            login_hint(&limited, false)
-                .unwrap()
-                .contains("increase your limits")
+            v["message"],
+            r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#
         );
     }
 

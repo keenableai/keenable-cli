@@ -55,7 +55,9 @@ class Runner:
         self.home = home
         self.bin = bin
 
-    def __call__(self, *args: str, key: bool = True, timeout: int = 90) -> Result:
+    def __call__(
+        self, *args: str, key: bool = True, timeout: int = 90, env: dict | None = None
+    ) -> Result:
         cmd = [self.bin, *args]
         if key:
             assert API_KEY, "KEENABLE_API_KEY must be set for API tests"
@@ -64,10 +66,17 @@ class Runner:
         # MCP client configs) under this temp dir. HOME is set too, but on
         # Windows `dirs::home_dir()` ignores it and queries the real profile —
         # KEENABLE_HOME is what actually isolates the run on every platform.
+        overrides = env or {}
         env = {**os.environ, "HOME": self.home, "KEENABLE_HOME": self.home}
         # The CLI honors KEENABLE_API_KEY; tests control auth explicitly via
         # the --api-key flag, so keep the suite's own key out of the env.
         env.pop("KEENABLE_API_KEY", None)
+        # Per-call overrides; None removes the variable.
+        for name, value in overrides.items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
         # The CLI always emits UTF-8 (YAML results, the 👀 brand mark). Decode
         # as UTF-8 explicitly: `text=True` alone uses the locale encoding, which
         # on Windows is cp1252 and chokes on any non-Latin-1 byte (e.g. the

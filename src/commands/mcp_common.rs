@@ -209,6 +209,11 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
 
     // Pre-flight: validate API key (optional — unauth flow works without one)
     ui::label("Keenable CLI");
+    // Key validation would report a bad SSL_CERT_FILE as "can't verify"
+    // and carry on; it's a setup error, so stop here instead.
+    if config::get_api_key().is_some() {
+        crate::api::exit_on_bad_cert_file();
+    }
     let api_key: Option<String> = match config::get_api_key() {
         Some(key) => match validate_api_key(&key).await {
             KeyCheck::Valid => {
@@ -224,8 +229,12 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
             }
             // Can't verify ≠ invalid: silently stripping the key from client
             // configs over a network blip would break working setups.
-            KeyCheck::Unreachable => {
+            KeyCheck::Unreachable(err) => {
                 ui::warning("Could not verify API key (network error) — using the stored key");
+                if let Some(err) = err {
+                    ui::sub_info(&err.display());
+                    err.print_details();
+                }
                 Some(key)
             }
         },
