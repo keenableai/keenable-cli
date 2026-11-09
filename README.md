@@ -83,7 +83,8 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
   are accepted.
 - Spaces around comma-separated entries are trimmed. A blank entry, such as
   `--exclude-domain ""` or the trailing piece of `a.com,`, is sent as `""` and
-  the server rejects it with `invalid_filter`.
+  the server rejects it with `invalid_filter`. When a script builds the flag
+  from a variable that may be empty, omit the flag instead.
 - If every result is excluded, the response can be empty. Response warnings
   are printed in YAML and shown above the results with `-p`.
 

@@ -254,7 +254,7 @@ impl SearchArgs {
     fn filters(&self) -> commands::search::SearchFilters {
         commands::search::SearchFilters {
             site: self.site.clone(),
-            exclude_domains: commands::search::tidy_domain_list(self.exclude_domains.clone()),
+            exclude_domains: commands::search::trim_domain_entries(self.exclude_domains.clone()),
             acquired_after: self.acquired_after.clone(),
             acquired_before: self.acquired_before.clone(),
             published_after: self.published_after.clone(),

@@ -49,7 +49,7 @@ impl SearchFilters {
 }
 
 /// Trims each entry. Blank entries are kept so the server rejects them.
-pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
+pub fn trim_domain_entries(raw: Vec<String>) -> Vec<String> {
     raw.iter().map(|v| v.trim().to_string()).collect()
 }
 
@@ -1094,20 +1094,20 @@ mod tests {
     }
 
     #[test]
-    fn tidy_domain_list_leaves_absent_flags_absent() {
-        assert!(tidy_domain_list(vec![]).is_empty());
-        assert_eq!(tidy_domain_list(vec!["a.com".into()]), vec!["a.com"]);
+    fn trim_domain_entries_leaves_absent_flags_absent() {
+        assert!(trim_domain_entries(vec![]).is_empty());
+        assert_eq!(trim_domain_entries(vec!["a.com".into()]), vec!["a.com"]);
     }
 
     #[test]
-    fn tidy_domain_list_sends_blanks_beside_a_real_entry() {
+    fn trim_domain_entries_sends_blanks_beside_a_real_entry() {
         for (raw, want) in [
             (vec!["", "a.com"], vec!["", "a.com"]),
             (vec![" ", "a.com", ""], vec!["", "a.com", ""]),
             (vec!["a.com", "  "], vec!["a.com", ""]),
         ] {
             let raw: Vec<String> = raw.into_iter().map(String::from).collect();
-            assert_eq!(tidy_domain_list(raw.clone()), want, "{raw:?}");
+            assert_eq!(trim_domain_entries(raw.clone()), want, "{raw:?}");
         }
     }
 
