@@ -20,7 +20,7 @@ def test_subcommand_help(kn):
     res = kn("search", "--help", key=False)
     assert res.code == 0
     for flag in ("--mode", "--site", "--acquired-after", "--published-before", "--pretty", "--api-key",
-                 "--session-id", "--enable-wizards"):
+                 "--session-id"):
         assert flag in res.out, f"search --help missing {flag}"
     res = kn("fetch", "--help", key=False)
     assert res.code == 0

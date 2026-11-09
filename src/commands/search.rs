@@ -51,8 +51,6 @@ pub struct SearchOptions {
     pub max_results: Option<u64>,
     /// Groups related calls (search and fetch) under one session.
     pub session_id: Option<String>,
-    /// Experimental structured-data extraction; pro mode only.
-    pub enable_wizards: bool,
 }
 
 impl SearchOptions {
@@ -66,11 +64,6 @@ impl SearchOptions {
         }
         if let Some(id) = &self.session_id {
             map.insert("session_id".into(), json!(id));
-        }
-        // Sent only when set: the API rejects it outside pro mode, so an
-        // explicit `false` would turn a valid realtime search into a 400.
-        if self.enable_wizards {
-            map.insert("enable_wizards".into(), json!(true));
         }
         Value::Object(map)
     }
@@ -693,12 +686,11 @@ mod tests {
     }
 
     #[test]
-    fn search_options_include_session_and_wizards() {
+    fn search_options_include_session() {
         let v = SearchOptions {
             snippet_max_length: Some(500),
             max_results: Some(5),
             session_id: Some("sess-1".into()),
-            enable_wizards: true,
         }
         .to_json();
         assert_eq!(
@@ -707,7 +699,6 @@ mod tests {
                 "snippet_max_length": 500,
                 "max_results": 5,
                 "session_id": "sess-1",
-                "enable_wizards": true,
             })
         );
     }

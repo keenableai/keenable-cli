@@ -54,7 +54,6 @@ keenable search "query" --acquired-before 2026-05-01       # Date filter
 keenable search "query" --snippet-max-length 2000          # Longer snippets (180-10000)
 keenable search "query" --query-time 2026-01-01T00:00:00Z  # Point-in-time search
 keenable search "query" --session-id agent-run-42          # Group related calls in a session
-keenable search "query" --mode pro --enable-wizards        # Structured-data extraction (experimental, pro mode only)
 keenable search "query" --api-key KEY                      # Use a specific API key
 ```
 
