@@ -20,7 +20,6 @@ use std::sync::{Once, OnceLock};
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
 
-use crate::constants::API_BASE_URL;
 use crate::ui;
 
 // ── --verbose ───────────────────────────────────────────────────────
@@ -291,7 +290,7 @@ pub struct ProxyInfo {
 /// The proxy reqwest will use for the Keenable API, if any. Mirrors reqwest's
 /// own lookup (env vars first, then OS settings, minus NO_PROXY).
 pub fn proxy_for_api() -> Option<ProxyInfo> {
-    let uri: http::Uri = API_BASE_URL.parse().ok()?;
+    let uri: http::Uri = crate::api::api_base().parse().ok()?;
     let intercept = hyper_util::client::proxy::matcher::Matcher::from_system().intercept(&uri)?;
     let source = proxy_env_source(|n| std::env::var(n).ok())
         .unwrap_or("system proxy settings")

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::constants::API_BASE_URL;
+use crate::constants::DEFAULT_API_BASE_URL;
 
 // ── Known conflicting search MCP server names ───────────────────────
 
@@ -275,7 +275,7 @@ fn json_to_toml_value(v: &Value) -> toml_edit::Value {
 }
 
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
-    let mcp_url = format!("{}/mcp", API_BASE_URL);
+    let mcp_url = format!("{}/mcp", DEFAULT_API_BASE_URL);
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn http_entry_shape_per_ide() {
-        let url = format!("{}/mcp", API_BASE_URL);
+        let url = format!("{}/mcp", DEFAULT_API_BASE_URL);
 
         // Cursor: HTTP with streamable-http transport; no key → no headers.
         let cur = build_keenable_entry(&ide("cursor"), None);
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn codex_toml_entry_uses_http_headers() {
         let entry = build_keenable_entry(&ide("codex"), Some("keen_x"));
-        assert_eq!(entry["url"], json!(format!("{}/mcp", API_BASE_URL)));
+        assert_eq!(entry["url"], json!(format!("{}/mcp", DEFAULT_API_BASE_URL)));
         // TOML style nests the key under http_headers, not headers.
         assert_eq!(entry["http_headers"]["X-API-Key"], json!("keen_x"));
         assert!(entry.get("headers").is_none());

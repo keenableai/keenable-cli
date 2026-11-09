@@ -39,3 +39,8 @@ axoupdater = "0.10.2"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[dev-dependencies]
+# tests/tls_proxy.rs: a local TLS-intercepting proxy with a throwaway CA.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
