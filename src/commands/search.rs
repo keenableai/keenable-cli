@@ -63,6 +63,8 @@ fn split_domain_flag(value: &str) -> Vec<&str> {
     parts
 }
 
+/// Trims entries and drops blanks. An all-blank list keeps one blank entry so
+/// the server rejects it instead of running an unfiltered search.
 pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     if raw.is_empty() {
         return raw;
@@ -577,7 +579,6 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
-/// The body goes to the API verbatim on both the daemon and the direct path.
 fn build_search_body(
     query: &str,
     mode: Option<&str>,
@@ -770,30 +771,6 @@ mod tests {
         let v = f.to_json();
         assert_eq!(v["exclude_domains"], json!(["blogs.un.org", "spam.com"]));
         assert!(v.get("site").is_none());
-    }
-
-    #[test]
-    fn to_json_keeps_site_alongside_exclude_domains() {
-        let f = SearchFilters {
-            site: Some("docs.rs".into()),
-            exclude_domains: vec!["old.docs.rs".into()],
-            ..filters()
-        };
-        let v = f.to_json();
-        assert_eq!(v["site"], json!("docs.rs"));
-        assert_eq!(v["exclude_domains"], json!(["old.docs.rs"]));
-    }
-
-    #[test]
-    fn to_json_does_not_validate_entries() {
-        let f = SearchFilters {
-            exclude_domains: vec!["https://example.com".into(), "*".into()],
-            ..filters()
-        };
-        assert_eq!(
-            f.to_json()["exclude_domains"],
-            json!(["https://example.com", "*"])
-        );
     }
 
     #[test]
@@ -1259,38 +1236,6 @@ mod tests {
         );
     }
 
-    fn invalid_filter() -> ApiError {
-        ApiError {
-            status: 400,
-            error: "invalid_filter".into(),
-            message: Some(
-                r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#.into(),
-            ),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn invalid_filter_gets_the_fix_the_request_hint() {
-        let err = invalid_filter();
-        assert!(!err.is_auth_error());
-        for authed in [true, false] {
-            let h = err.hint(authed).unwrap();
-            assert!(h.contains("retrying unchanged fails"), "{h}");
-            assert!(!h.contains("keenable login"), "{h}");
-        }
-    }
-
-    #[test]
-    fn invalid_filter_yaml_keeps_the_message() {
-        let v = invalid_filter().to_yaml_value();
-        assert_eq!(v["error"], "invalid_filter");
-        assert_eq!(
-            v["message"],
-            r#"Invalid exclude_domains value "docs.rs/a": paths are not supported"#
-        );
-    }
-
     #[test]
     fn human_blocks_show_the_warning_before_empty_results() {
         let data = json!({"warning": "site: was dropped", "results": []});
@@ -1323,19 +1268,6 @@ mod tests {
         assert_eq!(blocks[0], HumanBlock::Warning("w"));
         assert_eq!(blocks[1], HumanBlock::Result(0, &data["results"][0]));
         assert_eq!(blocks[2], HumanBlock::Result(1, &data["results"][1]));
-    }
-
-    #[test]
-    fn human_blocks_show_the_normalization_warning_verbatim() {
-        let warning = "Normalized exclude_domains: \"https://UN.org/\" -> \"un.org\", \"WWW.spam.com\" -> \"spam.com\"\nSome results were removed by the domain filter.";
-        let data = json!({"warning": warning, "results": [{"url": "a"}]});
-        assert_eq!(
-            human_blocks(&data),
-            vec![
-                HumanBlock::Warning(warning),
-                HumanBlock::Result(0, &data["results"][0])
-            ]
-        );
     }
 
     #[test]

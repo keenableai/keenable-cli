@@ -523,7 +523,10 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, Box<ApiEr
         .unwrap_or("Request failed")
         .to_string();
 
-    let message = body_json.as_ref().and_then(error_message);
+    let message = body_json
+        .as_ref()
+        .and_then(|v| v["message"].as_str())
+        .map(|s| s.to_string());
 
     // Also check the body: v1 `retry_after_seconds`, else the deprecated
     // `retryAfter` alias.
@@ -548,18 +551,6 @@ pub async fn handle_response(resp: reqwest::Response) -> Result<Value, Box<ApiEr
         Some(body) => err.with_v1_fields(body),
         None => err,
     }))
-}
-
-/// The body's `message`, or one built from an `invalid_filter` body's
-/// `{field, value, reason}` so the rejected entry is still shown.
-fn error_message(body: &Value) -> Option<String> {
-    if let Some(m) = body["message"].as_str() {
-        return Some(m.to_string());
-    }
-    let field = body["field"].as_str()?;
-    let value = body["value"].as_str().unwrap_or_default();
-    let reason = body["reason"].as_str().unwrap_or("invalid value");
-    Some(format!("Invalid {field} value \"{value}\": {reason}"))
 }
 
 #[cfg(test)]
@@ -844,26 +835,6 @@ mod tests {
     }
 
     #[test]
-    fn error_message_prefers_the_message_field() {
-        let body = serde_json::json!({"error": "x", "message": "m", "field": "f"});
-        assert_eq!(error_message(&body).as_deref(), Some("m"));
-    }
-
-    #[test]
-    fn error_message_is_built_from_an_invalid_filter_body() {
-        let body = serde_json::json!({
-            "error": "invalid_filter",
-            "field": "exclude_domains",
-            "value": "un.org/press",
-            "reason": "paths are not supported",
-        });
-        assert_eq!(
-            error_message(&body).as_deref(),
-            Some(r#"Invalid exclude_domains value "un.org/press": paths are not supported"#)
-        );
-    }
-
-    #[test]
     fn rate_limit_reset_is_the_retry_time_when_no_retry_after() {
         let mut e = err(429, "Too many requests");
         e.rate_limit_reset = Some("2026-11-02T19:48:53.100Z".into());
@@ -877,11 +848,6 @@ mod tests {
             e.to_yaml_value()["rate_limit_reset"],
             "2026-11-02T19:48:53.100Z"
         );
-    }
-
-    #[test]
-    fn error_message_is_absent_without_message_or_field() {
-        assert_eq!(error_message(&serde_json::json!({"error": "x"})), None);
     }
 
     #[test]
