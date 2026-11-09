@@ -357,7 +357,7 @@ pub async fn login(api_key: Option<&str>) {
         eprintln!();
         std::process::exit(1);
     };
-    let client = crate::api::plain_client().unwrap_or_else(|e| fail(e.into()));
+    let client = crate::api::bare_client().unwrap_or_else(|e| fail(e.into()));
 
     // Step 1: Request device code
     let label = format!("{}-cli", machine_name());

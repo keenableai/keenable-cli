@@ -362,15 +362,6 @@ pub async fn validate_api_key(api_key: &str) -> KeyCheck {
     }
 }
 
-/// A client with the CLI's trust roots and proxy handling but no Keenable
-/// headers — for non-API hosts and endpoints that need no default headers.
-pub fn plain_client() -> Result<Client, net::CertFileError> {
-    Ok(net::client_builder()?
-        .user_agent(USER_AGENT)
-        .build()
-        .expect("HTTP client config is valid"))
-}
-
 pub fn api_key_client(api_key: &str) -> Result<Client, net::CertFileError> {
     let mut headers = base_headers();
     // Keys from --api-key or a hand-edited config may carry stray whitespace

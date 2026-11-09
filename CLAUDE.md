@@ -165,7 +165,7 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 
 ### Network: Proxies and Certificates (`src/net.rs`)
 
-Build every HTTP client through `net::client_builder()` (or the `api::api_key_client` / `bare_client` / `plain_client` helpers), never `reqwest::Client::new()`. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local TLS-intercepting proxy to check trust, and `tests/e2e/test_network.py` covers the error output, proxies and `--verbose`.
+Build every HTTP client through `net::client_builder()` (or the `api::api_key_client` / `bare_client` helpers, which add `X-Keenable-Title`), never `reqwest::Client::new()`. Out of scope: `keenable update` downloads through axoupdater's own reqwest client, which this does not cover. `tests/tls_proxy.rs` runs the binary through a local TLS-intercepting proxy to check trust, and `tests/e2e/test_network.py` covers the error output, proxies and `--verbose`.
 
 - **Trust:** bundled Mozilla roots + the OS certificate store. `SSL_CERT_FILE` / `SSL_CERT_DIR` (PEM) replace the OS store when set; the bundled roots always stay. Empty values are removed in `main` before the runtime starts and count as unset. An unusable `SSL_CERT_FILE` is an `Invalid SSL_CERT_FILE` error naming the file (exit 1); `login` and `configure-mcp` check it before key validation so it isn't mistaken for a network blip.
 - **Proxy:** reqwest honors `HTTPS_PROXY` / `https_proxy`, `ALL_PROXY` / `all_proxy`, `HTTP_PROXY`, `NO_PROXY` / `no_proxy`, and with the `system-proxy` feature the macOS/Windows proxy settings. Never call `.no_proxy()`. Proxy passwords are never printed.
