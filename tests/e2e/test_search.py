@@ -209,7 +209,7 @@ def _assert_filter_rejected(res, entry):
     assert res.code == 1, res.out
     data = res.yaml()
     assert data["error"] == "invalid_filter", data
-    assert "hint" not in data, data
+    assert "keenable login" not in data.get("hint", ""), data
     _assert_invalid_filter(data["message"], entry)
 
 

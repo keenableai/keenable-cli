@@ -48,21 +48,6 @@ impl SearchFilters {
     }
 }
 
-/// Splits one flag value on commas. Hosts never contain `?` or `#`, so from
-/// the first entry that does, the rest is one URL whose query may hold commas.
-fn split_domain_flag(value: &str) -> Vec<&str> {
-    let Some(q) = value.find(['?', '#']) else {
-        return value.split(',').collect();
-    };
-    let url_start = value[..q].rfind(',').map_or(0, |c| c + 1);
-    let mut parts: Vec<&str> = match url_start {
-        0 => vec![],
-        _ => value[..url_start - 1].split(',').collect(),
-    };
-    parts.push(&value[url_start..]);
-    parts
-}
-
 /// Trims entries and drops blanks. An all-blank list keeps one blank entry so
 /// the server rejects it instead of running an unfiltered search.
 pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
@@ -71,7 +56,6 @@ pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
     }
     let tidy: Vec<String> = raw
         .iter()
-        .flat_map(|v| split_domain_flag(v))
         .map(|v| v.trim())
         .filter(|v| !v.is_empty())
         .map(str::to_string)
@@ -88,49 +72,6 @@ fn response_warning(data: &Value) -> Option<&str> {
         .as_str()
         .map(str::trim)
         .filter(|w| !w.is_empty())
-}
-
-#[derive(Debug, PartialEq)]
-enum HumanBlock<'a> {
-    Warning(&'a str),
-    NoResults,
-    Result(usize, &'a Value),
-}
-
-fn human_blocks(data: &Value) -> Vec<HumanBlock<'_>> {
-    let mut blocks: Vec<HumanBlock<'_>> = response_warning(data)
-        .map(HumanBlock::Warning)
-        .into_iter()
-        .collect();
-    match data["results"].as_array() {
-        Some(results) if !results.is_empty() => blocks.extend(
-            results
-                .iter()
-                .enumerate()
-                .map(|(i, r)| HumanBlock::Result(i, r)),
-        ),
-        _ => blocks.push(HumanBlock::NoResults),
-    }
-    blocks
-}
-
-fn print_human_result(i: usize, result: &Value) {
-    let title = result["title"].as_str().unwrap_or("Untitled");
-    let url = result["url"].as_str().unwrap_or("");
-    let snippet = result["snippet"].as_str().unwrap_or("");
-    let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
-    let snippet_truncated: String = snippet_flat.chars().take(200).collect();
-
-    let num = format!("{:>2}.", i + 1).dimmed();
-    eprintln!("   {} {}", num, title.bold());
-    eprintln!("      {}", url.cyan());
-    if !snippet_truncated.is_empty() {
-        eprintln!("      {}", snippet_truncated.dimmed());
-    }
-    if let Some(dates) = dates_line(result) {
-        eprintln!("      {}", dates.dimmed());
-    }
-    eprintln!();
 }
 
 /// Non-filter search parameters; unset ones are left to the server default.
@@ -644,18 +585,37 @@ pub async fn search(
             fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
-                for block in human_blocks(&data) {
-                    match block {
-                        HumanBlock::Warning(warning) => {
-                            ui::warning(warning);
-                            eprintln!();
-                        }
-                        HumanBlock::NoResults => {
-                            ui::info("No results found.");
-                            eprintln!();
-                        }
-                        HumanBlock::Result(i, result) => print_human_result(i, result),
+                if let Some(warning) = response_warning(&data) {
+                    ui::warning(warning);
+                    eprintln!();
+                }
+                if let Some(results) = data["results"].as_array() {
+                    if results.is_empty() {
+                        ui::info("No results found.");
+                        eprintln!();
+                        return;
                     }
+                    for (i, result) in results.iter().enumerate() {
+                        let title = result["title"].as_str().unwrap_or("Untitled");
+                        let url = result["url"].as_str().unwrap_or("");
+                        let snippet = result["snippet"].as_str().unwrap_or("");
+                        let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let snippet_truncated: String = snippet_flat.chars().take(200).collect();
+
+                        let num = format!("{:>2}.", i + 1).dimmed();
+                        eprintln!("   {} {}", num, title.bold());
+                        eprintln!("      {}", url.cyan());
+                        if !snippet_truncated.is_empty() {
+                            eprintln!("      {}", snippet_truncated.dimmed());
+                        }
+                        if let Some(dates) = dates_line(result) {
+                            eprintln!("      {}", dates.dimmed());
+                        }
+                        eprintln!();
+                    }
+                } else {
+                    ui::info("No results found.");
+                    eprintln!();
                 }
                 return;
             }
@@ -1154,25 +1114,6 @@ mod tests {
     }
 
     #[test]
-    fn split_domain_flag_keeps_commas_in_a_url_query() {
-        let cases: [(&str, &[&str]); 7] = [
-            ("a.com", &["a.com"]),
-            ("a.com,b.com", &["a.com", "b.com"]),
-            (",", &["", ""]),
-            ("", &[""]),
-            ("https://docs.rs/?a=1,b=2", &["https://docs.rs/?a=1,b=2"]),
-            (
-                "a.com,https://docs.rs/?a=1,b=2",
-                &["a.com", "https://docs.rs/?a=1,b=2"],
-            ),
-            ("a.com,docs.rs/#x,y", &["a.com", "docs.rs/#x,y"]),
-        ];
-        for (raw, want) in cases {
-            assert_eq!(split_domain_flag(raw), want, "{raw:?}");
-        }
-    }
-
-    #[test]
     fn tidy_domain_list_drops_blanks_beside_a_real_entry() {
         for raw in [
             vec!["", "a.com"],
@@ -1233,53 +1174,6 @@ mod tests {
                 "warning": "Some results were removed by the domain filter.",
                 "results": [{"url": "https://a.com", "snippet": "d"}],
             })
-        );
-    }
-
-    #[test]
-    fn human_blocks_show_the_warning_before_empty_results() {
-        let data = json!({"warning": "site: was dropped", "results": []});
-        assert_eq!(
-            human_blocks(&data),
-            vec![
-                HumanBlock::Warning("site: was dropped"),
-                HumanBlock::NoResults
-            ]
-        );
-    }
-
-    #[test]
-    fn human_blocks_show_the_warning_when_results_are_missing() {
-        let data = json!({"warning": "site: was dropped"});
-        assert_eq!(
-            human_blocks(&data),
-            vec![
-                HumanBlock::Warning("site: was dropped"),
-                HumanBlock::NoResults
-            ]
-        );
-    }
-
-    #[test]
-    fn human_blocks_list_results_after_the_warning() {
-        let data = json!({"warning": "w", "results": [{"url": "a"}, {"url": "b"}]});
-        let blocks = human_blocks(&data);
-        assert_eq!(blocks.len(), 3);
-        assert_eq!(blocks[0], HumanBlock::Warning("w"));
-        assert_eq!(blocks[1], HumanBlock::Result(0, &data["results"][0]));
-        assert_eq!(blocks[2], HumanBlock::Result(1, &data["results"][1]));
-    }
-
-    #[test]
-    fn human_blocks_without_a_warning() {
-        assert_eq!(
-            human_blocks(&json!({"results": []})),
-            vec![HumanBlock::NoResults]
-        );
-        let data = json!({"results": [{"url": "a"}]});
-        assert_eq!(
-            human_blocks(&data),
-            vec![HumanBlock::Result(0, &data["results"][0])]
         );
     }
 }

@@ -206,7 +206,7 @@ struct SearchArgs {
     site: Option<String>,
 
     /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct hosts. Hosts only, no paths, suffixes like .gov, wildcards or IPs. Private-suffix hosts like github.io are accepted
-    #[arg(long = "exclude-domain", value_name = "DOMAIN")]
+    #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
     exclude_domains: Vec<String>,
 
     /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
