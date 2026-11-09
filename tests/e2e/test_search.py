@@ -227,6 +227,11 @@ def test_blank_exclude_flag_is_rejected(kn, domain_flags, blank):
     _assert_filter_rejected(kn("search", "x", f"--exclude-domain={blank}"), "")
 
 
+@pytest.mark.parametrize("args", [["--exclude-domain=", "--exclude-domain", "a.com"], ["--exclude-domain", "a.com,"]])
+def test_blank_beside_real_entry_is_rejected(kn, domain_flags, args):
+    _assert_filter_rejected(kn("search", "x", *args), "")
+
+
 REJECTED_ENTRIES = [
     "*", ".com", ".gov", "*.gov", "*.docs.rs", "docs.rs/releases",
     "user@docs.rs", "127.0.0.1", "doc s.rs", "localhost", "co.uk", "docs.notarealtld",
@@ -247,7 +252,7 @@ def test_private_suffix_host_is_accepted(kn, domain_flags, host):
 
 
 def test_fixable_entries_are_cleaned_up(kn, domain_flags):
-    res = kn("search", "rust async", "--exclude-domain", " HTTPS://WWW.Docs.RS:443/?a=1 ")
+    res = kn("search", "rust async", "--exclude-domain", "HTTPS://WWW.Docs.RS:443/?a=1")
     assert res.code == 0, res.out + res.err
     for r in res.yaml().get("results") or []:
         assert not host_under(host_of(r["url"]), "docs.rs"), r["url"]

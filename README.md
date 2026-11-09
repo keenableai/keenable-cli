@@ -81,9 +81,9 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
   suffixes (`.com`), wildcards (`*.gov`), IP addresses, `user@host` and
   invalid hosts. Private-suffix hosts such as `github.io` or `blogspot.com`
   are accepted.
-- Spaces around comma-separated entries and stray commas are ignored. A blank
-  value such as `--exclude-domain ""` is still sent, so the server rejects it
-  instead of running an unfiltered search.
+- Spaces around comma-separated entries are trimmed. A blank entry, such as
+  `--exclude-domain ""` or the trailing piece of `a.com,`, is sent as `""` and
+  the server rejects it with `invalid_filter`.
 - If every result is excluded, the response can be empty. Response warnings
   are printed in YAML and shown above the results with `-p`.
 

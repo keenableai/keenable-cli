@@ -478,18 +478,16 @@ mod tests {
     }
 
     #[test]
-    fn comma_lists_tolerate_spaces_and_stray_commas() {
+    fn comma_lists_trim_spaces_and_keep_stray_commas() {
         let v = search_filters(&[
             "--exclude-domain",
             " a.com , b.com",
-            "--exclude-domain",
-            "c.com,",
             "--exclude-domain",
             ",spam.com,,",
         ]);
         assert_eq!(
             v["exclude_domains"],
-            json!(["a.com", "b.com", "c.com", "spam.com"])
+            json!(["a.com", "b.com", "", "spam.com", "", ""])
         );
     }
 
@@ -507,17 +505,23 @@ mod tests {
 
     #[test]
     fn blank_domain_flag_still_reaches_the_server() {
-        for blank in ["", " ", ","] {
+        for (blank, want) in [
+            ("", json!([""])),
+            (" ", json!([""])),
+            (",", json!(["", ""])),
+        ] {
             let v = search_filters(&[&format!("--exclude-domain={blank}")]);
-            assert_eq!(v["exclude_domains"], json!([""]), "{blank:?}");
+            assert_eq!(v["exclude_domains"], want, "{blank:?}");
         }
     }
 
     #[test]
-    fn blank_domain_flag_beside_a_real_one_is_dropped() {
+    fn blank_domain_flag_beside_a_real_one_is_sent() {
         let flag = "--exclude-domain";
         let v = search_filters(&["--exclude-domain=", flag, "a.com", flag, " "]);
-        assert_eq!(v["exclude_domains"], json!(["a.com"]));
+        assert_eq!(v["exclude_domains"], json!(["", "a.com", ""]));
+        let v = search_filters(&[flag, "a.com,"]);
+        assert_eq!(v["exclude_domains"], json!(["a.com", ""]));
     }
 
     #[test]

@@ -48,23 +48,9 @@ impl SearchFilters {
     }
 }
 
-/// Trims entries and drops blanks. An all-blank list keeps one blank entry so
-/// the server rejects it instead of running an unfiltered search.
+/// Trims each entry. Blank entries are kept so the server rejects them.
 pub fn tidy_domain_list(raw: Vec<String>) -> Vec<String> {
-    if raw.is_empty() {
-        return raw;
-    }
-    let tidy: Vec<String> = raw
-        .iter()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .collect();
-    if tidy.is_empty() {
-        vec![String::new()]
-    } else {
-        tidy
-    }
+    raw.iter().map(|v| v.trim().to_string()).collect()
 }
 
 fn response_warning(data: &Value) -> Option<&str> {
@@ -1114,14 +1100,14 @@ mod tests {
     }
 
     #[test]
-    fn tidy_domain_list_drops_blanks_beside_a_real_entry() {
-        for raw in [
-            vec!["", "a.com"],
-            vec![" ", "a.com", ""],
-            vec!["a.com", "  "],
+    fn tidy_domain_list_sends_blanks_beside_a_real_entry() {
+        for (raw, want) in [
+            (vec!["", "a.com"], vec!["", "a.com"]),
+            (vec![" ", "a.com", ""], vec!["", "a.com", ""]),
+            (vec!["a.com", "  "], vec!["a.com", ""]),
         ] {
             let raw: Vec<String> = raw.into_iter().map(String::from).collect();
-            assert_eq!(tidy_domain_list(raw.clone()), vec!["a.com"], "{raw:?}");
+            assert_eq!(tidy_domain_list(raw.clone()), want, "{raw:?}");
         }
     }
 
