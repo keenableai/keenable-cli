@@ -184,8 +184,9 @@ pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error
         serde_json::to_string_pretty(config).map_err(std::io::Error::other)?
     };
     // Atomic: a crash mid-write must not leave a truncated config
-    // (e.g. ~/.claude.json holds all of Claude Code's state).
-    crate::config::atomic_write(path, &content, false)
+    // (e.g. ~/.claude.json holds all of Claude Code's state). A config that
+    // holds an API key is written owner-only, like ~/.keenable/config.json.
+    crate::config::atomic_write(path, &content, content.contains("X-API-Key"))
 }
 
 /// Render `desired` as TOML by minimally patching the existing file.
@@ -297,8 +298,18 @@ pub fn mcp_public_url() -> String {
     format!("{}/mcp-public", DEFAULT_API_BASE_URL)
 }
 
+/// Clients that get /mcp-public when no key is stored: /mcp publishes OAuth
+/// discovery, which can make them start a browser sign-in.
+fn keyless_uses_public_endpoint(ide: &IDEDef) -> bool {
+    matches!(ide.flag, "codex" | "devin")
+}
+
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
-    let mcp_url = mcp_url();
+    let mcp_url = if api_key.is_none() && keyless_uses_public_endpoint(ide) {
+        mcp_public_url()
+    } else {
+        mcp_url()
+    };
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
@@ -314,13 +325,7 @@ pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
             entry
         }
         McpEntryStyle::Toml => {
-            // Keyless Codex gets /mcp-public: /mcp publishes OAuth discovery,
-            // which can make Codex start a browser sign-in.
-            let url = match api_key {
-                Some(_) => mcp_url,
-                None => mcp_public_url(),
-            };
-            let mut entry = json!({ "url": url });
+            let mut entry = json!({ "url": mcp_url });
             if let Some(key) = api_key {
                 entry["http_headers"] = json!({ "X-API-Key": key });
             }
@@ -423,7 +428,8 @@ mod tests {
         );
 
         let keyless = build_keenable_entry(&devin, None);
-        assert_eq!(keyless, json!({ "url": mcp_url() }));
+        assert_eq!(keyless, json!({ "url": mcp_public_url() }));
+        assert!(is_keenable_url(&extract_url(&keyless).unwrap()));
 
         let keyed = build_keenable_entry(&devin, Some("keen_x"));
         assert_eq!(keyed["url"], json!(mcp_url()));
@@ -446,6 +452,35 @@ mod tests {
         assert_eq!(entry["serverUrl"], json!(mcp_url()));
         assert!(entry.get("url").is_none());
         assert!(entry.get("type").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_with_api_key_is_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("keenable-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let keyed = dir.join("keyed.json");
+        std::fs::write(&keyed, "{}").unwrap();
+        std::fs::set_permissions(&keyed, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let config = json!({ "mcpServers": { "keenable": { "url": mcp_url(), "headers": { "X-API-Key": "keen_x" } } } });
+        write_config(&keyed, &config).unwrap();
+        let mode = std::fs::metadata(&keyed).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let keyless = dir.join("keyless.json");
+        std::fs::write(&keyless, "{}").unwrap();
+        std::fs::set_permissions(&keyless, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_config(
+            &keyless,
+            &json!({ "mcpServers": { "keenable": { "url": mcp_public_url() } } }),
+        )
+        .unwrap();
+        let mode = std::fs::metadata(&keyless).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

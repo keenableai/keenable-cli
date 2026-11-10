@@ -143,8 +143,8 @@ def test_configure_devin_writes_url_entry(mcp):
     assert res.code == 0, res.err
 
     servers = read_json(devin_cfg)["mcpServers"]
-    # Devin Desktop: URL under "url", no transport type; keyless still uses /mcp.
-    assert servers["keenable"] == {"url": MCP_URL}
+    # Devin Desktop: URL under "url", no transport type; keyless uses /mcp-public.
+    assert servers["keenable"] == {"url": MCP_PUBLIC_URL}
     assert "old-keen" not in servers
     assert servers["github"]["command"] == "npx"
     # The legacy Windsurf file is a separate client and stays untouched.
@@ -158,6 +158,26 @@ def test_configure_devin_writes_url_entry(mcp):
     assert res.code == 0, res.err
     servers = read_json(devin_cfg).get("mcpServers", {})
     assert "keenable" not in servers
+    assert servers["github"]["command"] == "npx"
+
+
+def test_reset_devin_removes_a_renamed_keenable_entry(mcp):
+    home = Path(mcp.home)
+    devin_dir = home / ".config" / "devin"
+    devin_dir.mkdir(parents=True)
+    devin_cfg = devin_dir / "mcp_config.json"
+    # Only a differently named entry points at Keenable.
+    devin_cfg.write_text(json.dumps({
+        "mcpServers": {
+            "old-keen": {"url": MCP_URL},
+            "github": {"command": "npx", "args": ["server-github"]},
+        }
+    }))
+
+    res = mcp("reset", "--devin", "--yes", key=False)
+    assert res.code == 0, res.err
+    servers = read_json(devin_cfg)["mcpServers"]
+    assert "old-keen" not in servers
     assert servers["github"]["command"] == "npx"
 
 
@@ -185,7 +205,7 @@ def test_configure_all_detected_clients(mcp):
 
     assert "keenable" in read_json(cursor_cfg(home))["mcpServers"]
     devin = read_json(home / ".config" / "devin" / "mcp_config.json")
-    assert devin["mcpServers"]["keenable"]["url"] == MCP_URL
+    assert devin["mcpServers"]["keenable"]["url"] == MCP_PUBLIC_URL
     windsurf = read_json(home / ".codeium" / "windsurf" / "mcp_config.json")
     assert windsurf["mcpServers"]["keenable"]["serverUrl"] == MCP_URL
     assert "[mcp_servers.keenable]" in (home / ".codex" / "config.toml").read_text()
