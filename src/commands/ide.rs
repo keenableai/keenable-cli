@@ -177,6 +177,19 @@ pub fn read_config_lenient(path: &PathBuf) -> Value {
     read_config(path).unwrap_or_else(|_| json!({}))
 }
 
+/// True when some object in the config has an `X-API-Key` field, the header
+/// every client entry uses for a key. Checked on the parsed structure, so a
+/// comment or another value that merely mentions the header doesn't count.
+fn holds_api_key(config: &Value) -> bool {
+    match config {
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("X-API-Key") || holds_api_key(v)),
+        Value::Array(items) => items.iter().any(holds_api_key),
+        _ => false,
+    }
+}
+
 pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error> {
     let content = if is_toml(path) {
         toml_patch(path, config)?
@@ -186,7 +199,7 @@ pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error
     // Atomic: a crash mid-write must not leave a truncated config
     // (e.g. ~/.claude.json holds all of Claude Code's state). A config that
     // holds an API key is written owner-only, like ~/.keenable/config.json.
-    crate::config::atomic_write(path, &content, content.contains("X-API-Key"))
+    crate::config::atomic_write(path, &content, holds_api_key(config))
 }
 
 /// Render `desired` as TOML by minimally patching the existing file.
@@ -355,8 +368,17 @@ pub fn extract_url(entry: &Value) -> Option<String> {
 }
 
 /// Check if a URL points to Keenable (prod or test).
+/// True when the URL's host is a Keenable API host. Compares the parsed host,
+/// so a URL that only contains the name (`api.keenable.ai.example.com`, a
+/// query string) doesn't match.
 pub fn is_keenable_url(url: &str) -> bool {
-    KEENABLE_URLS.iter().any(|k| url.contains(k))
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    KEENABLE_URLS.iter().any(|k| host.eq_ignore_ascii_case(k))
 }
 
 /// Check if a server name is a known conflicting search server.
@@ -480,6 +502,18 @@ mod tests {
         let mode = std::fs::metadata(&keyless).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o644);
 
+        // A mention of the header in a value is not a key.
+        let mention = dir.join("mention.json");
+        std::fs::write(&mention, "{}").unwrap();
+        std::fs::set_permissions(&mention, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_config(
+            &mention,
+            &json!({ "note": "send X-API-Key to authenticate" }),
+        )
+        .unwrap();
+        let mode = std::fs::metadata(&mention).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -526,6 +560,11 @@ mod tests {
         assert!(is_keenable_url("https://api.keenable.ai/mcp"));
         assert!(is_keenable_url("https://api-test.keenable.ai/mcp"));
         assert!(!is_keenable_url("https://example.com/mcp"));
+        assert!(!is_keenable_url("https://api.keenable.ai.evil.example/mcp"));
+        assert!(!is_keenable_url(
+            "https://example.com/mcp?u=api.keenable.ai"
+        ));
+        assert!(is_keenable_url("https://API.keenable.ai/mcp-public"));
     }
 
     #[test]
