@@ -143,60 +143,9 @@ enum Commands {
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --session-id agent-run-42           Group related calls in a session\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key\n  keenable search \"rust async\" -p -v                              Show proxy, trusted CAs and full errors"
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --exclude-domain spam.com,ads.net     Never these domains (repeatable)\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --session-id agent-run-42           Group related calls in a session\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key\n  keenable search \"rust async\" -p -v                              Show proxy, trusted CAs and full errors"
     )]
-    Search {
-        /// Search query
-        query: String,
-
-        /// Search mode
-        #[arg(long)]
-        mode: Option<String>,
-
-        /// Restrict results to a specific site (e.g. "docs.rs")
-        #[arg(long)]
-        site: Option<String>,
-
-        /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        acquired_after: Option<String>,
-
-        /// Filter to pages acquired/indexed before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        acquired_before: Option<String>,
-
-        /// Filter to pages published after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        published_after: Option<String>,
-
-        /// Filter to pages published before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        published_before: Option<String>,
-
-        /// Maximum snippet length in characters (API accepts 180-10000)
-        #[arg(long = "snippet-max-length")]
-        snippet_max_length: Option<u64>,
-
-        /// Maximum number of results (API accepts 1-50, default 10)
-        #[arg(long = "max-results")]
-        max_results: Option<u64>,
-
-        /// Point-in-time search: only pages available on or before this timestamp (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
-        #[arg(long)]
-        query_time: Option<String>,
-
-        /// Session ID that groups related searches and fetches (e.g. one agent run)
-        #[arg(long = "session-id", value_name = "ID")]
-        session_id: Option<String>,
-
-        /// Pretty-print output for humans instead of YAML
-        #[arg(short = 'p', long = "pretty")]
-        pretty: bool,
-
-        /// API key (overrides stored key)
-        #[arg(long = "api-key")]
-        api_key: Option<String>,
-    },
+    Search(SearchArgs),
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
@@ -243,6 +192,78 @@ enum Commands {
     Daemon,
 }
 
+#[derive(clap::Args)]
+struct SearchArgs {
+    /// Search query
+    query: String,
+
+    /// Search mode
+    #[arg(long)]
+    mode: Option<String>,
+
+    /// Restrict results to a specific site (e.g. "docs.rs")
+    #[arg(long)]
+    site: Option<String>,
+
+    /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct hosts. Hosts only, no paths, suffixes like .gov, wildcards or IPs. Private-suffix hosts like github.io are accepted
+    #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
+    exclude_domains: Vec<String>,
+
+    /// Filter to pages acquired/indexed after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    acquired_after: Option<String>,
+
+    /// Filter to pages acquired/indexed before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    acquired_before: Option<String>,
+
+    /// Filter to pages published after this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    published_after: Option<String>,
+
+    /// Filter to pages published before this date (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    published_before: Option<String>,
+
+    /// Maximum snippet length in characters (API accepts 180-10000)
+    #[arg(long = "snippet-max-length")]
+    snippet_max_length: Option<u64>,
+
+    /// Maximum number of results (API accepts 1-50, default 10)
+    #[arg(long = "max-results")]
+    max_results: Option<u64>,
+
+    /// Point-in-time search: only pages available on or before this timestamp (YYYY-MM-DD, ISO 8601, or relative e.g. 7d, 3mo, 1y)
+    #[arg(long)]
+    query_time: Option<String>,
+
+    /// Session ID that groups related searches and fetches (e.g. one agent run)
+    #[arg(long = "session-id", value_name = "ID")]
+    session_id: Option<String>,
+
+    /// Pretty-print output for humans instead of YAML
+    #[arg(short = 'p', long = "pretty")]
+    pretty: bool,
+
+    /// API key (overrides stored key)
+    #[arg(long = "api-key")]
+    api_key: Option<String>,
+}
+
+impl SearchArgs {
+    fn filters(&self) -> commands::search::SearchFilters {
+        commands::search::SearchFilters {
+            site: self.site.clone(),
+            exclude_domains: commands::search::trim_domain_entries(self.exclude_domains.clone()),
+            acquired_after: self.acquired_after.clone(),
+            acquired_before: self.acquired_before.clone(),
+            published_after: self.published_after.clone(),
+            published_before: self.published_before.clone(),
+            query_time: self.query_time.clone(),
+        }
+    }
+}
+
 fn collect_client_flags(
     all: bool,
     claude_code: bool,
@@ -271,7 +292,7 @@ fn collect_client_flags(
 /// error as YAML on stdout, like API errors.
 fn check_api_base(command: &Commands) {
     let yaml = match command {
-        Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => !*pretty,
+        Commands::Search(SearchArgs { pretty, .. }) | Commands::Fetch { pretty, .. } => !*pretty,
         Commands::Login { .. } | Commands::ConfigureMcp { .. } | Commands::Daemon => false,
         _ => return,
     };
@@ -306,7 +327,7 @@ async fn run() {
     // ~5s (on cache miss) to agent-facing YAML commands and the daemon.
     // `update` is excluded because it performs its own explicit check.
     let wants_update_check = match &cli.command {
-        Commands::Search { pretty, .. } | Commands::Fetch { pretty, .. } => *pretty,
+        Commands::Search(SearchArgs { pretty, .. }) | Commands::Fetch { pretty, .. } => *pretty,
         Commands::Daemon | Commands::Update => false,
         _ => true,
     };
@@ -352,40 +373,18 @@ async fn run() {
             Some(ConfigAction::Get { key }) => commands::config_cmd::config_get(&key),
             Some(ConfigAction::Unset { key }) => commands::config_cmd::config_unset(&key),
         },
-        Commands::Search {
-            query,
-            mode,
-            site,
-            acquired_after,
-            acquired_before,
-            published_after,
-            published_before,
-            snippet_max_length,
-            max_results,
-            query_time,
-            session_id,
-            pretty,
-            api_key,
-        } => {
-            let filters = commands::search::SearchFilters {
-                site,
-                acquired_after,
-                acquired_before,
-                published_after,
-                published_before,
-                query_time,
-            };
+        Commands::Search(args) => {
             commands::search::search(
-                &query,
-                mode.as_deref(),
-                filters,
+                &args.query,
+                args.mode.as_deref(),
+                args.filters(),
                 commands::search::SearchOptions {
-                    snippet_max_length,
-                    max_results,
-                    session_id,
+                    snippet_max_length: args.snippet_max_length,
+                    max_results: args.max_results,
+                    session_id: args.session_id.clone(),
                 },
-                pretty,
-                api_key.as_deref(),
+                args.pretty,
+                args.api_key.as_deref(),
             )
             .await;
         }
@@ -427,5 +426,127 @@ async fn run() {
             version
         ));
         ui::hint(&format!("Run: {}", update::update_hint()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn search_filters(args: &[&str]) -> serde_json::Value {
+        let argv = ["keenable", "search", "q"].iter().chain(args);
+        let Commands::Search(search) = Cli::try_parse_from(argv).expect("args parse").command
+        else {
+            panic!("expected the search subcommand");
+        };
+        search.filters().to_json()
+    }
+
+    #[test]
+    fn exclude_flag_absent_by_default() {
+        let v = search_filters(&[]);
+        assert!(v.get("exclude_domains").is_none());
+    }
+
+    #[test]
+    fn exclude_flag_accepts_repeats_and_comma_lists() {
+        let v = search_filters(&[
+            "--exclude-domain",
+            "press.un.org,undocs.org",
+            "--exclude-domain",
+            "who.int",
+        ]);
+        assert_eq!(
+            v["exclude_domains"],
+            json!(["press.un.org", "undocs.org", "who.int"])
+        );
+    }
+
+    #[test]
+    fn site_flag_is_kept() {
+        let v = search_filters(&["--site", "docs.rs"]);
+        assert_eq!(v["site"], json!("docs.rs"));
+        assert!(v.get("exclude_domains").is_none());
+    }
+
+    #[test]
+    fn site_and_exclude_domain_are_both_forwarded() {
+        let v = search_filters(&["--site", "a.com", "--exclude-domain", "old.a.com"]);
+        assert_eq!(v["site"], json!("a.com"));
+        assert_eq!(v["exclude_domains"], json!(["old.a.com"]));
+    }
+
+    #[test]
+    fn comma_lists_trim_spaces_and_keep_stray_commas() {
+        let v = search_filters(&[
+            "--exclude-domain",
+            " a.com , b.com",
+            "--exclude-domain",
+            ",spam.com,,",
+        ]);
+        assert_eq!(
+            v["exclude_domains"],
+            json!(["a.com", "b.com", "", "spam.com", "", ""])
+        );
+    }
+
+    #[test]
+    fn domain_entries_are_sent_as_typed_for_the_server_to_normalize() {
+        let v = search_filters(&[
+            "--exclude-domain",
+            " https://WWW.UN.org/ ,un.org/press,.gov",
+        ]);
+        assert_eq!(
+            v["exclude_domains"],
+            json!(["https://WWW.UN.org/", "un.org/press", ".gov"])
+        );
+    }
+
+    #[test]
+    fn blank_domain_flag_still_reaches_the_server() {
+        for (blank, want) in [
+            ("", json!([""])),
+            (" ", json!([""])),
+            (",", json!(["", ""])),
+        ] {
+            let v = search_filters(&[&format!("--exclude-domain={blank}")]);
+            assert_eq!(v["exclude_domains"], want, "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn blank_domain_flag_beside_a_real_one_is_sent() {
+        let flag = "--exclude-domain";
+        let v = search_filters(&["--exclude-domain=", flag, "a.com", flag, " "]);
+        assert_eq!(v["exclude_domains"], json!(["", "a.com", ""]));
+        let v = search_filters(&[flag, "a.com,"]);
+        assert_eq!(v["exclude_domains"], json!(["a.com", ""]));
+    }
+
+    #[test]
+    fn date_flags_reach_the_filters() {
+        let v = search_filters(&[
+            "--acquired-after",
+            "7d",
+            "--acquired-before",
+            "2026-01-01",
+            "--published-after",
+            "2024-01-01",
+            "--published-before",
+            "2025-01-01",
+            "--query-time",
+            "2026-05-01T00:00:00Z",
+        ]);
+        assert_eq!(
+            v,
+            json!({
+                "acquired_after": "7d",
+                "acquired_before": "2026-01-01",
+                "published_after": "2024-01-01",
+                "published_before": "2025-01-01",
+                "query_time": "2026-05-01T00:00:00Z",
+            })
+        );
     }
 }
