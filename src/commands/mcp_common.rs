@@ -50,6 +50,9 @@ pub struct ProductStatus {
     /// configure would strip it.
     pub entry_key_without_login: bool,
     pub uses_legacy_npx: bool,
+    /// A keyless entry whose URL differs from the one configure would write
+    /// now (keyless Codex moved from /mcp to /mcp-public).
+    pub outdated_keyless_url: bool,
     pub standard_tools_disabled: bool,
     /// Denies exist in ~/.claude.json but not in ~/.claude/settings.json.
     pub has_legacy_deny_only: bool,
@@ -78,6 +81,13 @@ pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus 
     let entry_key_without_login = existing_key.is_some() && desired_key.is_none();
 
     let uses_legacy_npx = existing.as_ref().and_then(|e| e["command"].as_str()) == Some("npx");
+
+    let outdated_keyless_url = !uses_legacy_npx
+        && existing_key.is_none()
+        && desired_key.is_none()
+        && existing
+            .as_ref()
+            .is_some_and(|e| extract_url(e) != extract_url(&build_keenable_entry(ide, None)));
 
     let (standard_tools_disabled, has_legacy_deny_only) = if ide.has_standard_tools {
         if ide.flag == "opencode" {
@@ -195,6 +205,7 @@ pub fn get_product_status(ide: &IDEDef, api_key: Option<&str>) -> ProductStatus 
         missing_api_key,
         entry_key_without_login,
         uses_legacy_npx,
+        outdated_keyless_url,
         standard_tools_disabled,
         has_legacy_deny_only,
         duplicate_entries,
@@ -628,6 +639,7 @@ fn show_configure_status(detected: &[&IDEDef], not_detected: &[&IDEDef], api_key
             || status.missing_api_key
             || status.entry_key_without_login
             || status.uses_legacy_npx
+            || status.outdated_keyless_url
             || !status.duplicate_entries.is_empty()
             || !status.conflicting_mcps.is_empty()
             || (ide.has_standard_tools && !status.standard_tools_disabled)
@@ -673,6 +685,12 @@ fn show_status_issues(ide: &IDEDef, status: &ProductStatus) {
     if status.uses_legacy_npx {
         ui::sub_warning(&format!(
             "Uses npx mcp-remote (requires Node.js). Re-run {} to switch to a direct HTTP entry",
+            CONFIGURE_CMD
+        ));
+    }
+    if status.outdated_keyless_url {
+        ui::sub_warning(&format!(
+            "Points at an older endpoint. Re-run {} to update it",
             CONFIGURE_CMD
         ));
     }

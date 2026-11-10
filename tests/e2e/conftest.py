@@ -125,6 +125,8 @@ def short_home(tmp_path):
 
 # The MCP endpoint configure-mcp writes into client configs ({API_BASE}/mcp).
 MCP_URL = "https://api.keenable.ai/mcp"
+# The exception: a keyless Codex entry gets the public endpoint.
+MCP_PUBLIC_URL = "https://api.keenable.ai/mcp-public"
 
 
 @pytest.fixture
