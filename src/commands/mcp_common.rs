@@ -787,11 +787,17 @@ fn ensure_object(config: &mut Value, key: &str) {
     }
 }
 
+/// True when the config holds the `keenable` entry or any other entry whose
+/// URL points at Keenable, the same match the reset removal step uses.
 fn has_product_entry(ide: &IDEDef) -> bool {
     let config = read_config_lenient(&ide.config_path);
-    config
-        .pointer(&format!("/{}/{}", ide.servers_key, ENTRY_NAME))
-        .is_some()
+    let Some(servers) = config.get(ide.servers_key).and_then(|v| v.as_object()) else {
+        return false;
+    };
+    servers.contains_key(ENTRY_NAME)
+        || servers
+            .values()
+            .any(|entry| extract_url(entry).is_some_and(|url| is_keenable_url(&url)))
 }
 
 fn warn_unmatched_flags(selected_flags: &[String], all: &[IDEDef], detected: &[&IDEDef]) {

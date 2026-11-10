@@ -100,6 +100,18 @@ pub fn all_ides() -> Vec<IDEDef> {
             detect_path: None,
         },
         IDEDef {
+            name: "Devin Desktop",
+            flag: "devin",
+            config_path: home.join(".config/devin/mcp_config.json"),
+            servers_key: "mcpServers",
+            entry_style: McpEntryStyle::Http {
+                url_key: "url",
+                transport_type: None,
+            },
+            has_standard_tools: false,
+            detect_path: None,
+        },
+        IDEDef {
             name: "Codex",
             flag: "codex",
             config_path: home.join(".codex/config.toml"),
@@ -165,6 +177,19 @@ pub fn read_config_lenient(path: &PathBuf) -> Value {
     read_config(path).unwrap_or_else(|_| json!({}))
 }
 
+/// True when some object in the config has an `X-API-Key` field, the header
+/// every client entry uses for a key. Checked on the parsed structure, so a
+/// comment or another value that merely mentions the header doesn't count.
+fn holds_api_key(config: &Value) -> bool {
+    match config {
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("X-API-Key") || holds_api_key(v)),
+        Value::Array(items) => items.iter().any(holds_api_key),
+        _ => false,
+    }
+}
+
 pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error> {
     let content = if is_toml(path) {
         toml_patch(path, config)?
@@ -172,8 +197,9 @@ pub fn write_config(path: &PathBuf, config: &Value) -> Result<(), std::io::Error
         serde_json::to_string_pretty(config).map_err(std::io::Error::other)?
     };
     // Atomic: a crash mid-write must not leave a truncated config
-    // (e.g. ~/.claude.json holds all of Claude Code's state).
-    crate::config::atomic_write(path, &content, false)
+    // (e.g. ~/.claude.json holds all of Claude Code's state). A config that
+    // holds an API key is written owner-only, like ~/.keenable/config.json.
+    crate::config::atomic_write(path, &content, holds_api_key(config))
 }
 
 /// Render `desired` as TOML by minimally patching the existing file.
@@ -285,8 +311,18 @@ pub fn mcp_public_url() -> String {
     format!("{}/mcp-public", DEFAULT_API_BASE_URL)
 }
 
+/// Clients that get /mcp-public when no key is stored: /mcp publishes OAuth
+/// discovery, which can make them start a browser sign-in.
+fn keyless_uses_public_endpoint(ide: &IDEDef) -> bool {
+    matches!(ide.flag, "codex" | "devin")
+}
+
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
-    let mcp_url = mcp_url();
+    let mcp_url = if api_key.is_none() && keyless_uses_public_endpoint(ide) {
+        mcp_public_url()
+    } else {
+        mcp_url()
+    };
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
@@ -302,13 +338,7 @@ pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
             entry
         }
         McpEntryStyle::Toml => {
-            // Keyless Codex gets /mcp-public: /mcp publishes OAuth discovery,
-            // which can make Codex start a browser sign-in.
-            let url = match api_key {
-                Some(_) => mcp_url,
-                None => mcp_public_url(),
-            };
-            let mut entry = json!({ "url": url });
+            let mut entry = json!({ "url": mcp_url });
             if let Some(key) = api_key {
                 entry["http_headers"] = json!({ "X-API-Key": key });
             }
@@ -338,8 +368,17 @@ pub fn extract_url(entry: &Value) -> Option<String> {
 }
 
 /// Check if a URL points to Keenable (prod or test).
+/// True when the URL's host is a Keenable API host. Compares the parsed host,
+/// so a URL that only contains the name (`api.keenable.ai.example.com`, a
+/// query string) doesn't match.
 pub fn is_keenable_url(url: &str) -> bool {
-    KEENABLE_URLS.iter().any(|k| url.contains(k))
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    KEENABLE_URLS.iter().any(|k| host.eq_ignore_ascii_case(k))
 }
 
 /// Check if a server name is a known conflicting search server.
@@ -400,6 +439,90 @@ mod tests {
     }
 
     #[test]
+    fn devin_entry_uses_url_key_and_no_transport_type() {
+        let devin = ide("devin");
+        assert_eq!(devin.name, "Devin Desktop");
+        assert_eq!(devin.servers_key, "mcpServers");
+        assert!(
+            devin
+                .config_path
+                .ends_with(Path::new(".config/devin/mcp_config.json"))
+        );
+
+        let keyless = build_keenable_entry(&devin, None);
+        assert_eq!(keyless, json!({ "url": mcp_public_url() }));
+        assert!(is_keenable_url(&extract_url(&keyless).unwrap()));
+
+        let keyed = build_keenable_entry(&devin, Some("keen_x"));
+        assert_eq!(keyed["url"], json!(mcp_url()));
+        assert_eq!(keyed["headers"]["X-API-Key"], json!("keen_x"));
+        assert!(keyed.get("type").is_none());
+        assert!(keyed.get("serverUrl").is_none());
+
+        assert!(is_keenable_url(&extract_url(&keyed).unwrap()));
+        assert_eq!(extract_entry_api_key(&keyed).as_deref(), Some("keen_x"));
+    }
+
+    #[test]
+    fn windsurf_keeps_legacy_path_and_server_url() {
+        let ws = ide("windsurf");
+        assert!(
+            ws.config_path
+                .ends_with(Path::new(".codeium/windsurf/mcp_config.json"))
+        );
+        let entry = build_keenable_entry(&ws, Some("keen_x"));
+        assert_eq!(entry["serverUrl"], json!(mcp_url()));
+        assert!(entry.get("url").is_none());
+        assert!(entry.get("type").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_with_api_key_is_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("keenable-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let keyed = dir.join("keyed.json");
+        std::fs::write(&keyed, "{}").unwrap();
+        std::fs::set_permissions(&keyed, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let config = json!({ "mcpServers": { "keenable": { "url": mcp_url(), "headers": { "X-API-Key": "keen_x" } } } });
+        write_config(&keyed, &config).unwrap();
+        let mode = std::fs::metadata(&keyed).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let keyless = dir.join("keyless.json");
+        std::fs::write(&keyless, "{}").unwrap();
+        std::fs::set_permissions(&keyless, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_config(
+            &keyless,
+            &json!({ "mcpServers": { "keenable": { "url": mcp_public_url() } } }),
+        )
+        .unwrap();
+        let mode = std::fs::metadata(&keyless).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+
+        // A mention of the header in a value is not a key.
+        let mention = dir.join("mention.json");
+        std::fs::write(&mention, "{}").unwrap();
+        std::fs::set_permissions(&mention, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_config(
+            &mention,
+            &json!({ "note": "send X-API-Key to authenticate" }),
+        )
+        .unwrap();
+        let mode = std::fs::metadata(&mention).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn devin_and_windsurf_use_separate_config_files() {
+        assert_ne!(ide("devin").config_path, ide("windsurf").config_path);
+    }
+
+    #[test]
     fn codex_toml_entry_uses_http_headers() {
         let entry = build_keenable_entry(&ide("codex"), Some("keen_x"));
         assert_eq!(entry["url"], json!(format!("{}/mcp", DEFAULT_API_BASE_URL)));
@@ -437,6 +560,11 @@ mod tests {
         assert!(is_keenable_url("https://api.keenable.ai/mcp"));
         assert!(is_keenable_url("https://api-test.keenable.ai/mcp"));
         assert!(!is_keenable_url("https://example.com/mcp"));
+        assert!(!is_keenable_url("https://api.keenable.ai.evil.example/mcp"));
+        assert!(!is_keenable_url(
+            "https://example.com/mcp?u=api.keenable.ai"
+        ));
+        assert!(is_keenable_url("https://API.keenable.ai/mcp-public"));
     }
 
     #[test]
