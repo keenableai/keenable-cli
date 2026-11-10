@@ -66,7 +66,7 @@ enum Commands {
     /// Configure Keenable MCP in your AI clients
     #[command(
         name = "configure-mcp",
-        after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --cursor   Configure specific clients\n  keenable configure-mcp --all --yes      Configure without confirmation (CI, agents)"
+        after_help = "Without flags, shows which clients are detected and configured.\nWith client flags, configures the selected clients.\n\nSupported clients:\n  --claude-code, --cursor, --devin (Devin Desktop),\n  --windsurf (legacy Windsurf path), --codex, --opencode\n\nExamples:\n  keenable configure-mcp                  Show status of all detected clients\n  keenable configure-mcp --cursor         Configure Cursor only\n  keenable configure-mcp --all            Configure all detected clients\n  keenable configure-mcp --claude-code --cursor   Configure specific clients\n  keenable configure-mcp --all --yes      Configure without confirmation (CI, agents)"
     )]
     ConfigureMcp {
         /// Configure all detected clients
@@ -85,7 +85,11 @@ enum Commands {
         #[arg(long)]
         cursor: bool,
 
-        /// Configure Windsurf
+        /// Configure Devin Desktop (~/.config/devin/mcp_config.json)
+        #[arg(long)]
+        devin: bool,
+
+        /// Configure Windsurf (legacy ~/.codeium/windsurf/mcp_config.json)
         #[arg(long)]
         windsurf: bool,
 
@@ -100,7 +104,7 @@ enum Commands {
 
     /// Remove Keenable MCP from your AI clients and restore defaults
     #[command(
-        after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --cursor, --windsurf,\n  --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)"
+        after_help = "Without flags, shows which clients have Keenable configured.\nWith client flags, removes Keenable MCP and restores default settings.\n\nSupported clients:\n  --claude-code, --cursor, --devin (Devin Desktop),\n  --windsurf (legacy Windsurf path), --codex, --opencode\n\nExamples:\n  keenable reset                  Show which clients can be reset\n  keenable reset --cursor         Reset Cursor only\n  keenable reset --all            Reset all configured clients\n  keenable reset --all --yes      Reset without confirmation (CI, agents)"
     )]
     Reset {
         /// Reset all configured clients
@@ -119,7 +123,11 @@ enum Commands {
         #[arg(long)]
         cursor: bool,
 
-        /// Reset Windsurf
+        /// Reset Devin Desktop (~/.config/devin/mcp_config.json)
+        #[arg(long)]
+        devin: bool,
+
+        /// Reset Windsurf (legacy ~/.codeium/windsurf/mcp_config.json)
         #[arg(long)]
         windsurf: bool,
 
@@ -270,6 +278,7 @@ fn collect_client_flags(
     all: bool,
     claude_code: bool,
     cursor: bool,
+    devin: bool,
     windsurf: bool,
     codex: bool,
     opencode: bool,
@@ -278,6 +287,7 @@ fn collect_client_flags(
         (all, "all"),
         (claude_code, "claude-code"),
         (cursor, "cursor"),
+        (devin, "devin"),
         (windsurf, "windsurf"),
         (codex, "codex"),
         (opencode, "opencode"),
@@ -348,11 +358,13 @@ async fn run() {
             yes,
             claude_code,
             cursor,
+            devin,
             windsurf,
             codex,
             opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
+            let flags =
+                collect_client_flags(all, claude_code, cursor, devin, windsurf, codex, opencode);
             commands::configure_mcp::configure_mcp(flags, yes).await;
         }
         Commands::Reset {
@@ -360,11 +372,13 @@ async fn run() {
             yes,
             claude_code,
             cursor,
+            devin,
             windsurf,
             codex,
             opencode,
         } => {
-            let flags = collect_client_flags(all, claude_code, cursor, windsurf, codex, opencode);
+            let flags =
+                collect_client_flags(all, claude_code, cursor, devin, windsurf, codex, opencode);
             commands::reset::reset(flags, yes);
         }
         Commands::Config { action } => match action {

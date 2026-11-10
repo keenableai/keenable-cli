@@ -126,15 +126,68 @@ def test_configure_codex_writes_toml(mcp):
     assert "keenable" not in (home / ".codex" / "config.toml").read_text()
 
 
+def test_configure_devin_writes_url_entry(mcp):
+    home = Path(mcp.home)
+    devin_dir = home / ".config" / "devin"
+    devin_dir.mkdir(parents=True)  # detect Devin Desktop
+    devin_cfg = devin_dir / "mcp_config.json"
+    # A differently-named entry pointing at Keenable is a duplicate.
+    devin_cfg.write_text(json.dumps({
+        "mcpServers": {
+            "old-keen": {"serverUrl": MCP_URL},
+            "github": {"command": "npx", "args": ["server-github"]},
+        }
+    }))
+
+    res = mcp("configure-mcp", "--devin", "--yes", key=False)
+    assert res.code == 0, res.err
+
+    servers = read_json(devin_cfg)["mcpServers"]
+    # Devin Desktop: URL under "url", no transport type; keyless still uses /mcp.
+    assert servers["keenable"] == {"url": MCP_URL}
+    assert "old-keen" not in servers
+    assert servers["github"]["command"] == "npx"
+    # The legacy Windsurf file is a separate client and stays untouched.
+    assert not (home / ".codeium").exists()
+
+    # Status mode lists it; reset removes the entry and keeps the rest.
+    res = mcp("configure-mcp", key=False)
+    assert res.code == 0, res.err
+    assert "Devin Desktop" in res.err
+    res = mcp("reset", "--devin", "--yes", key=False)
+    assert res.code == 0, res.err
+    servers = read_json(devin_cfg).get("mcpServers", {})
+    assert "keenable" not in servers
+    assert servers["github"]["command"] == "npx"
+
+
+def test_configure_windsurf_keeps_legacy_path(mcp):
+    home = Path(mcp.home)
+    (home / ".codeium" / "windsurf").mkdir(parents=True)
+
+    res = mcp("configure-mcp", "--windsurf", "--yes", key=False)
+    assert res.code == 0, res.err
+
+    entry = read_json(home / ".codeium" / "windsurf" / "mcp_config.json")["mcpServers"]["keenable"]
+    assert entry == {"serverUrl": MCP_URL}
+    assert not (home / ".config" / "devin").exists()
+
+
 def test_configure_all_detected_clients(mcp):
     home = Path(mcp.home)
     (home / ".cursor").mkdir()
     (home / ".codex").mkdir()
+    (home / ".config" / "devin").mkdir(parents=True)
+    (home / ".codeium" / "windsurf").mkdir(parents=True)
 
     res = mcp("configure-mcp", "--all", "--yes", key=False)
     assert res.code == 0, res.err
 
     assert "keenable" in read_json(cursor_cfg(home))["mcpServers"]
+    devin = read_json(home / ".config" / "devin" / "mcp_config.json")
+    assert devin["mcpServers"]["keenable"]["url"] == MCP_URL
+    windsurf = read_json(home / ".codeium" / "windsurf" / "mcp_config.json")
+    assert windsurf["mcpServers"]["keenable"]["serverUrl"] == MCP_URL
     assert "[mcp_servers.keenable]" in (home / ".codex" / "config.toml").read_text()
 
 

@@ -100,6 +100,18 @@ pub fn all_ides() -> Vec<IDEDef> {
             detect_path: None,
         },
         IDEDef {
+            name: "Devin Desktop",
+            flag: "devin",
+            config_path: home.join(".config/devin/mcp_config.json"),
+            servers_key: "mcpServers",
+            entry_style: McpEntryStyle::Http {
+                url_key: "url",
+                transport_type: None,
+            },
+            has_standard_tools: false,
+            detect_path: None,
+        },
+        IDEDef {
             name: "Codex",
             flag: "codex",
             config_path: home.join(".codex/config.toml"),
@@ -397,6 +409,48 @@ mod tests {
             build_keenable_entry(&ide("claude-code"), None)["type"],
             json!("http")
         );
+    }
+
+    #[test]
+    fn devin_entry_uses_url_key_and_no_transport_type() {
+        let devin = ide("devin");
+        assert_eq!(devin.name, "Devin Desktop");
+        assert_eq!(devin.servers_key, "mcpServers");
+        assert!(
+            devin
+                .config_path
+                .ends_with(Path::new(".config/devin/mcp_config.json"))
+        );
+
+        let keyless = build_keenable_entry(&devin, None);
+        assert_eq!(keyless, json!({ "url": mcp_url() }));
+
+        let keyed = build_keenable_entry(&devin, Some("keen_x"));
+        assert_eq!(keyed["url"], json!(mcp_url()));
+        assert_eq!(keyed["headers"]["X-API-Key"], json!("keen_x"));
+        assert!(keyed.get("type").is_none());
+        assert!(keyed.get("serverUrl").is_none());
+
+        assert!(is_keenable_url(&extract_url(&keyed).unwrap()));
+        assert_eq!(extract_entry_api_key(&keyed).as_deref(), Some("keen_x"));
+    }
+
+    #[test]
+    fn windsurf_keeps_legacy_path_and_server_url() {
+        let ws = ide("windsurf");
+        assert!(
+            ws.config_path
+                .ends_with(Path::new(".codeium/windsurf/mcp_config.json"))
+        );
+        let entry = build_keenable_entry(&ws, Some("keen_x"));
+        assert_eq!(entry["serverUrl"], json!(mcp_url()));
+        assert!(entry.get("url").is_none());
+        assert!(entry.get("type").is_none());
+    }
+
+    #[test]
+    fn devin_and_windsurf_use_separate_config_files() {
+        assert_ne!(ide("devin").config_path, ide("windsurf").config_path);
     }
 
     #[test]

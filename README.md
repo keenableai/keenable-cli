@@ -127,7 +127,7 @@ keenable configure-mcp --cursor         # Configure a specific client
 keenable reset --all                    # Remove Keenable from all clients
 ```
 
-Supported clients: Claude Code, Cursor, Windsurf, Codex, OpenCode.
+Supported clients: Claude Code, Cursor, Devin Desktop (`--devin`, writes `~/.config/devin/mcp_config.json`), Windsurf (`--windsurf`, writes the legacy `~/.codeium/windsurf/mcp_config.json`), Codex, OpenCode.
 
 ### Behind a proxy
 

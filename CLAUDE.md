@@ -226,11 +226,11 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 2. API key is valid (pings search API) → `ui::error()` + `ui::sub_info()` if invalid
 
 **Client detection:**
-- Supported: Claude Code, Cursor, Windsurf, Codex, OpenCode
+- Supported: Claude Code, Cursor, Devin Desktop (`~/.config/devin/mcp_config.json`, URL under `url`), Windsurf (legacy `~/.codeium/windsurf/mcp_config.json`, URL under `serverUrl`), Codex, OpenCode
 - Detection: parent directory of config file exists
 
 **Client-specific flags:**
-`--claude-code`, `--cursor`, `--windsurf`, `--codex`, `--opencode`, `--all`
+`--claude-code`, `--cursor`, `--devin`, `--windsurf`, `--codex`, `--opencode`, `--all`
 
 **Status mode per-client display:**
 - **✓ green**: fully configured, no issues. May show dimmed `sub_hint` recommendations.
