@@ -74,8 +74,9 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
   (`yahoo.com` also excludes `finance.yahoo.com`). At most 1,000 distinct
   hosts per request, 2,000 entries as sent, and 2,048 bytes per entry.
 - The server cleans up harmless noise: scheme, a leading `www.`, case, port,
-  a trailing `/`, a query string and surrounding whitespace
-  (`https://WWW.UN.org/` becomes `un.org`).
+  a trailing `/` or dot, a query string or `#fragment` and surrounding
+  whitespace (`https://WWW.UN.org/` becomes `un.org`); international names
+  become punycode.
 - Anything else is rejected with an `invalid_filter` error naming the field,
   the entry and the reason, and the command exits 1: paths (`un.org/press`),
   suffixes (`.com`), wildcards (`*.gov`), IP addresses, `user@host` and
