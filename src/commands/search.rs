@@ -12,6 +12,7 @@ use crate::ui;
 
 pub struct SearchFilters {
     pub site: Option<String>,
+    pub exclude_domains: Vec<String>,
     pub acquired_after: Option<String>,
     pub acquired_before: Option<String>,
     pub published_after: Option<String>,
@@ -20,10 +21,13 @@ pub struct SearchFilters {
 }
 
 impl SearchFilters {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
         if let Some(v) = &self.site {
             map.insert("site".into(), json!(v));
+        }
+        if !self.exclude_domains.is_empty() {
+            map.insert("exclude_domains".into(), json!(self.exclude_domains));
         }
         if let Some(v) = &self.acquired_after {
             map.insert("acquired_after".into(), json!(v));
@@ -42,6 +46,18 @@ impl SearchFilters {
         }
         Value::Object(map)
     }
+}
+
+/// Trims each entry. Blank entries are kept so the server rejects them.
+pub fn trim_domain_entries(raw: Vec<String>) -> Vec<String> {
+    raw.iter().map(|v| v.trim().to_string()).collect()
+}
+
+fn response_warning(data: &Value) -> Option<&str> {
+    data["warning"]
+        .as_str()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
 }
 
 /// Non-filter search parameters; unset ones are left to the server default.
@@ -490,6 +506,25 @@ fn resolve_mode(flag: Option<&str>) -> Option<String> {
     config_mode(&cfg, "default_search_mode")
 }
 
+fn build_search_body(
+    query: &str,
+    mode: Option<&str>,
+    filters: &SearchFilters,
+    options: &SearchOptions,
+) -> Value {
+    let mut body = serde_json::Map::new();
+    body.insert("query".into(), json!(query));
+    if let Some(m) = mode {
+        body.insert("mode".into(), json!(m));
+    }
+    for extra in [options.to_json(), filters.to_json()] {
+        if let Value::Object(map) = extra {
+            body.extend(map);
+        }
+    }
+    Value::Object(body)
+}
+
 pub async fn search(
     query: &str,
     mode: Option<&str>,
@@ -521,19 +556,7 @@ pub async fn search(
         }
     });
 
-    let mut body = json!({ "query": query });
-    if let Some(m) = &effective_mode {
-        body["mode"] = json!(m);
-    }
-    // Merge option and filter fields into body. The body goes to the API
-    // verbatim on both the daemon and the direct path.
-    if let Value::Object(ref mut body_map) = body {
-        for extra in [options.to_json(), filters.to_json()] {
-            if let Value::Object(map) = extra {
-                body_map.extend(map);
-            }
-        }
-    }
+    let body = build_search_body(query, effective_mode.as_deref(), &filters, &options);
 
     let req = DaemonRequest {
         command: "search".to_string(),
@@ -548,6 +571,10 @@ pub async fn search(
             fold_description_into_snippet(&mut data);
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
+                if let Some(warning) = response_warning(&data) {
+                    ui::warning(warning);
+                    eprintln!();
+                }
                 if let Some(results) = data["results"].as_array() {
                     if results.is_empty() {
                         ui::info("No results found.");
@@ -645,6 +672,7 @@ mod tests {
     fn filters() -> SearchFilters {
         SearchFilters {
             site: None,
+            exclude_domains: vec![],
             acquired_after: None,
             acquired_before: None,
             published_after: None,
@@ -672,6 +700,23 @@ mod tests {
         assert_eq!(v["query_time"], json!("2024-06-01T00:00:00Z"));
         assert!(v.get("acquired_after").is_none());
         assert!(v.get("published_before").is_none());
+    }
+
+    #[test]
+    fn to_json_omits_an_empty_exclude_list() {
+        let v = filters().to_json();
+        assert!(v.get("exclude_domains").is_none());
+    }
+
+    #[test]
+    fn to_json_serializes_exclude_domains_as_an_array() {
+        let f = SearchFilters {
+            exclude_domains: vec!["blogs.un.org".into(), "spam.com".into()],
+            ..filters()
+        };
+        let v = f.to_json();
+        assert_eq!(v["exclude_domains"], json!(["blogs.un.org", "spam.com"]));
+        assert!(v.get("site").is_none());
     }
 
     #[test]
@@ -1033,5 +1078,88 @@ mod tests {
     fn config_mode_ignores_invalid_or_missing() {
         assert_eq!(config_mode(&json!({"m": "bogus"}), "m"), None);
         assert_eq!(config_mode(&json!({}), "m"), None);
+    }
+
+    #[test]
+    fn response_warning_is_surfaced_only_when_set() {
+        assert_eq!(
+            response_warning(
+                &json!({"warning": "Some results were removed by the domain filter."})
+            ),
+            Some("Some results were removed by the domain filter.")
+        );
+        assert_eq!(response_warning(&json!({"warning": "  "})), None);
+        assert_eq!(response_warning(&json!({"warning": null})), None);
+        assert_eq!(response_warning(&json!({"results": []})), None);
+    }
+
+    #[test]
+    fn trim_domain_entries_leaves_absent_flags_absent() {
+        assert!(trim_domain_entries(vec![]).is_empty());
+        assert_eq!(trim_domain_entries(vec!["a.com".into()]), vec!["a.com"]);
+    }
+
+    #[test]
+    fn trim_domain_entries_sends_blanks_beside_a_real_entry() {
+        for (raw, want) in [
+            (vec!["", "a.com"], vec!["", "a.com"]),
+            (vec![" ", "a.com", ""], vec!["", "a.com", ""]),
+            (vec!["a.com", "  "], vec!["a.com", ""]),
+        ] {
+            let raw: Vec<String> = raw.into_iter().map(String::from).collect();
+            assert_eq!(trim_domain_entries(raw.clone()), want, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn build_search_body_merges_filters_with_request_fields() {
+        let f = SearchFilters {
+            exclude_domains: vec!["old.docs.rs".into()],
+            published_after: Some("2024-01-01".into()),
+            ..filters()
+        };
+        let options = SearchOptions {
+            snippet_max_length: Some(500),
+            max_results: Some(20),
+            session_id: None,
+        };
+        let body = build_search_body("rust async", Some("pro"), &f, &options);
+        assert_eq!(
+            body,
+            json!({
+                "query": "rust async",
+                "mode": "pro",
+                "snippet_max_length": 500,
+                "max_results": 20,
+                "exclude_domains": ["old.docs.rs"],
+                "published_after": "2024-01-01",
+            })
+        );
+    }
+
+    #[test]
+    fn build_search_body_sends_only_the_query_by_default() {
+        let body = build_search_body("q", None, &filters(), &SearchOptions::default());
+        assert_eq!(body, json!({"query": "q"}));
+    }
+
+    #[test]
+    fn fold_description_keeps_top_level_fields() {
+        let mut data = json!({
+            "query": "q",
+            "mode": "realtime",
+            "warning": "Some results were removed by the domain filter.",
+            "results": [{"url": "https://a.com", "description": "d"}],
+        });
+        fold_description_into_snippet(&mut data);
+        assert_eq!(
+            data,
+            json!({
+                "query": "q",
+                "mode": "realtime",
+                "warning": "Some results were removed by the domain filter.",
+                "results": [{"url": "https://a.com", "snippet": "d"}],
+            })
+        );
     }
 }

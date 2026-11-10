@@ -49,6 +49,7 @@ keenable configure-mcp --all
 keenable search "query"                                    # YAML output (for agents)
 keenable search "query" -p                                 # Pretty output (for humans)
 keenable search "AI news" --site techcrunch.com            # Restrict to site
+keenable search "query" --exclude-domain spam.com          # Never these domains
 keenable search "query" --published-after 2026-01-01       # Date filter
 keenable search "query" --acquired-before 2026-05-01       # Date filter
 keenable search "query" --snippet-max-length 2000          # Longer snippets (180-10000)
@@ -58,6 +59,35 @@ keenable search "query" --api-key KEY                      # Use a specific API 
 ```
 
 Works without login (free tier). Log in for higher rate limits.
+
+#### Excluding domains
+
+`--exclude-domain` drops results from a block-list of hosts. It is repeatable
+and also takes a comma list, so these are equivalent:
+
+```bash
+keenable search "security council vote" --exclude-domain blogs.un.org,reddit.com
+keenable search "security council vote" --exclude-domain blogs.un.org --exclude-domain reddit.com
+```
+
+- Each entry is a host and covers that host and every subdomain
+  (`yahoo.com` also excludes `finance.yahoo.com`). At most 1,000 distinct
+  hosts per request, 2,000 entries as sent, and 2,048 bytes per entry.
+- The server cleans up harmless noise: scheme, a leading `www.`, case, port,
+  a trailing `/` or dot, a query string or `#fragment` and surrounding
+  whitespace (`https://WWW.UN.org/` becomes `un.org`); international names
+  become punycode.
+- Anything else is rejected with an `invalid_filter` error naming the field,
+  the entry and the reason, and the command exits 1: paths (`un.org/press`),
+  suffixes (`.com`), wildcards (`*.gov`), IP addresses, `user@host` and
+  invalid hosts. Private-suffix hosts such as `github.io` or `blogspot.com`
+  are accepted.
+- Spaces around comma-separated entries are trimmed. A blank entry, such as
+  `--exclude-domain ""` or the trailing piece of `a.com,`, is sent as `""` and
+  the server rejects it with `invalid_filter`. When a script builds the flag
+  from a variable that may be empty, omit the flag instead.
+- If every result is excluded, the response can be empty. Response warnings
+  are printed in YAML and shown above the results with `-p`.
 
 ### Fetch
 
