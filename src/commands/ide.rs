@@ -291,7 +291,13 @@ pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
             entry
         }
         McpEntryStyle::Toml => {
-            let mut entry = json!({ "url": mcp_url });
+            // Keyless Codex gets /mcp-public: /mcp publishes OAuth discovery,
+            // which can make Codex start a browser sign-in.
+            let url = match api_key {
+                Some(_) => mcp_url,
+                None => format!("{}/mcp-public", DEFAULT_API_BASE_URL),
+            };
+            let mut entry = json!({ "url": url });
             if let Some(key) = api_key {
                 entry["http_headers"] = json!({ "X-API-Key": key });
             }
@@ -389,6 +395,17 @@ mod tests {
         // TOML style nests the key under http_headers, not headers.
         assert_eq!(entry["http_headers"]["X-API-Key"], json!("keen_x"));
         assert!(entry.get("headers").is_none());
+    }
+
+    #[test]
+    fn keyless_codex_entry_uses_the_public_endpoint() {
+        let entry = build_keenable_entry(&ide("codex"), None);
+        assert_eq!(
+            entry["url"],
+            json!(format!("{}/mcp-public", DEFAULT_API_BASE_URL))
+        );
+        assert!(entry.get("http_headers").is_none());
+        assert!(is_keenable_url(entry["url"].as_str().unwrap()));
     }
 
     #[test]
