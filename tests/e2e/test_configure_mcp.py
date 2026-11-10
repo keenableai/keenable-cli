@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import API_KEY, MCP_URL
+from conftest import API_KEY, MCP_PUBLIC_URL, MCP_URL
 
 
 def read_json(path: Path) -> dict:
@@ -113,7 +113,17 @@ def test_configure_codex_writes_toml(mcp):
 
     text = (home / ".codex" / "config.toml").read_text()
     assert "[mcp_servers.keenable]" in text
-    assert MCP_URL in text
+    # Keyless Codex gets /mcp-public (no OAuth discovery), and no key header.
+    assert f'url = "{MCP_PUBLIC_URL}"' in text
+    assert "http_headers" not in text
+
+    # Re-running leaves one entry, and reset removes it.
+    res = mcp("configure-mcp", "--codex", "--yes", key=False)
+    assert res.code == 0, res.err
+    assert (home / ".codex" / "config.toml").read_text().count("[mcp_servers.keenable]") == 1
+    res = mcp("reset", "--codex", "--yes", key=False)
+    assert res.code == 0, res.err
+    assert "keenable" not in (home / ".codex" / "config.toml").read_text()
 
 
 def test_configure_all_detected_clients(mcp):

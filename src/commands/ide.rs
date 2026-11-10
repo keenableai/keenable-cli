@@ -274,8 +274,19 @@ fn json_to_toml_value(v: &Value) -> toml_edit::Value {
     }
 }
 
+/// The production MCP endpoint written into client configs. Always the
+/// production base: a KEENABLE_API_URL override is never persisted.
+pub fn mcp_url() -> String {
+    format!("{}/mcp", DEFAULT_API_BASE_URL)
+}
+
+/// The keyless MCP endpoint, which publishes no OAuth discovery.
+pub fn mcp_public_url() -> String {
+    format!("{}/mcp-public", DEFAULT_API_BASE_URL)
+}
+
 pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
-    let mcp_url = format!("{}/mcp", DEFAULT_API_BASE_URL);
+    let mcp_url = mcp_url();
     match &ide.entry_style {
         McpEntryStyle::Http {
             url_key,
@@ -291,7 +302,13 @@ pub fn build_keenable_entry(ide: &IDEDef, api_key: Option<&str>) -> Value {
             entry
         }
         McpEntryStyle::Toml => {
-            let mut entry = json!({ "url": mcp_url });
+            // Keyless Codex gets /mcp-public: /mcp publishes OAuth discovery,
+            // which can make Codex start a browser sign-in.
+            let url = match api_key {
+                Some(_) => mcp_url,
+                None => mcp_public_url(),
+            };
+            let mut entry = json!({ "url": url });
             if let Some(key) = api_key {
                 entry["http_headers"] = json!({ "X-API-Key": key });
             }
@@ -389,6 +406,14 @@ mod tests {
         // TOML style nests the key under http_headers, not headers.
         assert_eq!(entry["http_headers"]["X-API-Key"], json!("keen_x"));
         assert!(entry.get("headers").is_none());
+    }
+
+    #[test]
+    fn keyless_codex_entry_uses_the_public_endpoint() {
+        let entry = build_keenable_entry(&ide("codex"), None);
+        assert_eq!(entry["url"], json!(mcp_public_url()));
+        assert!(entry.get("http_headers").is_none());
+        assert!(is_keenable_url(entry["url"].as_str().unwrap()));
     }
 
     #[test]
