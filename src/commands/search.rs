@@ -427,6 +427,19 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
     }
 }
 
+/// Pretty-mode line with the organization's credits left after this
+/// request (`usage.credits_remaining`), when the API sent it. Keyless
+/// requests carry no usage, so nothing is printed for them.
+fn credits_remaining_line(data: &Value) -> Option<String> {
+    let left = data["usage"]["credits_remaining"].as_f64()?;
+    let shown = if left.fract() == 0.0 {
+        format!("{}", left as i64)
+    } else {
+        format!("{left:.2}")
+    };
+    Some(format!("Credits left: {shown} (keenable.ai/console)"))
+}
+
 /// Display an ApiError according to output mode (human vs YAML).
 /// The next step comes from `ApiError::hint`, worded for the auth state the
 /// request was sent with (a structured `hint` field in YAML mode). The API's
@@ -465,8 +478,11 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
             val["hint"] = Value::String(hint);
         }
         print_yaml(&val);
+        // One line on stderr too, so a script that reads only stderr (or
+        // only checks it) sees the failure; the exit code says which kind.
+        ui::error(&err.display());
     }
-    std::process::exit(1);
+    std::process::exit(err.exit_code());
 }
 
 /// Read a mode from config, ignoring (with a warning) hand-edited invalid
@@ -603,6 +619,10 @@ pub async fn search(
                     ui::info("No results found.");
                     eprintln!();
                 }
+                if let Some(line) = credits_remaining_line(&data) {
+                    ui::hint(&line);
+                    eprintln!();
+                }
                 return;
             }
             print_yaml(&data);
@@ -657,6 +677,10 @@ pub async fn fetch(
                     ui::hint("Content was truncated; pass a larger --max-chars for more.");
                     eprintln!();
                 }
+                if let Some(line) = credits_remaining_line(&data) {
+                    ui::hint(&line);
+                    eprintln!();
+                }
                 return;
             }
             print_yaml(&data);
@@ -668,6 +692,25 @@ pub async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credits_remaining_line_shows_the_balance_only_when_sent() {
+        let line = |v: Value| credits_remaining_line(&v);
+        assert_eq!(
+            line(json!({"usage": {"credits_remaining": 99120}})).as_deref(),
+            Some("Credits left: 99120 (keenable.ai/console)")
+        );
+        assert_eq!(
+            line(json!({"usage": {"credits_remaining": 12.345}})).as_deref(),
+            Some("Credits left: 12.35 (keenable.ai/console)")
+        );
+        assert_eq!(
+            line(json!({"usage": {"credits_remaining": -3}})).as_deref(),
+            Some("Credits left: -3 (keenable.ai/console)")
+        );
+        assert_eq!(line(json!({"usage": {"credits": 1}})), None);
+        assert_eq!(line(json!({"results": []})), None);
+    }
 
     fn filters() -> SearchFilters {
         SearchFilters {

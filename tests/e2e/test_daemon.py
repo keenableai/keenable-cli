@@ -35,7 +35,7 @@ def _healthy(res) -> bool:
     """
     if res.code == 0:
         return "results" in res.yaml()
-    if res.code == 1:
+    if res.code == 4  # rate limited:
         data = res.yaml()
         return "error" in data and "keenable login" in data.get("hint", "")
     return False  # panic (101), timeout, etc.

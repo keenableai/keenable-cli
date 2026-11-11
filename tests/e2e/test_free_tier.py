@@ -44,7 +44,7 @@ def test_free_tier_search_hits_public_endpoint(kn_fresh):
 def test_free_tier_bad_param_hint(kn_fresh):
     """A 400 tells the user to fix the request, never to log in."""
     res = kn_fresh("search", "x", "--max-results", "0", key=False)
-    assert res.code == 1
+    assert res.code == 8  # invalid request
     data = res.yaml()
     if "increase your limits" in data.get("hint", ""):
         return  # IP rate-limited; the 429 hint is covered above

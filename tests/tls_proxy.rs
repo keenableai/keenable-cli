@@ -222,8 +222,11 @@ async fn rejects_proxy_ca_that_is_not_trusted() {
 
     let out = search_via_proxy(&proxy, &dir, Some(&other_ca), &[]).await;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
+    // 7: a transport failure (here TLS trust), distinct from API errors.
+    assert_eq!(out.status.code(), Some(7), "stdout: {stdout}");
     assert!(stdout.contains("Request failed"), "stdout: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Request failed"), "stderr: {stderr}");
     assert!(stdout.contains("SSL_CERT_FILE"), "hint: {stdout}");
     assert!(!stdout.contains(CANNED_RESULT_URL), "stdout: {stdout}");
     std::fs::remove_dir_all(&dir).ok();
