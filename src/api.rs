@@ -109,7 +109,12 @@ impl ApiError {
         match self.error_type.as_deref() {
             Some("target_error") => return exit_code::TARGET,
             Some("rate_limit_error") => return exit_code::RATE_LIMITED,
-            Some("billing_error") => return exit_code::OUT_OF_CREDITS,
+            // Only exhausted credits: payment_required and
+            // payment_settlement_failed (x402) aren't fixed by adding credits.
+            Some("billing_error") if self.code.as_deref() == Some("insufficient_credits") => {
+                return exit_code::OUT_OF_CREDITS;
+            }
+            Some("billing_error") => return exit_code::ERROR,
             Some("authentication_error") => return exit_code::AUTH,
             Some("permission_error") if self.code.as_deref() == Some("private_url_not_allowed") => {
                 return exit_code::INVALID_REQUEST;
@@ -1100,7 +1105,8 @@ mod tests {
             let expected = match entry["type"].as_str().unwrap() {
                 "target_error" => exit_code::TARGET,
                 "rate_limit_error" => exit_code::RATE_LIMITED,
-                "billing_error" => exit_code::OUT_OF_CREDITS,
+                "billing_error" if code == "insufficient_credits" => exit_code::OUT_OF_CREDITS,
+                "billing_error" => exit_code::ERROR,
                 "authentication_error" => exit_code::AUTH,
                 "permission_error" if code == "private_url_not_allowed" => {
                     exit_code::INVALID_REQUEST

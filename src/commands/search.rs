@@ -440,6 +440,17 @@ fn credits_remaining_line(data: &Value) -> Option<String> {
     Some(format!("Credits left: {shown} (keenable.ai/console)"))
 }
 
+/// The YAML-mode stderr summary: always exactly one line, whatever line
+/// breaks or length the API's message has.
+fn stderr_summary(err: &ApiError) -> String {
+    let flat = err
+        .display()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("error: {flat}")
+}
+
 /// Display an ApiError according to output mode (human vs YAML).
 /// The next step comes from `ApiError::hint`, worded for the auth state the
 /// request was sent with (a structured `hint` field in YAML mode). The API's
@@ -480,7 +491,8 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         print_yaml(&val);
         // One line on stderr too, so a script that reads only stderr (or
         // only checks it) sees the failure; the exit code says which kind.
-        ui::error(&err.display());
+        // Not ui::error: it wraps at the terminal width.
+        eprintln!("{}", stderr_summary(&err));
     }
     std::process::exit(err.exit_code());
 }
@@ -591,12 +603,8 @@ pub async fn search(
                     ui::warning(warning);
                     eprintln!();
                 }
-                if let Some(results) = data["results"].as_array() {
-                    if results.is_empty() {
-                        ui::info("No results found.");
-                        eprintln!();
-                        return;
-                    }
+                let results = data["results"].as_array().filter(|r| !r.is_empty());
+                if let Some(results) = results {
                     for (i, result) in results.iter().enumerate() {
                         let title = result["title"].as_str().unwrap_or("Untitled");
                         let url = result["url"].as_str().unwrap_or("");
@@ -692,6 +700,19 @@ pub async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_summary_is_one_line_however_long_the_message() {
+        let err = ApiError {
+            status: 400,
+            error: "Invalid parameter".into(),
+            message: Some(format!("first line\nsecond line {}", "x".repeat(500))),
+            ..Default::default()
+        };
+        let line = stderr_summary(&err);
+        assert!(!line.contains('\n'), "{line}");
+        assert!(line.starts_with("error: Invalid parameter: first line second line xxx"));
+    }
 
     #[test]
     fn credits_remaining_line_shows_the_balance_only_when_sent() {
