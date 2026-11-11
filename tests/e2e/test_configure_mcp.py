@@ -36,6 +36,7 @@ def devin_and_mcp_public(kn):
     top of keyless /mcp-public (#103), so a binary with the flag has both.
     """
     res = kn("configure-mcp", "--help", key=False)
+    assert res.code == 0, res.err  # a broken binary fails, not skips
     if "--devin" not in res.out + res.err:
         pytest.skip("binary predates --devin and keyless /mcp-public")
 
