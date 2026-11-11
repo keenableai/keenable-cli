@@ -27,6 +27,20 @@ def cursor_cfg(home: Path) -> Path:
     return home / ".cursor" / "mcp.json"
 
 
+@pytest.fixture(scope="module")
+def devin_and_mcp_public(kn):
+    """Skip on a binary that predates --devin and the keyless /mcp-public URL.
+
+    The nightly runs main's tests against the latest release, so tests for
+    merged but unreleased behavior must skip there. --devin (#104) landed on
+    top of keyless /mcp-public (#103), so a binary with the flag has both.
+    """
+    res = kn("configure-mcp", "--help", key=False)
+    assert res.code == 0, res.err  # a broken binary fails, not skips
+    if "--devin" not in res.out + res.err:
+        pytest.skip("binary predates --devin and keyless /mcp-public")
+
+
 # ── Adding the entry ────────────────────────────────────────────────
 
 
@@ -104,7 +118,7 @@ def test_configure_claude_code_disables_standard_tools(mcp):
     assert "WebSearch" in deny and "WebFetch" in deny
 
 
-def test_configure_codex_writes_toml(mcp):
+def test_configure_codex_writes_toml(mcp, devin_and_mcp_public):
     home = Path(mcp.home)
     (home / ".codex").mkdir()
 
@@ -126,7 +140,7 @@ def test_configure_codex_writes_toml(mcp):
     assert "keenable" not in (home / ".codex" / "config.toml").read_text()
 
 
-def test_configure_devin_writes_url_entry(mcp):
+def test_configure_devin_writes_url_entry(mcp, devin_and_mcp_public):
     home = Path(mcp.home)
     devin_dir = home / ".config" / "devin"
     devin_dir.mkdir(parents=True)  # detect Devin Desktop
@@ -161,7 +175,7 @@ def test_configure_devin_writes_url_entry(mcp):
     assert servers["github"]["command"] == "npx"
 
 
-def test_reset_devin_removes_a_renamed_keenable_entry(mcp):
+def test_reset_devin_removes_a_renamed_keenable_entry(mcp, devin_and_mcp_public):
     home = Path(mcp.home)
     devin_dir = home / ".config" / "devin"
     devin_dir.mkdir(parents=True)
@@ -193,7 +207,7 @@ def test_configure_windsurf_keeps_legacy_path(mcp):
     assert not (home / ".config" / "devin").exists()
 
 
-def test_configure_all_detected_clients(mcp):
+def test_configure_all_detected_clients(mcp, devin_and_mcp_public):
     home = Path(mcp.home)
     (home / ".cursor").mkdir()
     (home / ".codex").mkdir()
