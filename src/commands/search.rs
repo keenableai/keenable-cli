@@ -731,6 +731,12 @@ mod tests {
         );
         assert_eq!(line(json!({"usage": {"credits": 1}})), None);
         assert_eq!(line(json!({"results": []})), None);
+        // An empty search still carries the balance, and pretty mode prints
+        // it after "No results found." (no early return).
+        assert_eq!(
+            line(json!({"results": [], "usage": {"credits_remaining": 5}})).as_deref(),
+            Some("Credits left: 5 (keenable.ai/console)")
+        );
     }
 
     fn filters() -> SearchFilters {
