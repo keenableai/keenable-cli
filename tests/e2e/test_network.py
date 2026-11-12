@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import Runner, requires_posix
+from conftest import Runner, exit_code, requires_posix
 from fake_network import FakeInspectingProxy, openssl_available
 
 PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
@@ -62,7 +62,7 @@ def test_login_with_bad_cert_file_names_the_file(kn_fresh, tmp_path):
 
 def test_dead_proxy_yaml_error_has_cause_and_proxy_hint(kn_fresh):
     res = kn_fresh("search", "rust", key=False, env=clean_env(HTTPS_PROXY=DEAD_PROXY), timeout=60)
-    assert res.code == 7  # network
+    assert res.code == exit_code(7)  # network
     data = res.yaml()
     assert data["error"] == "Request failed"
     assert data["message"].startswith("error sending request")
@@ -73,7 +73,7 @@ def test_dead_proxy_yaml_error_has_cause_and_proxy_hint(kn_fresh):
 
 def test_dead_proxy_pretty_error_shows_cause(kn_fresh):
     res = kn_fresh("search", "rust", "-p", key=False, env=clean_env(HTTPS_PROXY=DEAD_PROXY), timeout=60)
-    assert res.code == 7
+    assert res.code == exit_code(7)
     assert "Cause:" in res.err
     assert "HTTPS_PROXY" in res.err
 
@@ -81,7 +81,7 @@ def test_dead_proxy_pretty_error_shows_cause(kn_fresh):
 def test_verbose_shows_proxy_cas_and_chain(kn_fresh):
     res = kn_fresh("search", "rust", "-p", "-v", key=False,
                    env=clean_env(HTTPS_PROXY="http://user:secret@127.0.0.1:9"), timeout=60)
-    assert res.code == 7
+    assert res.code == exit_code(7)
     proxy_line = next(l for l in res.err.splitlines() if "Proxy:" in l)
     assert "127.0.0.1:9" in proxy_line
     assert "Trusted CAs: bundled Mozilla roots" in res.err

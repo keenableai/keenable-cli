@@ -28,6 +28,26 @@ API_KEY = os.environ.get("KEENABLE_API_KEY", "")
 # Seeds basic_search
 SEARCH_QUERY = "rust async patterns"
 
+_PER_KIND_EXIT_CODES = None
+
+
+def exit_code(code: int) -> int:
+    """The exit code a failed search/fetch should have on the binary under test.
+
+    The nightly runs main's tests against the latest release. Binaries from
+    before per-kind exit codes (3-9) exit 1 for every failure, so expect 1
+    there. The help text lists the codes on binaries that have them.
+    """
+    global _PER_KIND_EXIT_CODES
+    if _PER_KIND_EXIT_CODES is None:
+        proc = subprocess.run(
+            [BIN, "search", "--help"], capture_output=True, text=True, timeout=30
+        )
+        assert proc.returncode == 0, proc.stderr  # a broken binary fails here
+        _PER_KIND_EXIT_CODES = "Exit codes:" in proc.stdout + proc.stderr
+    return code if _PER_KIND_EXIT_CODES else 1
+
+
 # Tests that rely on Unix-only behavior — the Unix-domain-socket daemon and the
 # POSIX shell installer. On Windows the CLI stubs the daemon out and ships a
 # PowerShell installer instead, so these self-skip there.

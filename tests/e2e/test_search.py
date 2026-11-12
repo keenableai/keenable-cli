@@ -5,7 +5,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import SEARCH_QUERY, host_of, host_under, parse_ts, results_of, search_results, utc
+from conftest import (
+    SEARCH_QUERY,
+    exit_code,
+    host_of,
+    host_under,
+    parse_ts,
+    results_of,
+    search_results,
+    utc,
+)
 
 # published_at is omitted (not nulled) for pages with no known publish date
 RESULT_FIELDS = ("url", "title", "snippet", "acquired_at")
@@ -64,7 +73,7 @@ def test_snippet_max_length(kn):
 
 def test_snippet_max_length_out_of_range(kn):
     res = kn("search", SEARCH_QUERY, "--snippet-max-length", "50")
-    assert res.code == 8  # invalid request
+    assert res.code == exit_code(8)  # invalid request
     data = res.yaml()
     assert data["error"] == "Invalid parameter"
     assert "snippet_max_length" in data["message"]
@@ -80,7 +89,7 @@ def test_max_results(kn):
 
 def test_max_results_out_of_range(kn):
     res = kn("search", SEARCH_QUERY, "--max-results", "51")
-    assert res.code == 8
+    assert res.code == exit_code(8)
     data = res.yaml()
     assert data["error"] == "Invalid parameter"
     assert "max_results" in data["message"]
@@ -206,7 +215,7 @@ def test_exclude_domains_covers_subdomains(kn, domain_flags):
 
 
 def _assert_filter_rejected(res, entry):
-    assert res.code == 8, res.out
+    assert res.code == exit_code(8), res.out
     data = res.yaml()
     assert data["error"] == "invalid_filter", data
     hint = data.get("hint")
@@ -217,7 +226,7 @@ def _assert_filter_rejected(res, entry):
 
 def test_bad_entry_errors_in_pretty(kn, domain_flags):
     res = kn("search", "x", "--exclude-domain", "docs.rs/releases", "-p")
-    assert res.code == 8
+    assert res.code == exit_code(8)
     assert res.out == ""
     err = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", res.err).split())
     assert 'Invalid exclude_domains value "docs.rs/releases"' in err, res.err
@@ -271,7 +280,7 @@ def test_1000_exclude_hosts_are_accepted(kn, domain_flags):
 
 def test_more_than_1000_exclude_hosts_is_rejected(kn, domain_flags):
     res = kn("search", "x", "--exclude-domain", _hosts(0, 1001))
-    assert res.code == 8, res.out
+    assert res.code == exit_code(8), res.out
     data = res.yaml()
     assert data["error"] == "invalid_filter", data
     assert data["message"].startswith("Invalid exclude_domains value"), data
@@ -286,7 +295,7 @@ def test_limit_counts_hosts_after_cleanup(kn, domain_flags):
 
 def test_malformed_date(kn):
     res = kn("search", "x", "--acquired-after", "notadate")
-    assert res.code == 8
+    assert res.code == exit_code(8)
     data = res.yaml()
     # server wording drifted from "Invalid parameter" to "Bad request" (2026-06)
     assert data["error"] in ("Invalid parameter", "Bad request")
@@ -309,7 +318,7 @@ def test_missing_query_arg(kn):
 
 def test_empty_query(kn):
     res = kn("search", "")
-    assert res.code == 8
+    assert res.code == exit_code(8)
     data = res.yaml()
     assert data["error"] == "Missing required parameter"
     assert '"query" is required' in data["message"]
@@ -317,11 +326,13 @@ def test_empty_query(kn):
 
 def test_invalid_api_key(kn):
     res = kn("search", "x", "--api-key", "keen_bad_key", key=False)
-    assert res.code == 3  # authentication
+    assert res.code == exit_code(3)  # authentication
     data = res.yaml()
     assert data["error"] == "Authentication failed"
-    # YAML stays on stdout; a one-line summary goes to stderr too.
-    assert "Authentication failed" in res.err
+    # YAML stays on stdout; a one-line summary goes to stderr too (on
+    # binaries with per-kind exit codes, which shipped together with it).
+    if exit_code(3) == 3:
+        assert "Authentication failed" in res.err
     assert data["message"] == "Invalid API key"
     assert "keenable login" in data["hint"]
 

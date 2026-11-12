@@ -2,6 +2,8 @@
 
 import pytest
 
+from conftest import exit_code
+
 # Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
 # <h1> and reworded this paragraph (was "...for use in illustrative examples in
 # documents"). When it changes again, update this one line.
@@ -90,7 +92,7 @@ def test_multiple_urls_rejected(kn):
 
 def test_unparseable_url(kn):
     res = kn("fetch", "not-a-url")
-    assert res.code == 8  # invalid request
+    assert res.code == exit_code(8)  # invalid request
     data = res.yaml()
     assert data["error"] == "Bad request"
     assert "Could not parse the provided URL" in data["message"]
@@ -100,14 +102,14 @@ def test_dead_page(kn):
     # Not example.com: since Oct 2026 it serves its page on every path,
     # so a made-up path there is no longer a dead page.
     res = kn("fetch", "https://www.iana.org/nonexistent-xyz-12345")
-    assert res.code == 6  # the page failed, not the request
+    assert res.code == exit_code(6)  # the page failed, not the request
     data = res.yaml()
     assert data["error"] == "Not found"
 
 
 def test_invalid_key_on_fetch(kn):
     res = kn("fetch", "https://example.com", "--api-key", "keen_bad", key=False)
-    assert res.code == 3  # authentication
+    assert res.code == exit_code(3)  # authentication
     data = res.yaml()
     assert data["error"] == "Authentication failed"
     # Server distinguishes malformed keys from well-formed-but-unknown ones.
