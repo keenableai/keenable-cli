@@ -328,6 +328,10 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
         return false;
     };
     let mut config_changed = false;
+    let mut delta = Delta::new();
+    if !ide.config_path.exists() {
+        delta.insert("created_file".into(), json!(true));
+    }
 
     // Step 1: Remove duplicate entries (other names pointing at Keenable's URL)
     let servers = config
@@ -412,6 +416,9 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
             ui::sub_success(&format!("{} updated", DISPLAY_NAME));
         }
         None => {
+            if config.get(ide.servers_key).is_none() {
+                delta.insert("created_keys".into(), json!([ide.servers_key]));
+            }
             ensure_object(&mut config, ide.servers_key);
             config[ide.servers_key][ENTRY_NAME] = desired;
             config_changed = true;
@@ -421,10 +428,21 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
 
     // Step 3: Disable standard tools where the client has them
     if ide.has_standard_tools {
-        if ide.flag == "opencode" {
-            disable_opencode_standard_tools(&mut config, &mut config_changed);
+        let tools_delta = if ide.flag == "opencode" {
+            disable_opencode_standard_tools(&mut config, &mut config_changed)
         } else {
-            disable_standard_tools(&mut config, &mut config_changed);
+            disable_standard_tools(&mut config, &mut config_changed)
+        };
+        for (k, v) in tools_delta {
+            if k == "created_keys" {
+                let mut keys = delta.remove(&k).unwrap_or_else(|| json!([]));
+                keys.as_array_mut()
+                    .unwrap()
+                    .extend(v.as_array().cloned().unwrap_or_default());
+                delta.insert(k, keys);
+            } else {
+                delta.insert(k, v);
+            }
         }
     }
 
@@ -436,6 +454,8 @@ fn configure_ide(ide: &IDEDef, api_key: Option<&str>) -> bool {
         ));
         return false;
     }
+    // Only once written: reset must not undo changes that never landed.
+    record(&ide.config_path, &delta);
     true
 }
 
@@ -546,6 +566,7 @@ fn reset_ide(ide: &IDEDef) -> bool {
         return false;
     };
     let mut config_changed = false;
+    let rec = config::get_restore_record(&ide.config_path);
 
     // Step 1: Remove the Keenable MCP entry
     if let Some(servers) = config
@@ -598,10 +619,23 @@ fn reset_ide(ide: &IDEDef) -> bool {
     // Step 3: Restore standard tools where the client has them
     if ide.has_standard_tools {
         if ide.flag == "opencode" {
-            restore_opencode_standard_tools(&mut config, &mut config_changed);
+            restore_opencode_standard_tools(&mut config, &mut config_changed, rec.as_ref());
         } else {
-            restore_standard_tools(&mut config, &mut config_changed);
+            restore_standard_tools(&mut config, &mut config_changed, rec.as_ref());
         }
+    }
+
+    // Drop the servers key configure created, if nothing else is in it.
+    if let Some(rec) = &rec
+        && created_key(rec, ide.servers_key)
+        && config
+            .get(ide.servers_key)
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.is_empty())
+        && let Some(obj) = config.as_object_mut()
+    {
+        obj.remove(ide.servers_key);
+        config_changed = true;
     }
 
     // Step 4: Clean Codex Apps cache if applicable
@@ -609,7 +643,7 @@ fn reset_ide(ide: &IDEDef) -> bool {
         clean_codex_apps_cache();
     }
 
-    if config_changed && let Err(e) = write_config(&ide.config_path, &config) {
+    if config_changed && let Err(e) = write_or_remove(&ide.config_path, &config, rec.as_ref()) {
         ui::sub_error(&format!(
             "Failed to write {}: {}",
             ide.config_path.display(),
@@ -617,6 +651,7 @@ fn reset_ide(ide: &IDEDef) -> bool {
         ));
         return false;
     }
+    config::clear_restore_record(&ide.config_path);
     true
 }
 
@@ -912,7 +947,85 @@ fn confirm_reset(ide_names: &[&str], yes: bool) -> bool {
 
 // ── Standard tools ──────────────────────────────────────────────────
 
-fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
+/// Restore-record delta for one file (see `config::update_restore_record`).
+type Delta = serde_json::Map<String, Value>;
+
+/// Fold `delta` into a stored record. Repeated configures keep the first
+/// prior state: a later run sees our own changes, not the user's original.
+fn merge_record(rec: &mut Value, delta: &Delta) {
+    if delta.get("created_file") == Some(&json!(true)) {
+        rec["created_file"] = json!(true);
+    }
+    for list in ["created_keys", "allow_removed"] {
+        let Some(new) = delta.get(list).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        if !rec[list].is_array() {
+            rec[list] = json!([]);
+        }
+        let arr = rec[list].as_array_mut().unwrap();
+        for item in new {
+            let same = |a: &Value| match list {
+                "allow_removed" => a["tool"] == item["tool"],
+                _ => a == item,
+            };
+            if !arr.iter().any(same) {
+                arr.push(item.clone());
+            }
+        }
+    }
+    if let Some(prev) = delta.get("permission_prev").and_then(|v| v.as_object()) {
+        if !rec["permission_prev"].is_object() {
+            rec["permission_prev"] = json!({});
+        }
+        for (tool, value) in prev {
+            if rec["permission_prev"].get(tool).is_none() {
+                rec["permission_prev"][tool] = value.clone();
+            }
+        }
+    }
+    if let Some(was) = delta.get("permission_was")
+        && rec.get("permission_was").is_none()
+    {
+        rec["permission_was"] = was.clone();
+    }
+}
+
+fn record(path: &std::path::Path, delta: &Delta) {
+    if !delta.is_empty() {
+        config::update_restore_record(path, |rec| merge_record(rec, delta));
+    }
+}
+
+fn display_path(path: &std::path::Path) -> String {
+    crate::config::home_dir()
+        .and_then(|h| {
+            path.strip_prefix(h)
+                .ok()
+                .map(|p| format!("~/{}", p.display()))
+        })
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Write `config` to `path`, or delete the file when configure created it
+/// and nothing else is left in it.
+fn write_or_remove(path: &PathBuf, config: &Value, rec: Option<&Value>) -> std::io::Result<()> {
+    let created = rec.is_some_and(|r| r["created_file"] == json!(true));
+    let empty = config.as_object().is_some_and(|m| m.is_empty());
+    if created && empty {
+        match fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    } else {
+        write_config(path, config)
+    }
+}
+
+/// Configure: deny the standard tools and strip them from allow lists.
+/// Returns the delta for `config` (~/.claude.json), recorded by the caller
+/// once that file is written; the other files are recorded here.
+fn disable_standard_tools(config: &mut Value, changed: &mut bool) -> Delta {
     // Claude Code reads permissions from ~/.claude/settings.json — denies in
     // ~/.claude.json are ignored. Migrate legacy entries out instead of
     // adding more.
@@ -925,20 +1038,35 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
         );
     }
 
-    // Remove from allow list in .claude.json
-    remove_from_allow_list(config, changed);
+    let mut main_delta = Delta::new();
+    let removed = strip_allow_list(config);
+    if !removed.is_empty() {
+        *changed = true;
+        ui::sub_success(&allow_removed_msg(&removed));
+        main_delta.insert("allow_removed".into(), allow_removed_json(&removed));
+    }
 
     // Add deny + remove from allow list in ~/.claude/settings.json
     if let Some(settings_path) = claude_code_settings_path()
         && let Some(mut settings) =
             read_config_for_write(&settings_path, "Standard tools may still be enabled")
     {
+        let existed = settings_path.exists();
         let mut settings_changed = false;
         let deny_result = add_deny_to_settings_quiet(&mut settings, &mut settings_changed);
-        let allow_msg = remove_from_allow_list_quiet(&mut settings, &mut settings_changed);
+        let removed = strip_allow_list(&mut settings);
+        settings_changed |= !removed.is_empty();
         if settings_changed {
             match write_config(&settings_path, &settings) {
                 Ok(()) => {
+                    let mut delta = Delta::new();
+                    if !existed {
+                        delta.insert("created_file".into(), json!(true));
+                    }
+                    if !removed.is_empty() {
+                        delta.insert("allow_removed".into(), allow_removed_json(&removed));
+                    }
+                    record(&settings_path, &delta);
                     match deny_result {
                         Some((msg, added)) => {
                             // Record what we added so reset restores only
@@ -948,8 +1076,8 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
                         }
                         None => config::add_managed_deny_tools(&[]),
                     }
-                    if let Some(msg) = allow_msg {
-                        ui::sub_success(&msg);
+                    if !removed.is_empty() {
+                        ui::sub_success(&allow_removed_msg(&removed));
                     }
                 }
                 Err(e) => {
@@ -971,50 +1099,91 @@ fn disable_standard_tools(config: &mut Value, changed: &mut bool) {
 
     // Scan project-level .claude/settings.local.json files and remove from allow lists
     remove_from_project_allow_lists();
+    main_delta
 }
 
-/// Remove standard tools from a `permissions.allow` list.
-/// Returns a description of what was removed, if anything.
-fn remove_from_allow_list(config: &mut Value, changed: &mut bool) {
-    let allow_list = config
+/// Remove standard tools from `permissions.allow`, dropping the list (and
+/// `permissions`) when it ends up empty. Returns each removed tool with its
+/// index in the original list, so reset can put it back in place.
+fn strip_allow_list(config: &mut Value) -> Vec<(String, usize)> {
+    let Some(allow) = config
         .pointer("/permissions/allow")
         .and_then(|v| v.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    let mut kept = Vec::new();
+    for (i, v) in allow.iter().enumerate() {
+        match v.as_str() {
+            Some(t) if CLAUDE_CODE_STANDARD_TOOLS.contains(&t) => removed.push((t.to_string(), i)),
+            _ => kept.push(v.clone()),
+        }
+    }
+    if removed.is_empty() {
+        return removed;
+    }
+    if kept.is_empty() {
+        if let Some(perms) = config
+            .get_mut("permissions")
+            .and_then(|v| v.as_object_mut())
+        {
+            perms.remove("allow");
+            if perms.is_empty()
+                && let Some(obj) = config.as_object_mut()
+            {
+                obj.remove("permissions");
+            }
+        }
+    } else {
+        config["permissions"]["allow"] = Value::Array(kept);
+    }
+    removed
+}
+
+fn allow_removed_msg(removed: &[(String, usize)]) -> String {
+    let tools: Vec<&str> = removed.iter().map(|(t, _)| t.as_str()).collect();
+    format!("Removed {} from allow list", tools.join(", "))
+}
+
+fn allow_removed_json(removed: &[(String, usize)]) -> Value {
+    removed
+        .iter()
+        .map(|(t, i)| json!({"tool": t, "index": i}))
+        .collect()
+}
+
+/// Put recorded tools back into `permissions.allow` at their old positions.
+/// Returns the tools restored (ones already present are skipped).
+fn restore_allow_list(config: &mut Value, rec: &Value) -> Vec<String> {
+    let mut entries: Vec<(String, usize)> = rec["allow_removed"]
+        .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
+                .filter_map(|e| {
+                    Some((
+                        e["tool"].as_str()?.to_string(),
+                        e["index"].as_u64()? as usize,
+                    ))
+                })
+                .collect()
         })
         .unwrap_or_default();
-
-    let found: Vec<&str> = CLAUDE_CODE_STANDARD_TOOLS
-        .iter()
-        .filter(|tool| allow_list.iter().any(|a| a == **tool))
-        .copied()
-        .collect();
-
-    if !found.is_empty() {
-        let filtered: Vec<String> = allow_list
-            .into_iter()
-            .filter(|a| !CLAUDE_CODE_STANDARD_TOOLS.contains(&a.as_str()))
-            .collect();
-        if filtered.is_empty() {
-            if let Some(perms) = config
-                .get_mut("permissions")
-                .and_then(|v| v.as_object_mut())
-            {
-                perms.remove("allow");
-                if perms.is_empty()
-                    && let Some(obj) = config.as_object_mut()
-                {
-                    obj.remove("permissions");
-                }
-            }
-        } else {
-            config["permissions"]["allow"] = json!(filtered);
+    entries.sort_by_key(|(_, i)| *i);
+    let mut restored = Vec::new();
+    for (tool, index) in entries {
+        ensure_object(config, "permissions");
+        if !config["permissions"]["allow"].is_array() {
+            config["permissions"]["allow"] = json!([]);
         }
-        *changed = true;
-        ui::sub_success(&format!("Removed {} from allow list", found.join(", ")));
+        let allow = config["permissions"]["allow"].as_array_mut().unwrap();
+        if allow.iter().any(|a| a.as_str() == Some(tool.as_str())) {
+            continue;
+        }
+        allow.insert(index.min(allow.len()), json!(tool));
+        restored.push(tool);
     }
+    restored
 }
 
 /// Add standard tools to the `permissions.deny` list in a settings file.
@@ -1080,24 +1249,23 @@ fn remove_from_project_allow_lists() {
         let Ok(mut config) = read_config(&path) else {
             continue; // unparseable project settings — leave untouched
         };
-        let mut changed = false;
-        let removed_msg = remove_from_allow_list_quiet(&mut config, &mut changed);
-        if changed {
-            let display_path = path
-                .strip_prefix(&home)
-                .map(|p| format!("~/{}", p.display()))
-                .unwrap_or_else(|_| path.display().to_string());
-            match write_config(&path, &config) {
-                Ok(()) => {
-                    ui::sub_success(&format!(
-                        "{} in {}",
-                        removed_msg.unwrap_or_else(|| "Updated allow list".to_string()),
-                        display_path
-                    ));
-                }
-                Err(e) => {
-                    ui::sub_error(&format!("Failed to write {}: {}", display_path, e));
-                }
+        let removed = strip_allow_list(&mut config);
+        if removed.is_empty() {
+            continue;
+        }
+        match write_config(&path, &config) {
+            Ok(()) => {
+                let mut delta = Delta::new();
+                delta.insert("allow_removed".into(), allow_removed_json(&removed));
+                record(&path, &delta);
+                ui::sub_success(&format!(
+                    "{} in {}",
+                    allow_removed_msg(&removed),
+                    display_path(&path)
+                ));
+            }
+            Err(e) => {
+                ui::sub_error(&format!("Failed to write {}: {}", display_path(&path), e));
             }
         }
     }
@@ -1140,92 +1308,77 @@ fn find_claude_settings(
     }
 }
 
-/// Like `remove_from_allow_list` but without printing — returns a message
-/// string if changes were made (caller prints after confirming write).
-fn remove_from_allow_list_quiet(config: &mut Value, changed: &mut bool) -> Option<String> {
-    let allow_list = config
-        .pointer("/permissions/allow")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let found: Vec<&str> = CLAUDE_CODE_STANDARD_TOOLS
-        .iter()
-        .filter(|tool| allow_list.iter().any(|a| a == **tool))
-        .copied()
-        .collect();
-
-    if !found.is_empty() {
-        let filtered: Vec<String> = allow_list
-            .into_iter()
-            .filter(|a| !CLAUDE_CODE_STANDARD_TOOLS.contains(&a.as_str()))
-            .collect();
-        if filtered.is_empty() {
-            if let Some(perms) = config
-                .get_mut("permissions")
-                .and_then(|v| v.as_object_mut())
-            {
-                perms.remove("allow");
-                if perms.is_empty()
-                    && let Some(obj) = config.as_object_mut()
-                {
-                    obj.remove("permissions");
-                }
-            }
-        } else {
-            config["permissions"]["allow"] = json!(filtered);
-        }
-        *changed = true;
-        Some(format!("Removed {} from allow list", found.join(", ")))
-    } else {
-        None
-    }
-}
-
-fn disable_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
-    let already_denied: Vec<&&str> = OPENCODE_STANDARD_TOOLS
+/// Configure: set the OpenCode tools to "deny". Returns the delta recording
+/// each tool's prior value (null = unset) and a non-object `permission`.
+fn disable_opencode_standard_tools(config: &mut Value, changed: &mut bool) -> Delta {
+    let mut delta = Delta::new();
+    let missing: Vec<&str> = OPENCODE_STANDARD_TOOLS
         .iter()
         .filter(|tool| {
             config
                 .pointer(&format!("/permission/{}", tool))
                 .and_then(|v| v.as_str())
-                == Some("deny")
+                != Some("deny")
         })
+        .copied()
         .collect();
 
-    if already_denied.len() == OPENCODE_STANDARD_TOOLS.len() {
+    if missing.is_empty() {
         ui::sub_done(&format!(
             "Standard tools already disabled: {}",
             OPENCODE_STANDARD_TOOLS.join(", ")
         ));
-    } else {
-        let mut missing = Vec::new();
-        ensure_object(config, "permission");
-        for tool in OPENCODE_STANDARD_TOOLS {
-            let current = config
-                .pointer(&format!("/permission/{}", tool))
-                .and_then(|v| v.as_str());
-            if current != Some("deny") {
-                config["permission"][*tool] = json!("deny");
-                missing.push(*tool);
-            }
-        }
-        *changed = true;
-        ui::sub_success(&format!("Disabled standard tools: {}", missing.join(", ")));
+        // Recorded as "changed nothing", so reset keeps the user's deny.
+        delta.insert("permission_prev".into(), json!({}));
+        return delta;
     }
+
+    match config.get("permission") {
+        None => {
+            delta.insert("created_keys".into(), json!(["permission"]));
+        }
+        Some(p) if !p.is_object() => {
+            delta.insert("permission_was".into(), p.clone());
+        }
+        _ => {}
+    }
+    ensure_object(config, "permission");
+    let mut prev = serde_json::Map::new();
+    for tool in &missing {
+        let old = config["permission"]
+            .get(*tool)
+            .cloned()
+            .unwrap_or(Value::Null);
+        prev.insert(tool.to_string(), old);
+        config["permission"][*tool] = json!("deny");
+    }
+    delta.insert("permission_prev".into(), Value::Object(prev));
+    *changed = true;
+    ui::sub_success(&format!("Disabled standard tools: {}", missing.join(", ")));
+    delta
 }
 
-fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
+/// Reset for Claude Code: drop the denies configure added and put back the
+/// allow entries it removed, in ~/.claude.json (`config`), settings.json and
+/// project settings.local.json files.
+fn restore_standard_tools(config: &mut Value, changed: &mut bool, rec: Option<&Value>) {
     // Legacy cleanup: old versions wrote denies into ~/.claude.json too.
     let mut legacy_changed = false;
     remove_from_deny_list(config, &mut legacy_changed, CLAUDE_CODE_STANDARD_TOOLS);
     if legacy_changed {
         *changed = true;
         ui::sub_success("Removed legacy deny entries from .claude.json");
+    }
+
+    if let Some(rec) = rec {
+        let restored = restore_allow_list(config, rec);
+        if !restored.is_empty() {
+            *changed = true;
+            ui::sub_success(&format!(
+                "Restored {} to allow list in .claude.json",
+                restored.join(", ")
+            ));
+        }
     }
 
     // settings.json: remove only the denies configure recorded as its own.
@@ -1236,35 +1389,86 @@ fn restore_standard_tools(config: &mut Value, changed: &mut bool) {
         None => CLAUDE_CODE_STANDARD_TOOLS.to_vec(),
     };
 
-    if tools.is_empty() {
-        ui::sub_done("Standard tools were not disabled by configure — leaving them as-is");
-    } else if let Some(settings_path) = claude_code_settings_path() {
-        let Some(mut settings) =
-            read_config_for_write(&settings_path, "Standard tools may still be disabled")
-        else {
-            return; // keep the record so a re-run can still restore
-        };
-        let mut settings_changed = false;
-        remove_from_deny_list(&mut settings, &mut settings_changed, &tools);
-        if settings_changed {
-            match write_config(&settings_path, &settings) {
-                Ok(()) => {
-                    ui::sub_success(&format!("Re-enabled standard tools: {}", tools.join(", ")));
-                }
-                Err(e) => {
+    if let Some(settings_path) = claude_code_settings_path() {
+        let settings_rec = config::get_restore_record(&settings_path);
+        if tools.is_empty() && settings_rec.is_none() {
+            ui::sub_done("Standard tools were not disabled by configure — leaving them as-is");
+        } else {
+            let Some(mut settings) =
+                read_config_for_write(&settings_path, "Standard tools may still be disabled")
+            else {
+                return; // keep the records so a re-run can still restore
+            };
+            let mut settings_changed = false;
+            remove_from_deny_list(&mut settings, &mut settings_changed, &tools);
+            let denies_removed = settings_changed;
+            let restored = settings_rec
+                .as_ref()
+                .map(|r| restore_allow_list(&mut settings, r))
+                .unwrap_or_default();
+            settings_changed |= !restored.is_empty();
+            if settings_changed {
+                if let Err(e) = write_or_remove(&settings_path, &settings, settings_rec.as_ref()) {
                     ui::sub_error(&format!(
                         "Failed to write {}: {}",
                         settings_path.display(),
                         e
                     ));
-                    return; // keep the record
+                    return; // keep the records
                 }
+                if denies_removed {
+                    ui::sub_success(&format!("Re-enabled standard tools: {}", tools.join(", ")));
+                }
+                if !restored.is_empty() {
+                    ui::sub_success(&format!(
+                        "Restored {} to allow list in settings.json",
+                        restored.join(", ")
+                    ));
+                }
+            } else {
+                ui::sub_done("Standard tools were not disabled");
             }
-        } else {
-            ui::sub_done("Standard tools were not disabled");
+            config::clear_restore_record(&settings_path);
         }
     }
     config::clear_managed_deny_tools();
+
+    restore_project_allow_lists();
+}
+
+/// Put back the allow entries configure removed from project
+/// settings.local.json files.
+fn restore_project_allow_lists() {
+    let skip: Vec<PathBuf> = all_ides()
+        .into_iter()
+        .map(|ide| ide.config_path)
+        .chain(claude_code_settings_path())
+        .collect();
+    for (path, rec) in config::restore_records() {
+        if skip.contains(&path) || rec.get("allow_removed").is_none() {
+            continue;
+        }
+        if !path.is_file() {
+            config::clear_restore_record(&path); // moved or deleted since
+            continue;
+        }
+        let Some(mut settings) = read_config_for_write(&path, "Allow list not restored") else {
+            continue;
+        };
+        let restored = restore_allow_list(&mut settings, &rec);
+        if !restored.is_empty() {
+            if let Err(e) = write_config(&path, &settings) {
+                ui::sub_error(&format!("Failed to write {}: {}", display_path(&path), e));
+                continue;
+            }
+            ui::sub_success(&format!(
+                "Restored {} to allow list in {}",
+                restored.join(", "),
+                display_path(&path)
+            ));
+        }
+        config::clear_restore_record(&path);
+    }
 }
 
 /// Remove the given tools from a `permissions.deny` list.
@@ -1307,7 +1511,53 @@ fn remove_from_deny_list(config: &mut Value, changed: &mut bool, tools: &[&str])
     }
 }
 
-fn restore_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
+/// Reset for OpenCode. With a record, each tool configure denied gets its
+/// prior value back (if still "deny"); without one (older configs), every
+/// standard-tool deny is removed.
+fn restore_opencode_standard_tools(config: &mut Value, changed: &mut bool, rec: Option<&Value>) {
+    let Some(rec) = rec else {
+        return restore_opencode_unrecorded(config, changed);
+    };
+    let Some(prev) = rec["permission_prev"].as_object().filter(|p| !p.is_empty()) else {
+        ui::sub_done("Standard tools were not disabled by configure — leaving them as-is");
+        return;
+    };
+
+    let mut restored = Vec::new();
+    if let Some(perms) = config.get_mut("permission").and_then(|v| v.as_object_mut()) {
+        for (tool, old) in prev {
+            if perms.get(tool).and_then(|v| v.as_str()) != Some("deny") {
+                continue; // changed since configure; leave it
+            }
+            if old.is_null() {
+                perms.remove(tool);
+            } else {
+                perms.insert(tool.clone(), old.clone());
+            }
+            restored.push(tool.as_str());
+        }
+        if perms.is_empty() {
+            if let Some(was) = rec.get("permission_was") {
+                config["permission"] = was.clone();
+            } else if created_key(rec, "permission")
+                && let Some(obj) = config.as_object_mut()
+            {
+                obj.remove("permission");
+            }
+        }
+    }
+    if restored.is_empty() {
+        ui::sub_done("Standard tools were not disabled");
+    } else {
+        *changed = true;
+        ui::sub_success(&format!(
+            "Re-enabled standard tools: {}",
+            restored.join(", ")
+        ));
+    }
+}
+
+fn restore_opencode_unrecorded(config: &mut Value, changed: &mut bool) {
     let had_tools = OPENCODE_STANDARD_TOOLS.iter().any(|tool| {
         config
             .pointer(&format!("/permission/{}", tool))
@@ -1334,6 +1584,12 @@ fn restore_opencode_standard_tools(config: &mut Value, changed: &mut bool) {
     } else {
         ui::sub_done("Standard tools were not disabled");
     }
+}
+
+fn created_key(rec: &Value, key: &str) -> bool {
+    rec["created_keys"]
+        .as_array()
+        .is_some_and(|keys| keys.iter().any(|k| k == key))
 }
 
 // ── Codex Apps cache ────────────────────────────────────────────────

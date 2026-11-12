@@ -137,7 +137,9 @@ def test_configure_codex_writes_toml(mcp, devin_and_mcp_public):
     assert (home / ".codex" / "config.toml").read_text().count("[mcp_servers.keenable]") == 1
     res = mcp("reset", "--codex", "--yes", key=False)
     assert res.code == 0, res.err
-    assert "keenable" not in (home / ".codex" / "config.toml").read_text()
+    # reset deletes a file configure created once nothing else is in it.
+    cfg = home / ".codex" / "config.toml"
+    assert not cfg.exists() or "keenable" not in cfg.read_text()
 
 
 def test_configure_devin_writes_url_entry(mcp, devin_and_mcp_public):

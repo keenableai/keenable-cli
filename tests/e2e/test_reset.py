@@ -16,6 +16,11 @@ def read_json(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
+def read_json_or_empty(path: Path) -> dict:
+    """reset deletes a file configure created once nothing else is in it."""
+    return read_json(path) if path.exists() else {}
+
+
 def cursor_cfg(home: Path) -> Path:
     return home / ".cursor" / "mcp.json"
 
@@ -28,7 +33,7 @@ def test_reset_removes_keenable_entry(mcp):
 
     res = mcp("reset", "--cursor", "--yes", key=False)
     assert res.code == 0, res.err
-    assert "keenable" not in read_json(cursor_cfg(home)).get("mcpServers", {})
+    assert "keenable" not in read_json_or_empty(cursor_cfg(home)).get("mcpServers", {})
 
 
 def test_reset_roundtrip_preserves_unrelated(mcp):
@@ -56,7 +61,7 @@ def test_reset_removes_other_keenable_url_entries(mcp):
     cursor_cfg(home).write_text(json.dumps(cfg))
 
     assert mcp("reset", "--cursor", "--yes", key=False).code == 0
-    servers = read_json(cursor_cfg(home)).get("mcpServers", {})
+    servers = read_json_or_empty(cursor_cfg(home)).get("mcpServers", {})
     assert "keenable" not in servers and "stray-keen" not in servers
 
 
@@ -69,9 +74,9 @@ def test_reset_claude_code_restores_standard_tools(mcp):
     res = mcp("reset", "--claude-code", "--yes", key=False)
     assert res.code == 0, res.err
 
-    deny = read_json(home / ".claude" / "settings.json").get("permissions", {}).get("deny", [])
+    deny = read_json_or_empty(home / ".claude" / "settings.json").get("permissions", {}).get("deny", [])
     assert "WebSearch" not in deny and "WebFetch" not in deny
-    assert "keenable" not in read_json(home / ".claude.json").get("mcpServers", {})
+    assert "keenable" not in read_json_or_empty(home / ".claude.json").get("mcpServers", {})
 
 
 def test_reset_keeps_user_set_deny(mcp):

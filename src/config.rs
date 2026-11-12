@@ -183,3 +183,60 @@ pub fn add_managed_deny_tools(tools: &[String]) {
 pub fn clear_managed_deny_tools() {
     remove_config_value("managed_deny_tools");
 }
+
+// Per client file, what configure-mcp changed beyond its own entry, keyed by
+// path, so reset undoes exactly that. Fields:
+//   created_file: bool, created_keys: [key], allow_removed: [{tool, index}],
+//   permission_prev: {tool: prior value | null}, permission_was: value.
+
+const RESTORE_KEY: &str = "restore_records";
+
+fn record_key(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+pub fn restore_records() -> Vec<(PathBuf, Value)> {
+    get_config()[RESTORE_KEY]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (PathBuf::from(k), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn get_restore_record(path: &Path) -> Option<Value> {
+    let v = &get_config()[RESTORE_KEY][record_key(path)];
+    v.is_object().then(|| v.clone())
+}
+
+pub fn update_restore_record(path: &Path, f: impl FnOnce(&mut Value)) {
+    let mut all = get_config()[RESTORE_KEY].clone();
+    if !all.is_object() {
+        all = Value::Object(Default::default());
+    }
+    let key = record_key(path);
+    let mut rec = all[&key].clone();
+    if !rec.is_object() {
+        rec = Value::Object(Default::default());
+    }
+    f(&mut rec);
+    all[&key] = rec;
+    set_config_value(RESTORE_KEY, all);
+}
+
+pub fn clear_restore_record(path: &Path) {
+    let mut all = get_config()[RESTORE_KEY].clone();
+    let Some(map) = all.as_object_mut() else {
+        return;
+    };
+    if map.remove(&record_key(path)).is_none() {
+        return;
+    }
+    if map.is_empty() {
+        remove_config_value(RESTORE_KEY);
+    } else {
+        set_config_value(RESTORE_KEY, all);
+    }
+}

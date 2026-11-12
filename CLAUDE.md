@@ -243,7 +243,7 @@ Both modes share a common structure: a "Keenable CLI" section (API key check) fo
 **Per-client configuration (when a flag is set):**
 1. **Duplicate cleanup** — removes non-`keenable` entries pointing at `api.keenable.ai` or `api-test.keenable.ai`.
 2. **Keenable MCP entry** — adds or updates the `keenable` MCP entry with correct URL and API key.
-3. **Standard tools** (Claude Code only) — adds `WebSearch` and `WebFetch` to `permissions.deny` in `~/.claude/settings.json` (the file Claude Code reads; legacy denies in `~/.claude.json` are migrated out). Tools it added are recorded in `~/.keenable/config.json` (`managed_deny_tools`) so reset restores only those.
+3. **Standard tools** (Claude Code and OpenCode) — Claude Code: adds `WebSearch` and `WebFetch` to `permissions.deny` in `~/.claude/settings.json` (the file Claude Code reads; legacy denies in `~/.claude.json` are migrated out) and removes them from `permissions.allow` in `~/.claude.json`, `~/.claude/settings.json` and project `.claude/settings.local.json` files. OpenCode: sets `permission.websearch` to `deny`. Tools it added to the deny list are recorded in `~/.keenable/config.json` (`managed_deny_tools`); everything else it changed outside its own entry is recorded per file in `restore_records` (allow entries removed with their index, prior `permission.*` values, files and top-level keys it created). Records are written only after the file write succeeds, and a re-run never overwrites the first prior state.
 4. **Conflicting MCPs** — warns about known search MCPs (`brave-search`, `tavily`, `exa`, etc.) but does not auto-remove them.
 
 **Interactive confirmation:**
@@ -264,7 +264,9 @@ Before modifying configs, shows a prompt with three options: "Proceed", "Proceed
 **Per-client reset:**
 1. Removes the `keenable` MCP entry from the IDE config.
 2. Removes any other entries pointing at `api.keenable.ai` / `api-test.keenable.ai`.
-3. **Claude Code only**: removes from `permissions.deny` the tools recorded in `managed_deny_tools` (all of `WebSearch`/`WebFetch` when no record exists) to re-enable standard tools without undoing denies the user set independently. Cleans up empty `deny`/`permissions` objects.
+3. **Claude Code**: removes from `permissions.deny` the tools recorded in `managed_deny_tools` (all of `WebSearch`/`WebFetch` when no record exists) to re-enable standard tools without undoing denies the user set independently. Cleans up empty `deny`/`permissions` objects. Puts the allow entries in `restore_records` back at their old positions (skipping ones already present) in `~/.claude.json`, `~/.claude/settings.json` and project `settings.local.json` files.
+4. **OpenCode**: with a record, sets each `permission.*` configure denied back to its prior value (removed if it was unset, untouched if no longer `deny`); without one (older configs), removes the `websearch` deny.
+5. Removes the servers key and the file itself when configure created them and they are empty again, then drops that file's record. The goal: configure then reset leaves every touched file as it was (`tests/configure_reset.rs`).
 
 ### Shared IDE Module (`src/commands/ide.rs`)
 
