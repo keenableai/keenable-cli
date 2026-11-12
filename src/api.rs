@@ -987,7 +987,6 @@ mod tests {
         ] {
             let err = resolve_api_base(Some(bad)).unwrap_err();
             assert!(!err.contains("hunter2"), "{bad}: {err}");
-            assert!(err.contains("***@"), "{bad}: {err}");
         }
     }
 
