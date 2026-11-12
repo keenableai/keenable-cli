@@ -348,6 +348,9 @@ pub async fn login(api_key: Option<&str>) {
 
     // A bad SSL_CERT_FILE must not pass for "network error, saving anyway".
     crate::api::exit_on_bad_cert_file();
+    // A config.json that can't be written must stop login here, not after
+    // the server has provisioned a key that then can't be saved.
+    config::ensure_config_writable();
 
     // `--api-key -` reads the key from stdin, keeping it out of the process
     // list and shell history.
@@ -474,9 +477,12 @@ pub fn logout() {
 
     ui::header("keenable logout");
 
+    // Stop the daemon first: it holds the key in memory, and must not keep
+    // serving with it if the config can't be updated below.
+    daemon::kill_daemon();
+    config::ensure_config_writable();
     config::clear_credentials();
     config::remove_api_key();
-    daemon::kill_daemon();
 
     ui::step_done("Cleared credentials");
     ui::step_done("Removed API key");

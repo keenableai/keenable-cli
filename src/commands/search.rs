@@ -302,10 +302,21 @@ type Failure = Box<(ApiError, bool)>;
 /// --verbose (so the network details shown are this process's own), go
 /// direct (skip daemon). Otherwise try daemon first, fall back to direct HTTP.
 async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, Failure> {
-    if api_key_override.is_none()
-        && let config::StoredKey::OtherBase { saved_for } = config::stored_key()
-    {
-        return Err(Box::new((stored_key_not_used(&saved_for), false)));
+    if api_key_override.is_none() {
+        // Without a key override the stored key (and the daemon) live under
+        // the home directory; report a missing one in the command's own
+        // output format. With a key override nothing there is needed.
+        if config::home_dir().is_none() {
+            let err = ApiError {
+                error: config::NO_HOME.into(),
+                transport_hint: Some(config::NO_HOME_HINT.into()),
+                ..Default::default()
+            };
+            return Err(Box::new((err, false)));
+        }
+        if let config::StoredKey::OtherBase { saved_for } = config::stored_key() {
+            return Err(Box::new((stored_key_not_used(&saved_for), false)));
+        }
     }
     let use_daemon = api_key_override.is_none() && !net::verbose();
     // A bad SSL_CERT_FILE must surface as a clear error, not as a daemon
@@ -500,7 +511,7 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         if net::verbose() && err.chain.len() > 1 {
             ui::info("Error chain:");
             for (i, msg) in err.chain.iter().enumerate() {
-                ui::sub_info(&format!("{}. {}", i + 1, msg));
+                ui::sub_info(&format!("{}. {}", i + 1, ui::one_line(msg)));
             }
         }
         let mut val = err.to_yaml_value();

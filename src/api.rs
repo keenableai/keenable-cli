@@ -241,7 +241,7 @@ impl ApiError {
     pub fn print_details(&self) {
         self.print_cause();
         if let Some(hint) = &self.transport_hint {
-            ui::hint(hint);
+            ui::hint(&ui::printable(hint));
         }
     }
 
@@ -251,10 +251,10 @@ impl ApiError {
         if net::verbose() && self.chain.len() > 1 {
             ui::sub_info("Error chain:");
             for (i, msg) in self.chain.iter().enumerate() {
-                ui::sub_info(&format!("{}. {}", i + 1, msg));
+                ui::sub_info(&format!("{}. {}", i + 1, ui::one_line(msg)));
             }
         } else if let Some(cause) = self.cause() {
-            ui::sub_info(&format!("Cause: {}", cause));
+            ui::sub_info(&format!("Cause: {}", ui::one_line(&cause)));
         }
     }
 
@@ -458,14 +458,29 @@ pub fn bare_client() -> Result<Client, net::CertFileError> {
 /// read the same variable with the same core rule, but accept only the exact
 /// strings `127.0.0.1` / `::1`, and the Python SDK allows a query. Pure for
 /// unit tests.
+/// `scheme://user:pass@host/...` with the user and password replaced by
+/// `***`, so an invalid URL can be shown without its credentials.
+fn redact_userinfo(raw: &str) -> String {
+    let Some((scheme, rest)) = raw.split_once("://") else {
+        return raw.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://***@{}", &rest[at + 1..]),
+        None => raw.to_string(),
+    }
+}
+
 fn resolve_api_base(env_value: Option<&str>) -> Result<String, String> {
     let raw = match env_value.map(str::trim) {
         Some(v) if !v.is_empty() => v.trim_end_matches('/'),
         _ => return Ok(DEFAULT_API_BASE_URL.to_string()),
     };
+    // Shown in errors: anything between "://" and "@" may be a password.
+    let shown = redact_userinfo(raw);
     let invalid = |why: &str| {
         format!(
-            "{API_URL_ENV} must be an https:// URL{why} (http is allowed only for localhost, 127.0.0.1 and ::1), got {raw:?}"
+            "{API_URL_ENV} must be an https:// URL{why} (http is allowed only for localhost, 127.0.0.1 and ::1), got {shown:?}"
         )
     };
     let url = reqwest::Url::parse(raw).map_err(|_| invalid(" with a host"))?;
@@ -963,6 +978,16 @@ mod tests {
             assert!(err.contains("must not contain a user or password"), "{err}");
             assert!(err.contains("gw.example"), "{err}");
             assert!(!err.contains("hunter2") && !err.contains("token"), "{err}");
+        }
+        // Values that fail an earlier rule must not echo the password either.
+        for bad in [
+            "https://user:hunter2@gw.example/?x=1",
+            "https://user:hunter2@",
+            "ftp://user:hunter2@gw.example",
+        ] {
+            let err = resolve_api_base(Some(bad)).unwrap_err();
+            assert!(!err.contains("hunter2"), "{bad}: {err}");
+            assert!(err.contains("***@"), "{bad}: {err}");
         }
     }
 

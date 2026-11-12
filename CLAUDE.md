@@ -54,7 +54,7 @@ assets/
 - **`keenable login`** — interactive device-code flow. Opens browser, provisions API key, enables MCP configuration via `configure-mcp`.
 - **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed. `--api-key -` reads the key from stdin (keeps it out of argv and shell history), or prompts without echo when stdin is a terminal; help text and docs lead with that form.
 - The device flow uses the server's `verification_uri` only when it is https (or http to loopback), and prints that same link in the hint; any other link stops the login with a hint to use `--api-key -`.
-- `logout` warns when client MCP configs still hold a key (`mcp_common::clients_holding_api_key`) and points at `keenable reset --all`.
+- `login` and `logout` check that `config.json` can be written before doing anything (`config::ensure_config_writable`), so login never provisions a key it can't save; `logout` stops the daemon first. `logout` warns when client MCP configs still hold a key (`mcp_common::clients_holding_api_key`) and points at `keenable reset --all`.
 
 ### Output Format
 
@@ -108,6 +108,8 @@ Each connection starts with an `identity` handshake: current daemons answer with
 ### API Base URL (`KEENABLE_API_URL`)
 
 All API calls (search, fetch, public endpoints, key validation, login device flow) build URLs via `api::api_url()`, which uses `api::api_base()`: `KEENABLE_API_URL` when set, else `https://api.keenable.ai` (`DEFAULT_API_BASE_URL`). Rule: https only, except http to `localhost` or a loopback IP; trailing slashes are stripped, a path prefix is kept. Same variable as the SDKs, and the same core rule (https, or http to loopback); the CLI additionally rejects a query or fragment (the Go SDK does too, Python doesn't) and accepts any spelling of the loopback IPs (`127.1`, `[0:0::1]`), which the SDKs reject. `main` validates it before any API command and exits 1 with an error naming the variable and the fix — YAML on stdout plus the one-line `ui::error_line` summary on stderr for search/fetch without `-p`, `ui::error` + `ui::hint` on stderr otherwise (`api::exit_invalid_api_base`). The MCP URL written by `configure-mcp` always uses the production base — an env override is never persisted into client configs. Never format URLs from the constant directly. A URL with a user or password is rejected without echoing it.
+
+Bases are compared by scheme, host, port and path (`config::same_base`), so `https://api.keenable.ai:443` is production. Invalid-URL messages show any user or password as `***` (`api::redact_userinfo`).
 
 **The stored key is bound to its base.** `config::set_api_key` saves `api_key_base` next to `api_key` (omitted for production, so keys saved by older versions count as production). `config::get_api_key()` returns the key only when it was saved for the current base; `config::stored_key()` tells "no key" from "key for another base" (`StoredKey::OtherBase`), and search/fetch stop on the latter with exit 1 and a hint rather than sending the key or silently going anonymous. Never read `api_key` from the config directly. `configure-mcp` is the exception to "current base": it always writes the production MCP URL, so it uses `config::api_key_for(DEFAULT_API_BASE_URL)` and checks it with `api::validate_api_key_at(DEFAULT_API_BASE_URL, ..)`, never against an override.
 
@@ -169,7 +171,7 @@ All sub-items are prefixed with `-` and word-wrapped so continuation lines align
 | `ui::sub_error(msg)` | Sub-step failure (extra indent) | red ✗ |
 | `ui::sub_hint(msg)` | Sub-step recommendation (extra indent) | ⚠ yellow icon, text dimmed |
 
-- All human output goes to `stderr` (`eprintln!`), keeping `stdout` clean for YAML/machine output
+- All human output goes to `stderr` (`eprintln!`), keeping `stdout` clean for YAML/machine output. `main.rs` redefines `eprintln!` / `eprint!` for the whole crate so a closed stderr (`2>&1 | head`) drops output instead of panicking; machine output goes through `ui::stdout`
 - Pretty search/fetch output also uses `ui::header()` and `eprintln!` for consistency
 
 **When adding or modifying commands**, always use `ui::` helpers rather than raw `println!`/`eprintln!` with ad-hoc formatting.

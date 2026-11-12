@@ -21,12 +21,14 @@ pub fn home_dir() -> Option<PathBuf> {
 /// The home directory, or exit 1 with the fix: a container or service
 /// account can run with no `HOME` and no passwd entry, and that must be a
 /// clear error, not a panic.
+pub const NO_HOME: &str = "Cannot determine your home directory";
+pub const NO_HOME_HINT: &str =
+    "Set HOME, or set KEENABLE_HOME to the directory keenable should keep its .keenable folder in.";
+
 pub fn require_home_dir() -> PathBuf {
     home_dir().unwrap_or_else(|| {
-        crate::ui::error("Cannot determine your home directory");
-        crate::ui::hint(
-            "Set HOME, or set KEENABLE_HOME to the directory keenable should keep its .keenable folder in.",
-        );
+        crate::ui::error(NO_HOME);
+        crate::ui::hint(NO_HOME_HINT);
         eprintln!();
         std::process::exit(1);
     })
@@ -95,6 +97,12 @@ fn read_config_for_write() -> Value {
         Ok(v) => v,
         Err(why) => exit_config_error(&path, &why),
     }
+}
+
+/// Exit 1 now if a later write to config.json would be refused, before a
+/// command does anything that can't be undone (provisioning a key).
+pub fn ensure_config_writable() {
+    read_config_for_write();
 }
 
 fn exit_config_error(path: &Path, why: &str) -> ! {
@@ -257,7 +265,7 @@ fn stored_key_for(config: &Value, current_base: &str) -> StoredKey {
         .map(|s| s.trim().trim_end_matches('/'))
         .filter(|s| !s.is_empty())
         .unwrap_or(crate::constants::DEFAULT_API_BASE_URL);
-    if saved_for == current_base {
+    if same_base(saved_for, current_base) {
         StoredKey::Usable(key.to_string())
     } else {
         StoredKey::OtherBase {
@@ -273,6 +281,21 @@ pub fn api_key_for(base: &str) -> Option<String> {
     match stored_key_for(&get_config(), base) {
         StoredKey::Usable(key) => Some(key),
         _ => None,
+    }
+}
+
+/// Two API bases name the same API: equal scheme, host and port (so
+/// `HTTPS://API.keenable.ai:443` is production) and the same path prefix.
+fn same_base(a: &str, b: &str) -> bool {
+    let parse = |s: &str| reqwest::Url::parse(s.trim().trim_end_matches('/')).ok();
+    match (parse(a), parse(b)) {
+        (Some(a), Some(b)) => {
+            a.scheme() == b.scheme()
+                && a.host_str() == b.host_str()
+                && a.port_or_known_default() == b.port_or_known_default()
+                && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
+        }
+        _ => a == b,
     }
 }
 
@@ -327,8 +350,10 @@ pub fn set_skip_setup_confirmation(value: bool) {
     set_config_value("skip_setup_confirmation", Value::Bool(value));
 }
 
-pub fn update_check_file() -> PathBuf {
-    config_dir().join(".update_check")
+/// None without a home directory: the update check is optional and must
+/// never end a command that doesn't need one.
+pub fn update_check_file() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".keenable").join(".update_check"))
 }
 
 // Tools that configure-mcp itself added to Claude Code's deny list. Reset
@@ -397,6 +422,32 @@ mod tests {
                 saved_for: "http://localhost:8080".into()
             }
         );
+    }
+
+    #[test]
+    fn the_same_base_spelled_differently_still_matches() {
+        let config = json!({"api_key": "keen_x"});
+        for base in [
+            "HTTPS://API.keenable.ai",
+            "https://api.keenable.ai:443",
+            "https://api.keenable.ai/",
+        ] {
+            assert_eq!(
+                stored_key_for(&config, base),
+                StoredKey::Usable("keen_x".into()),
+                "{base}"
+            );
+        }
+        for base in [
+            "https://api.keenable.ai:8443",
+            "http://api.keenable.ai",
+            "https://api.keenable.ai/gw",
+        ] {
+            assert!(
+                matches!(stored_key_for(&config, base), StoredKey::OtherBase { .. }),
+                "{base}"
+            );
+        }
     }
 
     #[test]

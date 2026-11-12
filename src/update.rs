@@ -78,7 +78,7 @@ async fn fetch_latest_version() -> Option<String> {
 }
 
 pub async fn check_for_update() -> Option<String> {
-    let cache_file = config::update_check_file();
+    let cache_file = config::update_check_file()?;
 
     // Check cache
     let mut cached_version: Option<String> = None;
