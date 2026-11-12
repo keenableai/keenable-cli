@@ -112,7 +112,7 @@ says what failed, so a script does not need to parse the output:
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Any other error (server error, bad `SSL_CERT_FILE`, invalid `KEENABLE_API_URL`, invalid `--mode`) |
+| 1 | Any other error: a local setup problem such as a bad `SSL_CERT_FILE`, an invalid `KEENABLE_API_URL` or an invalid `--mode` |
 | 2 | Invalid arguments (the CLI's own usage error) |
 | 3 | Authentication or permission: the key is invalid, revoked or not allowed this |
 | 4 | Rate limited: wait `retry_after` seconds (or until `rate_limit_reset`), then retry |
@@ -120,6 +120,7 @@ says what failed, so a script does not need to parse the output:
 | 6 | The page or site failed (fetch): not found, blocked, timed out, unreachable |
 | 7 | Network: no response from the API (proxy, DNS, TLS) |
 | 8 | Invalid request: fix the arguments; retrying unchanged fails the same way |
+| 9 | Server error on Keenable's side: retry later |
 
 ```bash
 keenable search "query" > out.yaml
@@ -127,6 +128,7 @@ case $? in
   0) ;;                       # results in out.yaml
   4) sleep 2 ;;               # rate limited: retry later
   5) echo "out of credits" ;; # stop the run
+  9) sleep 30 ;;              # Keenable server error: retry later
 esac
 ```
 

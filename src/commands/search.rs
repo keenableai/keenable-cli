@@ -437,18 +437,10 @@ fn credits_remaining_line(data: &Value) -> Option<String> {
     } else {
         format!("{left:.2}")
     };
-    Some(format!("Credits left: {shown} (keenable.ai/console)"))
-}
-
-/// The YAML-mode stderr summary: always exactly one line, whatever line
-/// breaks or length the API's message has.
-fn stderr_summary(err: &ApiError) -> String {
-    let flat = err
-        .display()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("error: {flat}")
+    Some(format!(
+        "Credits left: {shown} ({})",
+        crate::api::CONSOLE_URL
+    ))
 }
 
 /// Display an ApiError according to output mode (human vs YAML).
@@ -491,8 +483,7 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         print_yaml(&val);
         // One line on stderr too, so a script that reads only stderr (or
         // only checks it) sees the failure; the exit code says which kind.
-        // Not ui::error: it wraps at the terminal width.
-        eprintln!("{}", stderr_summary(&err));
+        ui::error_line(&err.display());
     }
     std::process::exit(err.exit_code());
 }
@@ -702,32 +693,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stderr_summary_is_one_line_however_long_the_message() {
-        let err = ApiError {
-            status: 400,
-            error: "Invalid parameter".into(),
-            message: Some(format!("first line\nsecond line {}", "x".repeat(500))),
-            ..Default::default()
-        };
-        let line = stderr_summary(&err);
-        assert!(!line.contains('\n'), "{line}");
-        assert!(line.starts_with("error: Invalid parameter: first line second line xxx"));
-    }
-
-    #[test]
     fn credits_remaining_line_shows_the_balance_only_when_sent() {
         let line = |v: Value| credits_remaining_line(&v);
         assert_eq!(
             line(json!({"usage": {"credits_remaining": 99120}})).as_deref(),
-            Some("Credits left: 99120 (keenable.ai/console)")
+            Some("Credits left: 99120 (https://keenable.ai/console)")
         );
         assert_eq!(
             line(json!({"usage": {"credits_remaining": 12.345}})).as_deref(),
-            Some("Credits left: 12.35 (keenable.ai/console)")
+            Some("Credits left: 12.35 (https://keenable.ai/console)")
         );
         assert_eq!(
             line(json!({"usage": {"credits_remaining": -3}})).as_deref(),
-            Some("Credits left: -3 (keenable.ai/console)")
+            Some("Credits left: -3 (https://keenable.ai/console)")
         );
         assert_eq!(line(json!({"usage": {"credits": 1}})), None);
         assert_eq!(line(json!({"results": []})), None);
@@ -735,7 +713,7 @@ mod tests {
         // it after "No results found." (no early return).
         assert_eq!(
             line(json!({"results": [], "usage": {"credits_remaining": 5}})).as_deref(),
-            Some("Credits left: 5 (keenable.ai/console)")
+            Some("Credits left: 5 (https://keenable.ai/console)")
         );
     }
 

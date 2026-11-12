@@ -159,6 +159,18 @@ pub fn error(msg: &str) {
     print_wrapped(format!("   {}  ", "✗".red().bold()), msg, |s| s.red());
 }
 
+/// `msg` on one line: line breaks and runs of whitespace collapse to single
+/// spaces, so the result never spans lines whatever the API sent.
+pub fn one_line(msg: &str) -> String {
+    msg.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Print `error: <msg>` to stderr as exactly one unstyled line, never
+/// wrapped: the summary YAML mode adds for scripts that read stderr.
+pub fn error_line(msg: &str) {
+    eprintln!("error: {}", one_line(msg));
+}
+
 /// Print a warning line (yellow).
 pub fn warning(msg: &str) {
     print_wrapped(format!("   {}  ", "⚠".yellow()), msg, |s| s.yellow());
@@ -215,4 +227,17 @@ pub fn sub_hint(msg: &str) {
 /// Print a section label (bold, same indent as steps).
 pub fn label(msg: &str) {
     eprintln!("\n   {}", msg.bold());
+}
+
+#[cfg(test)]
+mod one_line_tests {
+    use super::one_line;
+
+    #[test]
+    fn one_line_collapses_line_breaks_however_long_the_message() {
+        let msg = format!("first line\nsecond\r\n\tline {}", "x".repeat(500));
+        let line = one_line(&msg);
+        assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
+        assert!(line.starts_with("first line second line xxx"));
+    }
 }

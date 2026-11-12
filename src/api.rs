@@ -42,7 +42,7 @@ fn base_headers() -> reqwest::header::HeaderMap {
 }
 
 /// Where users add credits or check what their plan includes.
-const CONSOLE_URL: &str = "https://keenable.ai/console";
+pub const CONSOLE_URL: &str = "https://keenable.ai/console";
 
 /// Structured API error matching the backend's flat error body: the legacy
 /// `{error, message, retryAfter}` plus the v1 fields (`type`, `code`, `fix`,
@@ -87,8 +87,9 @@ pub struct ApiError {
 pub const CAUSE_SEPARATOR: &str = " → ";
 
 /// Exit codes for a failed `search` / `fetch`, so scripts can tell failures
-/// apart without parsing output. 2 is clap's usage error; anything without a
-/// more specific code exits 1.
+/// apart without parsing output. 2 is clap's usage error; 9 is a Keenable-side
+/// server error worth retrying later; anything without a more specific code
+/// (local setup errors) exits 1.
 pub mod exit_code {
     pub const ERROR: i32 = 1;
     pub const AUTH: i32 = 3;
@@ -97,6 +98,7 @@ pub mod exit_code {
     pub const TARGET: i32 = 6;
     pub const NETWORK: i32 = 7;
     pub const INVALID_REQUEST: i32 = 8;
+    pub const SERVER: i32 = 9;
 }
 
 impl ApiError {
@@ -121,7 +123,7 @@ impl ApiError {
             }
             Some("permission_error") => return exit_code::AUTH,
             Some("invalid_request_error") => return exit_code::INVALID_REQUEST,
-            Some("api_error") => return exit_code::ERROR,
+            Some("api_error") => return exit_code::SERVER,
             _ => {}
         }
         if self.is_auth_error() {
@@ -134,6 +136,7 @@ impl ApiError {
             404 | 410 => exit_code::TARGET,
             429 => exit_code::RATE_LIMITED,
             400 | 422 => exit_code::INVALID_REQUEST,
+            500..=599 => exit_code::SERVER,
             _ => exit_code::ERROR,
         }
     }
@@ -663,8 +666,9 @@ mod tests {
             err(422, "Invalid request").exit_code(),
             exit_code::INVALID_REQUEST
         );
-        assert_eq!(err(500, "boom").exit_code(), exit_code::ERROR);
-        assert_eq!(err(503, "busy").exit_code(), exit_code::ERROR);
+        assert_eq!(err(500, "boom").exit_code(), exit_code::SERVER);
+        assert_eq!(err(503, "busy").exit_code(), exit_code::SERVER);
+        assert_eq!(err(418, "teapot").exit_code(), exit_code::ERROR);
         // No HTTP status: a transport failure is a network error, a local
         // setup error (bad SSL_CERT_FILE) is not.
         let transport = ApiError {
@@ -1094,27 +1098,67 @@ mod tests {
         *handle_response(http_resp).await.unwrap_err()
     }
 
-    /// Every catalog code exits with the code its type promises, so a script
-    /// can branch on the exit code alone.
+    /// The exit code a script gets for each catalog code, written out by
+    /// hand rather than derived the way `exit_code()` derives it, so a wrong
+    /// mapping can't pass by being copied into the test. A code missing here
+    /// (after refreshing the catalog) fails the test until it is added.
+    const EXPECTED_EXIT_CODES: &[(&str, i32)] = &[
+        ("auth_unavailable", exit_code::SERVER),
+        ("content_not_extracted", exit_code::TARGET),
+        ("credentials_forbidden", exit_code::AUTH),
+        ("fetch_rate_limited", exit_code::RATE_LIMITED),
+        ("forbidden", exit_code::AUTH),
+        ("insufficient_credits", exit_code::OUT_OF_CREDITS),
+        ("internal_error", exit_code::SERVER),
+        ("invalid_api_key", exit_code::AUTH),
+        ("invalid_bearer_token", exit_code::AUTH),
+        ("invalid_parameter", exit_code::INVALID_REQUEST),
+        ("invalid_request", exit_code::INVALID_REQUEST),
+        ("missing_api_key", exit_code::AUTH),
+        ("missing_app_title", exit_code::INVALID_REQUEST),
+        ("missing_parameter", exit_code::INVALID_REQUEST),
+        ("not_found", exit_code::INVALID_REQUEST),
+        ("page_not_found", exit_code::TARGET),
+        ("paid_rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("payment_facilitator_error", exit_code::SERVER),
+        ("payment_required", exit_code::ERROR),
+        ("payment_settlement_failed", exit_code::ERROR),
+        ("payments_region_unavailable", exit_code::ERROR),
+        ("payments_unavailable", exit_code::SERVER),
+        ("private_url_not_allowed", exit_code::INVALID_REQUEST),
+        ("public_rate_limit_hourly", exit_code::RATE_LIMITED),
+        ("public_rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("rate_limited", exit_code::RATE_LIMITED),
+        ("request_rejected", exit_code::INVALID_REQUEST),
+        ("request_too_large", exit_code::INVALID_REQUEST),
+        ("search_overloaded", exit_code::SERVER),
+        ("search_rate_limited", exit_code::RATE_LIMITED),
+        ("target_blocked", exit_code::TARGET),
+        ("target_http_error", exit_code::TARGET),
+        ("target_paywalled", exit_code::TARGET),
+        ("target_rate_limited", exit_code::TARGET),
+        ("target_timeout", exit_code::TARGET),
+        ("target_unreachable", exit_code::TARGET),
+        ("target_wrong_page", exit_code::TARGET),
+        ("unauthenticated", exit_code::AUTH),
+        ("unknown_parameter", exit_code::INVALID_REQUEST),
+        ("unprocessable", exit_code::INVALID_REQUEST),
+        ("zdr_prompt_unsupported", exit_code::INVALID_REQUEST),
+        ("zdr_unsupported_profile", exit_code::INVALID_REQUEST),
+    ];
+
     #[tokio::test]
-    async fn every_catalog_code_has_the_exit_code_of_its_type() {
+    async fn every_catalog_code_has_its_expected_exit_code() {
         for entry in catalog() {
             let code = entry["code"].as_str().unwrap();
+            let expected = EXPECTED_EXIT_CODES
+                .iter()
+                .find(|(c, _)| *c == code)
+                .map(|(_, exit)| *exit)
+                .unwrap_or_else(|| panic!("add {code} to EXPECTED_EXIT_CODES"));
             let status = entry["status"].as_u64().unwrap() as u16;
             let err = respond(status, &v1_body(&entry)).await;
-            let expected = match entry["type"].as_str().unwrap() {
-                "target_error" => exit_code::TARGET,
-                "rate_limit_error" => exit_code::RATE_LIMITED,
-                "billing_error" if code == "insufficient_credits" => exit_code::OUT_OF_CREDITS,
-                "billing_error" => exit_code::ERROR,
-                "authentication_error" => exit_code::AUTH,
-                "permission_error" if code == "private_url_not_allowed" => {
-                    exit_code::INVALID_REQUEST
-                }
-                "permission_error" => exit_code::AUTH,
-                "invalid_request_error" => exit_code::INVALID_REQUEST,
-                _ => exit_code::ERROR,
-            };
             assert_eq!(err.exit_code(), expected, "{code}");
         }
     }
