@@ -427,6 +427,22 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
     }
 }
 
+/// Pretty-mode line with the organization's credits left after this
+/// request (`usage.credits_remaining`), when the API sent it. Keyless
+/// requests carry no usage, so nothing is printed for them.
+fn credits_remaining_line(data: &Value) -> Option<String> {
+    let left = data["usage"]["credits_remaining"].as_f64()?;
+    let shown = if left.fract() == 0.0 {
+        format!("{}", left as i64)
+    } else {
+        format!("{left:.2}")
+    };
+    Some(format!(
+        "Credits left: {shown} ({})",
+        crate::api::CONSOLE_URL
+    ))
+}
+
 /// Display an ApiError according to output mode (human vs YAML).
 /// The next step comes from `ApiError::hint`, worded for the auth state the
 /// request was sent with (a structured `hint` field in YAML mode). The API's
@@ -465,8 +481,11 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
             val["hint"] = Value::String(hint);
         }
         print_yaml(&val);
+        // One line on stderr too, so a script that reads only stderr (or
+        // only checks it) sees the failure; the exit code says which kind.
+        ui::error_line(&err.display());
     }
-    std::process::exit(1);
+    std::process::exit(err.exit_code());
 }
 
 /// Read a mode from config, ignoring (with a warning) hand-edited invalid
@@ -575,12 +594,8 @@ pub async fn search(
                     ui::warning(warning);
                     eprintln!();
                 }
-                if let Some(results) = data["results"].as_array() {
-                    if results.is_empty() {
-                        ui::info("No results found.");
-                        eprintln!();
-                        return;
-                    }
+                let results = data["results"].as_array().filter(|r| !r.is_empty());
+                if let Some(results) = results {
                     for (i, result) in results.iter().enumerate() {
                         let title = result["title"].as_str().unwrap_or("Untitled");
                         let url = result["url"].as_str().unwrap_or("");
@@ -601,6 +616,10 @@ pub async fn search(
                     }
                 } else {
                     ui::info("No results found.");
+                    eprintln!();
+                }
+                if let Some(line) = credits_remaining_line(&data) {
+                    ui::hint(&line);
                     eprintln!();
                 }
                 return;
@@ -657,6 +676,10 @@ pub async fn fetch(
                     ui::hint("Content was truncated; pass a larger --max-chars for more.");
                     eprintln!();
                 }
+                if let Some(line) = credits_remaining_line(&data) {
+                    ui::hint(&line);
+                    eprintln!();
+                }
                 return;
             }
             print_yaml(&data);
@@ -668,6 +691,31 @@ pub async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credits_remaining_line_shows_the_balance_only_when_sent() {
+        let line = |v: Value| credits_remaining_line(&v);
+        assert_eq!(
+            line(json!({"usage": {"credits_remaining": 99120}})).as_deref(),
+            Some("Credits left: 99120 (https://keenable.ai/console)")
+        );
+        assert_eq!(
+            line(json!({"usage": {"credits_remaining": 12.345}})).as_deref(),
+            Some("Credits left: 12.35 (https://keenable.ai/console)")
+        );
+        assert_eq!(
+            line(json!({"usage": {"credits_remaining": -3}})).as_deref(),
+            Some("Credits left: -3 (https://keenable.ai/console)")
+        );
+        assert_eq!(line(json!({"usage": {"credits": 1}})), None);
+        assert_eq!(line(json!({"results": []})), None);
+        // An empty search still carries the balance, and pretty mode prints
+        // it after "No results found." (no early return).
+        assert_eq!(
+            line(json!({"results": [], "usage": {"credits_remaining": 5}})).as_deref(),
+            Some("Credits left: 5 (https://keenable.ai/console)")
+        );
+    }
 
     fn filters() -> SearchFilters {
         SearchFilters {

@@ -42,7 +42,7 @@ fn base_headers() -> reqwest::header::HeaderMap {
 }
 
 /// Where users add credits or check what their plan includes.
-const CONSOLE_URL: &str = "https://keenable.ai/console";
+pub const CONSOLE_URL: &str = "https://keenable.ai/console";
 
 /// Structured API error matching the backend's flat error body: the legacy
 /// `{error, message, retryAfter}` plus the v1 fields (`type`, `code`, `fix`,
@@ -86,7 +86,61 @@ pub struct ApiError {
 
 pub const CAUSE_SEPARATOR: &str = " → ";
 
+/// Exit codes for a failed `search` / `fetch`, so scripts can tell failures
+/// apart without parsing output. 2 is clap's usage error; 9 is a Keenable-side
+/// server error worth retrying later; anything without a more specific code
+/// (local setup errors) exits 1.
+pub mod exit_code {
+    pub const ERROR: i32 = 1;
+    pub const AUTH: i32 = 3;
+    pub const RATE_LIMITED: i32 = 4;
+    pub const OUT_OF_CREDITS: i32 = 5;
+    pub const TARGET: i32 = 6;
+    pub const NETWORK: i32 = 7;
+    pub const INVALID_REQUEST: i32 = 8;
+    pub const SERVER: i32 = 9;
+}
+
 impl ApiError {
+    /// The process exit code for this error (see `exit_code`). The v1 `type`
+    /// decides when the server sent one: it is more precise than the status
+    /// (a `target_error` 403 is the fetched site's refusal, not the key's;
+    /// a 404 `invalid_request_error` is a wrong path, not a missing page).
+    /// Older servers send no type, so the status decides for them.
+    pub fn exit_code(&self) -> i32 {
+        match self.error_type.as_deref() {
+            Some("target_error") => return exit_code::TARGET,
+            Some("rate_limit_error") => return exit_code::RATE_LIMITED,
+            // Only exhausted credits: payment_required and
+            // payment_settlement_failed (x402) aren't fixed by adding credits.
+            Some("billing_error") if self.code.as_deref() == Some("insufficient_credits") => {
+                return exit_code::OUT_OF_CREDITS;
+            }
+            Some("billing_error") => return exit_code::ERROR,
+            Some("authentication_error") => return exit_code::AUTH,
+            Some("permission_error") if self.code.as_deref() == Some("private_url_not_allowed") => {
+                return exit_code::INVALID_REQUEST;
+            }
+            Some("permission_error") => return exit_code::AUTH,
+            Some("invalid_request_error") => return exit_code::INVALID_REQUEST,
+            Some("api_error") => return exit_code::SERVER,
+            _ => {}
+        }
+        if self.is_auth_error() {
+            return exit_code::AUTH;
+        }
+        match self.status {
+            0 if self.transport => exit_code::NETWORK,
+            403 => exit_code::AUTH,
+            402 => exit_code::OUT_OF_CREDITS,
+            404 | 410 => exit_code::TARGET,
+            429 => exit_code::RATE_LIMITED,
+            400 | 422 => exit_code::INVALID_REQUEST,
+            500..=599 => exit_code::SERVER,
+            _ => exit_code::ERROR,
+        }
+    }
+
     /// Human-readable summary: "error: message" or just "error".
     pub fn display(&self) -> String {
         match &self.message {
@@ -459,8 +513,10 @@ pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
             "message": msg,
             "hint": hint,
         });
-        // Like API errors in YAML mode: structured output only.
+        // Like API errors in YAML mode: the structured error on stdout and
+        // a one-line summary on stderr.
         print!("{}", serde_yaml::to_string(&out).unwrap_or_default());
+        crate::ui::error_line(msg);
     } else {
         crate::ui::error(msg);
         crate::ui::hint(&hint);
@@ -586,6 +642,58 @@ mod tests {
         assert!(!err(500, "boom").is_auth_error());
         // 403 is "forbidden", not "who are you": a valid key can get it too.
         assert!(!err(403, "Forbidden").is_auth_error());
+    }
+
+    #[test]
+    fn exit_code_tells_failures_apart() {
+        assert_eq!(err(401, "unauthorized").exit_code(), exit_code::AUTH);
+        assert_eq!(
+            err(400, "Authentication failed").exit_code(),
+            exit_code::AUTH
+        );
+        assert_eq!(err(403, "Forbidden").exit_code(), exit_code::AUTH);
+        assert_eq!(
+            err(402, "payment_required").exit_code(),
+            exit_code::OUT_OF_CREDITS
+        );
+        assert_eq!(
+            err(429, "Rate limit exceeded").exit_code(),
+            exit_code::RATE_LIMITED
+        );
+        assert_eq!(err(404, "Not found").exit_code(), exit_code::TARGET);
+        assert_eq!(
+            err(400, "bad query").exit_code(),
+            exit_code::INVALID_REQUEST
+        );
+        assert_eq!(
+            err(422, "Invalid request").exit_code(),
+            exit_code::INVALID_REQUEST
+        );
+        assert_eq!(err(500, "boom").exit_code(), exit_code::SERVER);
+        assert_eq!(err(503, "busy").exit_code(), exit_code::SERVER);
+        assert_eq!(err(418, "teapot").exit_code(), exit_code::ERROR);
+        // No HTTP status: a transport failure is a network error, a local
+        // setup error (bad SSL_CERT_FILE) is not.
+        let transport = ApiError {
+            transport: true,
+            ..Default::default()
+        };
+        assert_eq!(transport.exit_code(), exit_code::NETWORK);
+        assert_eq!(ApiError::default().exit_code(), exit_code::ERROR);
+        // A failure of the page being fetched is a target error whatever its
+        // status: the site's 403 is not the key's fault.
+        let target = ApiError {
+            status: 403,
+            error_type: Some("target_error".into()),
+            ..Default::default()
+        };
+        assert_eq!(target.exit_code(), exit_code::TARGET);
+        let wrong_path = ApiError {
+            status: 404,
+            error_type: Some("invalid_request_error".into()),
+            ..Default::default()
+        };
+        assert_eq!(wrong_path.exit_code(), exit_code::INVALID_REQUEST);
     }
 
     fn hint(status: u16, error: &str, authenticated: bool) -> String {
@@ -991,6 +1099,71 @@ mod tests {
                 .unwrap(),
         );
         *handle_response(http_resp).await.unwrap_err()
+    }
+
+    /// The exit code a script gets for each catalog code, written out by
+    /// hand rather than derived the way `exit_code()` derives it, so a wrong
+    /// mapping can't pass by being copied into the test. A code missing here
+    /// (after refreshing the catalog) fails the test until it is added.
+    const EXPECTED_EXIT_CODES: &[(&str, i32)] = &[
+        ("auth_unavailable", exit_code::SERVER),
+        ("content_not_extracted", exit_code::TARGET),
+        ("credentials_forbidden", exit_code::AUTH),
+        ("fetch_rate_limited", exit_code::RATE_LIMITED),
+        ("forbidden", exit_code::AUTH),
+        ("insufficient_credits", exit_code::OUT_OF_CREDITS),
+        ("internal_error", exit_code::SERVER),
+        ("invalid_api_key", exit_code::AUTH),
+        ("invalid_bearer_token", exit_code::AUTH),
+        ("invalid_parameter", exit_code::INVALID_REQUEST),
+        ("invalid_request", exit_code::INVALID_REQUEST),
+        ("missing_api_key", exit_code::AUTH),
+        ("missing_app_title", exit_code::INVALID_REQUEST),
+        ("missing_parameter", exit_code::INVALID_REQUEST),
+        ("not_found", exit_code::INVALID_REQUEST),
+        ("page_not_found", exit_code::TARGET),
+        ("paid_rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("payment_facilitator_error", exit_code::SERVER),
+        ("payment_required", exit_code::ERROR),
+        ("payment_settlement_failed", exit_code::ERROR),
+        ("payments_region_unavailable", exit_code::ERROR),
+        ("payments_unavailable", exit_code::SERVER),
+        ("private_url_not_allowed", exit_code::INVALID_REQUEST),
+        ("public_rate_limit_hourly", exit_code::RATE_LIMITED),
+        ("public_rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("rate_limited", exit_code::RATE_LIMITED),
+        ("request_rejected", exit_code::INVALID_REQUEST),
+        ("request_too_large", exit_code::INVALID_REQUEST),
+        ("search_overloaded", exit_code::SERVER),
+        ("search_rate_limited", exit_code::RATE_LIMITED),
+        ("target_blocked", exit_code::TARGET),
+        ("target_http_error", exit_code::TARGET),
+        ("target_paywalled", exit_code::TARGET),
+        ("target_rate_limited", exit_code::TARGET),
+        ("target_timeout", exit_code::TARGET),
+        ("target_unreachable", exit_code::TARGET),
+        ("target_wrong_page", exit_code::TARGET),
+        ("unauthenticated", exit_code::AUTH),
+        ("unknown_parameter", exit_code::INVALID_REQUEST),
+        ("unprocessable", exit_code::INVALID_REQUEST),
+        ("zdr_prompt_unsupported", exit_code::INVALID_REQUEST),
+        ("zdr_unsupported_profile", exit_code::INVALID_REQUEST),
+    ];
+
+    #[tokio::test]
+    async fn every_catalog_code_has_its_expected_exit_code() {
+        for entry in catalog() {
+            let code = entry["code"].as_str().unwrap();
+            let expected = EXPECTED_EXIT_CODES
+                .iter()
+                .find(|(c, _)| *c == code)
+                .map(|(_, exit)| *exit)
+                .unwrap_or_else(|| panic!("add {code} to EXPECTED_EXIT_CODES"));
+            let status = entry["status"].as_u64().unwrap() as u16;
+            let err = respond(status, &v1_body(&entry)).await;
+            assert_eq!(err.exit_code(), expected, "{code}");
+        }
     }
 
     /// Fails when the vendored catalog drifts from the shape the CLI reads.

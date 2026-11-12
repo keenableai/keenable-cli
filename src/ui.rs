@@ -159,6 +159,24 @@ pub fn error(msg: &str) {
     print_wrapped(format!("   {}  ", "✗".red().bold()), msg, |s| s.red());
 }
 
+/// `msg` on one line: control characters (line breaks, escape sequences the
+/// API text might carry) become spaces and runs of whitespace collapse, so
+/// the result never spans lines or restyles the terminal.
+pub fn one_line(msg: &str) -> String {
+    msg.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Print `error: <msg>` to stderr as exactly one unstyled line, never
+/// wrapped: the summary YAML mode adds for scripts that read stderr.
+pub fn error_line(msg: &str) {
+    eprintln!("error: {}", one_line(msg));
+}
+
 /// Print a warning line (yellow).
 pub fn warning(msg: &str) {
     print_wrapped(format!("   {}  ", "⚠".yellow()), msg, |s| s.yellow());
@@ -215,4 +233,24 @@ pub fn sub_hint(msg: &str) {
 /// Print a section label (bold, same indent as steps).
 pub fn label(msg: &str) {
     eprintln!("\n   {}", msg.bold());
+}
+
+#[cfg(test)]
+mod one_line_tests {
+    use super::one_line;
+
+    #[test]
+    fn one_line_collapses_line_breaks_however_long_the_message() {
+        let msg = format!("first line\nsecond\r\n\tline {}", "x".repeat(500));
+        let line = one_line(&msg);
+        assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
+        assert!(line.starts_with("first line second line xxx"));
+    }
+
+    #[test]
+    fn one_line_drops_terminal_escape_sequences() {
+        let line = one_line("bad \u{1b}[31mred\u{1b}[0m \u{7}bell \u{9b}2J");
+        assert!(!line.chars().any(char::is_control), "{line:?}");
+        assert_eq!(line, "bad [31mred [0m bell 2J");
+    }
 }

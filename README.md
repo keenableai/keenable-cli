@@ -78,7 +78,7 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
   whitespace (`https://WWW.UN.org/` becomes `un.org`); international names
   become punycode.
 - Anything else is rejected with an `invalid_filter` error naming the field,
-  the entry and the reason, and the command exits 1: paths (`un.org/press`),
+  the entry and the reason, and the command exits 8: paths (`un.org/press`),
   suffixes (`.com`), wildcards (`*.gov`), IP addresses, `user@host` and
   invalid hosts. Private-suffix hosts such as `github.io` or `blogspot.com`
   are accepted.
@@ -101,6 +101,40 @@ keenable fetch https://example.com --session-id agent-run-42   # Group with rela
 ```
 
 When content is cut at the character cap, it ends with the API's truncation note and the YAML output carries `truncated: true`.
+
+### Errors and exit codes in scripts
+
+On a failed `search` or `fetch`, YAML mode prints the structured error on
+stdout (`error`, `type`, `code`, `message`, `fix`, `retry_after`, `hint`, ...)
+and a one-line summary on stderr. `-p` prints only to stderr. The exit code
+says what failed, so a script does not need to parse the output:
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Any other error: a local setup problem such as a bad `SSL_CERT_FILE`, an invalid `KEENABLE_API_URL` or an invalid `--mode` |
+| 2 | Invalid arguments (the CLI's own usage error) |
+| 3 | Authentication or permission: the key is invalid, revoked or not allowed this |
+| 4 | Rate limited: wait `retry_after` seconds (or until `rate_limit_reset`), then retry |
+| 5 | Out of credits: add credits at https://keenable.ai/console |
+| 6 | The page or site failed (fetch): not found, blocked, timed out, unreachable |
+| 7 | Network: no response from the API (proxy, DNS, TLS) |
+| 8 | Invalid request: fix the arguments; retrying unchanged fails the same way |
+| 9 | Server error on Keenable's side: retry later |
+
+```bash
+keenable search "query" > out.yaml
+case $? in
+  0) ;;                       # results in out.yaml
+  4) sleep 2 ;;               # rate limited: retry later
+  5) echo "out of credits" ;; # stop the run
+  9) sleep 30 ;;              # Keenable server error: retry later
+esac
+```
+
+With an API key, each response's `usage.credits_remaining` is the
+organization's credits left after the request (an estimate that can lag a few
+seconds); `-p` shows it as `Credits left: N`.
 
 ### API endpoint
 
