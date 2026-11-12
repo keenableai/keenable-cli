@@ -159,10 +159,16 @@ pub fn error(msg: &str) {
     print_wrapped(format!("   {}  ", "✗".red().bold()), msg, |s| s.red());
 }
 
-/// `msg` on one line: line breaks and runs of whitespace collapse to single
-/// spaces, so the result never spans lines whatever the API sent.
+/// `msg` on one line: control characters (line breaks, escape sequences the
+/// API text might carry) become spaces and runs of whitespace collapse, so
+/// the result never spans lines or restyles the terminal.
 pub fn one_line(msg: &str) -> String {
-    msg.split_whitespace().collect::<Vec<_>>().join(" ")
+    msg.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Print `error: <msg>` to stderr as exactly one unstyled line, never
@@ -239,5 +245,12 @@ mod one_line_tests {
         let line = one_line(&msg);
         assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
         assert!(line.starts_with("first line second line xxx"));
+    }
+
+    #[test]
+    fn one_line_drops_terminal_escape_sequences() {
+        let line = one_line("bad \u{1b}[31mred\u{1b}[0m \u{7}bell \u{9b}2J");
+        assert!(!line.chars().any(char::is_control), "{line:?}");
+        assert_eq!(line, "bad [31mred [0m bell 2J");
     }
 }

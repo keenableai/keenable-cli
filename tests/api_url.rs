@@ -131,7 +131,8 @@ async fn invalid_value_exits_with_message_and_hint() {
     let message = r#"KEENABLE_API_URL must be an https:// URL (http is allowed only for localhost, 127.0.0.1 and ::1), got "http://example.com""#;
     let hint = "Fix KEENABLE_API_URL or unset it to use https://api.keenable.ai.";
 
-    // Agent-facing: structured YAML on stdout only, like API errors.
+    // Agent-facing: structured YAML on stdout and a one-line summary on
+    // stderr, like API errors.
     let out = keenable(&home, "http://example.com", &["search", "q"]).await;
     assert_eq!(out.status.code(), Some(1));
     let stdout = text(&out.stdout);
@@ -140,7 +141,8 @@ async fn invalid_value_exits_with_message_and_hint() {
         "{stdout}"
     );
     assert!(stdout.contains(&format!("hint: {hint}")), "{stdout}");
-    assert!(text(&out.stderr).trim().is_empty(), "{}", text(&out.stderr));
+    let stderr = text(&out.stderr);
+    assert_eq!(stderr.trim(), format!("error: {message}"), "{stderr}");
     assert!(stdout.contains("http://example.com"), "{stdout}");
 
     // Management commands: the same message and fix on stderr.
