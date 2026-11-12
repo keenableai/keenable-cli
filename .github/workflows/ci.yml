@@ -80,3 +80,19 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  # install/setup.sh ships as the `setup.sh` release asset. /bin/sh on
+  # ubuntu is dash, which catches bashisms; shellcheck is preinstalled.
+  setup-script:
+    name: setup.sh (shellcheck · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: shellcheck -s sh install/setup.sh install/setup_test.sh
+      - name: syntax
+        run: sh -n install/setup.sh
+      - name: test
+        run: sh install/setup_test.sh

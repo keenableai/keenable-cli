@@ -4,6 +4,15 @@ CLI for [Keenable](https://keenable.ai) — authenticate, manage API keys, confi
 
 ## Installation
 
+**One-command setup (macOS + Linux):** installs the CLI, signs you in, adds Keenable to your coding agents and runs a test search. Arguments go to `keenable configure-mcp`; with `KEENABLE_API_KEY` set, no browser opens.
+
+```bash
+curl -fsSL https://github.com/keenableai/keenable-cli/releases/latest/download/setup.sh | sh
+curl -fsSL https://github.com/keenableai/keenable-cli/releases/latest/download/setup.sh | KEENABLE_API_KEY=keen_... sh -s -- --claude-code
+```
+
+The script is [`install/setup.sh`](install/setup.sh), published as the `setup.sh` asset of every release.
+
 **Homebrew (macOS + Linux):**
 
 ```bash

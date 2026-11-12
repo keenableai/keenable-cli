@@ -23,6 +23,7 @@
 The workflow will:
 - Build binaries for macOS (Intel + Apple Silicon), Linux (x86_64 + ARM), Windows (x86_64)
 - Generate shell and PowerShell installer scripts
+- Attach `install/setup.sh` as `setup.sh` (a dist extra artifact in `dist-workspace.toml`)
 - Create a GitHub Release with all artifacts and checksums
 - Publish an updated Homebrew formula to `keenableai/homebrew-tap`
 

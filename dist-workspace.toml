@@ -27,3 +27,9 @@ publish-jobs = ["homebrew"]
 # retired ("The configuration 'macos-14-arm64-us-default' is not supported"),
 # so the v0.3.0 release job was cancelled before it started.
 aarch64-apple-darwin = "macos-15"
+
+# install/setup.sh ships on every release as `setup.sh`, so
+# releases/latest/download/setup.sh always matches the latest CLI.
+[[dist.extra-artifacts]]
+artifacts = ["install/setup.sh"]
+build = ["sh", "-n", "install/setup.sh"]
