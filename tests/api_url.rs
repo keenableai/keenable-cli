@@ -286,6 +286,38 @@ async fn key_saved_under_an_override_is_sent_only_there() {
 }
 
 #[tokio::test]
+async fn configure_mcp_under_an_override_never_sends_the_stored_key_there() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("mcp");
+    write_config(
+        &home,
+        r#"{"api_key":"keen_stored","skip_setup_confirmation":true}"#,
+    );
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+
+    let out = keenable(
+        &home,
+        &format!("http://127.0.0.1:{port}"),
+        &["configure-mcp", "--cursor", "-y"],
+    )
+    .await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    // The key is checked against production (the MCP URL configure-mcp
+    // writes), never against the override.
+    let leaked: Vec<_> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.api_key.is_some())
+        .cloned()
+        .collect();
+    assert!(leaked.is_empty(), "{leaked:?}");
+    let cursor = std::fs::read_to_string(home.join(".cursor/mcp.json")).unwrap();
+    assert!(cursor.contains("https://api.keenable.ai/mcp"), "{cursor}");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
 async fn unparseable_config_is_never_overwritten() {
     let (port, _log) = spawn_stub().await;
     let home = temp_home("broken");

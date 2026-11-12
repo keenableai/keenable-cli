@@ -311,6 +311,18 @@ fn check_api_base(command: &Commands) {
     if let Err(msg) = api::resolved_api_base() {
         api::exit_invalid_api_base(msg, yaml);
     }
+    // Agent-facing output keeps its YAML error contract even here; the
+    // human commands get the same message from config::require_home_dir.
+    if yaml && config::home_dir().is_none() {
+        let msg = "Cannot determine your home directory";
+        let out = serde_json::json!({
+            "error": msg,
+            "hint": "Set HOME, or set KEENABLE_HOME to the directory keenable should keep its .keenable folder in.",
+        });
+        ui::stdout(&serde_yaml::to_string(&out).unwrap_or_default());
+        ui::error_line(msg);
+        std::process::exit(1);
+    }
 }
 
 fn main() {

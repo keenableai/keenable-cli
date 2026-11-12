@@ -266,6 +266,16 @@ fn stored_key_for(config: &Value, current_base: &str) -> StoredKey {
     }
 }
 
+/// The stored key if it was saved for `base`. configure-mcp writes the
+/// production MCP URL whatever `KEENABLE_API_URL` says, so it asks for the
+/// production key here rather than the current base's.
+pub fn api_key_for(base: &str) -> Option<String> {
+    match stored_key_for(&get_config(), base) {
+        StoredKey::Usable(key) => Some(key),
+        _ => None,
+    }
+}
+
 pub fn stored_key() -> StoredKey {
     // An invalid KEENABLE_API_URL matches no saved base: nothing is usable.
     let base = crate::api::resolved_api_base().unwrap_or("");

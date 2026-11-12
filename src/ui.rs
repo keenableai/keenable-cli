@@ -164,6 +164,7 @@ pub fn error(msg: &str) {
 /// the result never spans lines or restyles the terminal.
 pub fn one_line(msg: &str) -> String {
     msg.chars()
+        .filter(|c| !is_bidi_control(*c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
         .split_whitespace()
@@ -177,23 +178,33 @@ pub fn one_line(msg: &str) -> String {
 /// is shown) are dropped. Line breaks and tabs stay.
 pub fn printable(text: &str) -> String {
     text.chars()
-        .filter(|c| match c {
-            '\n' | '\t' => true,
-            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => false,
-            c => !c.is_control(),
-        })
+        .filter(|&c| matches!(c, '\n' | '\t') || !(c.is_control() || is_bidi_control(c)))
         .collect()
+}
+
+/// Bidirectional embedding, override and isolate controls: they are not
+/// control characters to Unicode, but they reorder what the terminal shows.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}')
 }
 
 /// Write machine output to stdout. A reader that went away (`| head`, a
 /// closed pipe) is not an error: the rest is dropped and the command ends
 /// with its own exit code, instead of Rust's broken-pipe panic (exit 101).
+/// Any other write failure (a full disk, an I/O error) exits 1, so a script
+/// never takes truncated output for success.
 pub fn stdout(text: &str) {
-    write_or_drop(&mut std::io::stdout().lock(), text);
+    if let Err(e) = write_or_drop(&mut std::io::stdout().lock(), text) {
+        error_line(&format!("could not write output: {e}"));
+        std::process::exit(1);
+    }
 }
 
-fn write_or_drop(out: &mut impl std::io::Write, text: &str) {
-    let _ = out.write_all(text.as_bytes()).and_then(|_| out.flush());
+fn write_or_drop(out: &mut impl std::io::Write, text: &str) -> std::io::Result<()> {
+    match out.write_all(text.as_bytes()).and_then(|_| out.flush()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 /// Print `error: <msg>` to stderr as exactly one unstyled line, never
@@ -283,10 +294,24 @@ mod one_line_tests {
                 Err(std::io::ErrorKind::BrokenPipe.into())
             }
         }
-        super::write_or_drop(&mut Closed, "results: []\n");
+        assert!(super::write_or_drop(&mut Closed, "results: []\n").is_ok());
         let mut buf = Vec::new();
-        super::write_or_drop(&mut buf, "ok\n");
+        super::write_or_drop(&mut buf, "ok\n").unwrap();
         assert_eq!(buf, b"ok\n");
+    }
+
+    #[test]
+    fn other_write_errors_are_reported() {
+        struct Full;
+        impl std::io::Write for Full {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("No space left on device"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(super::write_or_drop(&mut Full, "results: []\n").is_err());
     }
 
     #[test]
@@ -294,6 +319,12 @@ mod one_line_tests {
         let page = "Title\u{1b}]0;pwned\u{7}\n\tline \u{9b}2J\u{202e}txt.exe\u{2066}";
         assert_eq!(super::printable(page), "Title]0;pwned\n\tline 2Jtxt.exe");
         assert_eq!(super::printable("plain ünïcode 👀"), "plain ünïcode 👀");
+    }
+
+    #[test]
+    fn one_line_drops_bidi_controls() {
+        let url = "https://example.com/\u{202e}gnp.exe\u{2066}x\u{200f}";
+        assert_eq!(one_line(url), "https://example.com/gnp.exex");
     }
 
     #[test]

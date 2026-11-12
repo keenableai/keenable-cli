@@ -1,5 +1,6 @@
 use colored::Colorize;
 use reqwest::Client;
+use std::io::IsTerminal;
 use std::time::Duration;
 
 use crate::api::{ApiError, api_url};
@@ -351,6 +352,21 @@ pub async fn login(api_key: Option<&str>) {
     // `--api-key -` reads the key from stdin, keeping it out of the process
     // list and shell history.
     let from_stdin = match api_key {
+        // At a terminal, ask without echoing instead of waiting silently
+        // for input that would be shown on screen.
+        Some("-") if std::io::stdin().is_terminal() => {
+            match dialoguer::Password::new()
+                .with_prompt("   API key")
+                .interact()
+            {
+                Ok(key) if !key.trim().is_empty() => Some(key.trim().to_string()),
+                _ => {
+                    ui::error("No API key entered");
+                    eprintln!();
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("-") => match read_key(std::io::stdin().lock()) {
             Ok(key) => Some(key),
             Err(why) => {
@@ -413,12 +429,14 @@ pub async fn login(api_key: Option<&str>) {
     // the server: only a web page is handed to the OS opener, never a file
     // or an app URL scheme.
     let link = ui::one_line(&code.verification_uri);
-    if is_web_link(&link) {
-        open::that(&link).ok();
-        ui::step_done("Tried opening link in browser");
-    } else {
-        ui::warning("The server sent a link that is not a web page; not opening it");
+    if !is_web_link(&link) {
+        ui::error("The server sent a sign-in link that is not a web page; not using it");
+        ui::hint("Save a key from https://keenable.ai/console instead: keenable login --api-key -");
+        eprintln!();
+        std::process::exit(1);
     }
+    open::that(&link).ok();
+    ui::step_done("Tried opening link in browser");
     ui::sub_hint(&format!(
         "If you are an agent or on a remote machine, open {} and enter code {}",
         link.cyan(),

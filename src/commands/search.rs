@@ -477,7 +477,7 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
     let hint = err.hint(authenticated);
 
     if human {
-        ui::error(&ui::printable(&err.display()));
+        ui::error(&err.display());
         err.print_cause();
         if let Some(hint) = &hint {
             let hint = ui::printable(hint);

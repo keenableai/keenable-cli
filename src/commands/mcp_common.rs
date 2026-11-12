@@ -6,8 +6,9 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io::IsTerminal;
 
-use crate::api::{KeyCheck, validate_api_key};
+use crate::api::{KeyCheck, validate_api_key_at};
 use crate::config;
+use crate::constants::DEFAULT_API_BASE_URL;
 use crate::ui;
 
 use std::path::PathBuf;
@@ -222,11 +223,15 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
     ui::label("Keenable CLI");
     // Key validation would report a bad SSL_CERT_FILE as "can't verify"
     // and carry on; it's a setup error, so stop here instead.
-    if config::get_api_key().is_some() {
+    // Client configs always get the production MCP URL, so they get the key
+    // saved for production, checked against production, whatever
+    // KEENABLE_API_URL says.
+    let stored = config::api_key_for(DEFAULT_API_BASE_URL);
+    if stored.is_some() {
         crate::api::exit_on_bad_cert_file();
     }
-    let api_key: Option<String> = match config::get_api_key() {
-        Some(key) => match validate_api_key(&key).await {
+    let api_key: Option<String> = match stored {
+        Some(key) => match validate_api_key_at(DEFAULT_API_BASE_URL, &key).await {
             KeyCheck::Valid => {
                 ui::success("API key is valid");
                 Some(key)
@@ -250,13 +255,6 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
             }
         },
         None => {
-            if let config::StoredKey::OtherBase { saved_for } = config::stored_key() {
-                ui::warning(&format!(
-                    "The stored API key was saved for {} and is not used with {}",
-                    saved_for,
-                    crate::api::api_base()
-                ));
-            }
             ui::info("No API key — configuring for free tier (IP-based rate limits)");
             ui::sub_info(&format!(
                 "Run {} for higher limits",
@@ -794,17 +792,27 @@ fn ensure_object(config: &mut Value, key: &str) {
     }
 }
 
-/// True when the config holds the `keenable` entry or any other entry whose
-/// URL points at Keenable, the same match the reset removal step uses.
-fn has_product_entry(ide: &IDEDef) -> bool {
+/// The entries in `ide`'s config that belong to Keenable: the `keenable`
+/// entry and any other entry whose URL points at Keenable (the same match
+/// the reset removal step uses).
+fn keenable_entries(ide: &IDEDef) -> Vec<Value> {
     let config = read_config_lenient(&ide.config_path);
     let Some(servers) = config.get(ide.servers_key).and_then(|v| v.as_object()) else {
-        return false;
+        return Vec::new();
     };
-    servers.contains_key(ENTRY_NAME)
-        || servers
-            .values()
-            .any(|entry| extract_url(entry).is_some_and(|url| is_keenable_url(&url)))
+    servers
+        .iter()
+        .filter(|(name, entry)| {
+            name.as_str() == ENTRY_NAME
+                || extract_url(entry).is_some_and(|url| is_keenable_url(&url))
+        })
+        .map(|(_, entry)| entry.clone())
+        .collect()
+}
+
+/// True when the config holds a Keenable entry.
+fn has_product_entry(ide: &IDEDef) -> bool {
+    !keenable_entries(ide).is_empty()
 }
 
 /// Names of the clients whose MCP config still holds an API key in a
@@ -813,17 +821,9 @@ pub fn clients_holding_api_key() -> Vec<&'static str> {
     all_ides()
         .iter()
         .filter(|ide| {
-            let config = read_config_lenient(&ide.config_path);
-            config
-                .get(ide.servers_key)
-                .and_then(|v| v.as_object())
-                .is_some_and(|servers| {
-                    servers.iter().any(|(name, entry)| {
-                        (name == ENTRY_NAME
-                            || extract_url(entry).is_some_and(|url| is_keenable_url(&url)))
-                            && extract_entry_api_key(entry).is_some()
-                    })
-                })
+            keenable_entries(ide)
+                .iter()
+                .any(|entry| extract_entry_api_key(entry).is_some())
         })
         .map(|ide| ide.name)
         .collect()

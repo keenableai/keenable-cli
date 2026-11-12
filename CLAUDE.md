@@ -52,8 +52,8 @@ assets/
 ### Login Modes
 
 - **`keenable login`** — interactive device-code flow. Opens browser, provisions API key, enables MCP configuration via `configure-mcp`.
-- **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed. `--api-key -` reads the key from stdin (keeps it out of argv and shell history); help text and docs lead with that form.
-- The device flow opens the server's `verification_uri` only when it is https (or http to loopback) and prints that same link in the hint.
+- **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed. `--api-key -` reads the key from stdin (keeps it out of argv and shell history), or prompts without echo when stdin is a terminal; help text and docs lead with that form.
+- The device flow uses the server's `verification_uri` only when it is https (or http to loopback), and prints that same link in the hint; any other link stops the login with a hint to use `--api-key -`.
 - `logout` warns when client MCP configs still hold a key (`mcp_common::clients_holding_api_key`) and points at `keenable reset --all`.
 
 ### Output Format
@@ -109,13 +109,13 @@ Each connection starts with an `identity` handshake: current daemons answer with
 
 All API calls (search, fetch, public endpoints, key validation, login device flow) build URLs via `api::api_url()`, which uses `api::api_base()`: `KEENABLE_API_URL` when set, else `https://api.keenable.ai` (`DEFAULT_API_BASE_URL`). Rule: https only, except http to `localhost` or a loopback IP; trailing slashes are stripped, a path prefix is kept. Same variable as the SDKs, and the same core rule (https, or http to loopback); the CLI additionally rejects a query or fragment (the Go SDK does too, Python doesn't) and accepts any spelling of the loopback IPs (`127.1`, `[0:0::1]`), which the SDKs reject. `main` validates it before any API command and exits 1 with an error naming the variable and the fix — YAML on stdout plus the one-line `ui::error_line` summary on stderr for search/fetch without `-p`, `ui::error` + `ui::hint` on stderr otherwise (`api::exit_invalid_api_base`). The MCP URL written by `configure-mcp` always uses the production base — an env override is never persisted into client configs. Never format URLs from the constant directly. A URL with a user or password is rejected without echoing it.
 
-**The stored key is bound to its base.** `config::set_api_key` saves `api_key_base` next to `api_key` (omitted for production, so keys saved by older versions count as production). `config::get_api_key()` returns the key only when it was saved for the current base; `config::stored_key()` tells "no key" from "key for another base" (`StoredKey::OtherBase`), and search/fetch stop on the latter with exit 1 and a hint rather than sending the key or silently going anonymous. Never read `api_key` from the config directly.
+**The stored key is bound to its base.** `config::set_api_key` saves `api_key_base` next to `api_key` (omitted for production, so keys saved by older versions count as production). `config::get_api_key()` returns the key only when it was saved for the current base; `config::stored_key()` tells "no key" from "key for another base" (`StoredKey::OtherBase`), and search/fetch stop on the latter with exit 1 and a hint rather than sending the key or silently going anonymous. Never read `api_key` from the config directly. `configure-mcp` is the exception to "current base": it always writes the production MCP URL, so it uses `config::api_key_for(DEFAULT_API_BASE_URL)` and checks it with `api::validate_api_key_at(DEFAULT_API_BASE_URL, ..)`, never against an override.
 
 **Redirects** (`net::redirect_policy`) are followed only within the same scheme, host and port, at most 5 hops: reqwest strips only the standard auth headers across hosts, and `X-API-Key` would otherwise follow.
 
 **Config writes** go through `config::update_config` / `config::atomic_write`: a `config.json` that is not a JSON object is never overwritten (exit 1, "Not changing …"); `~/.keenable` is kept 0700 (`config::ensure_private_config_dir`); temp files are opened `create_new`; a symlinked target is written through, so the link survives.
 
-**Pretty output** passes all text from the API or a web page through `ui::printable` (multi-line content) or `ui::one_line` (titles, URLs, dates), which drop control characters and bidi overrides so a page can't drive the terminal.
+**Pretty output** passes all text from the API or a web page through `ui::printable` (multi-line content) or `ui::one_line` (titles, URLs, dates), which drop control characters and bidi controls so a page can't drive the terminal. `ApiError::display()` applies the same filter, since its text comes from the server. Machine output goes through `ui::stdout`, which ignores only a closed reader (`BrokenPipe`); any other write error exits 1.
 
 Commands that bypass the daemon on purpose and go direct: `--api-key` / `KEENABLE_API_KEY` (the daemon's cached auth differs) and `--verbose` (so the proxy/CA view and full error chain it reports are the client's own, not the daemon's).
 

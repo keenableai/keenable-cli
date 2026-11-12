@@ -142,11 +142,14 @@ impl ApiError {
     }
 
     /// Human-readable summary: "error: message" or just "error".
+    /// `error: message`, safe to print: both can come from a server, so
+    /// control characters and bidi overrides are dropped.
     pub fn display(&self) -> String {
-        match &self.message {
+        let text = match &self.message {
             Some(msg) => format!("{}: {}", self.error, msg),
             None => self.error.clone(),
-        }
+        };
+        ui::printable(&text)
     }
 
     /// Read the v1 fields (`type`, `code`, `fix`, `docs_url`) from an API
@@ -400,12 +403,18 @@ pub enum KeyCheck {
 /// Ping the auth endpoint with a short timeout — this is a pre-flight check,
 /// not worth stalling a command for the full 60s client timeout.
 pub async fn validate_api_key(api_key: &str) -> KeyCheck {
+    validate_api_key_at(api_base(), api_key).await
+}
+
+/// `validate_api_key` against a given API base: configure-mcp checks the
+/// production key against production, never against an override.
+pub async fn validate_api_key_at(base: &str, api_key: &str) -> KeyCheck {
     let client = match api_key_client(api_key) {
         Ok(c) => c,
         Err(e) => return KeyCheck::Unreachable(Some(Box::new(e.into()))),
     };
     let resp = client
-        .get(api_url("/v1/auth/user"))
+        .get(format!("{base}/v1/auth/user"))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await;
