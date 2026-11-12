@@ -144,7 +144,7 @@ Set `KEENABLE_API_URL` to send API calls somewhere other than `https://api.keena
 KEENABLE_API_URL=http://127.0.0.1:8080 keenable search "query"
 ```
 
-A stored API key is only sent to the API it was saved for. `keenable login` saves the key together with the current `KEENABLE_API_URL` (production when unset), and a command run against any other API stops with exit code 1 instead of sending it there. Under an override, pass a key with `KEENABLE_API_KEY` or `--api-key`, or run `keenable login` with the override set. This keeps a `KEENABLE_API_URL` set by a project's environment from redirecting your key to another host.
+A stored API key is only sent to the API it was saved for. `keenable login` saves the key for the current `KEENABLE_API_URL` (production when unset), next to any key you saved for another API, so logging in under an override keeps your production key. A command run against an API with no key of its own stops with exit code 1 instead of sending the production key there. Under an override, pass a key with `KEENABLE_API_KEY` or `--api-key`, or run `keenable login` with the override set. This keeps a `KEENABLE_API_URL` set by a project's environment from redirecting your key to another host.
 
 Redirects are followed only within the same scheme, host and port, so the API key never follows a redirect to another host or to plain http.
 
@@ -155,7 +155,7 @@ keenable login                          # Device-code login (opens browser)
 printenv KEENABLE_API_KEY | keenable login --api-key -
                                         # Save a key from stdin (CI, servers)
 keenable login --api-key <KEY>          # Save API key directly
-keenable logout                         # Clear stored credentials
+keenable logout                         # Remove the key for the current API address
 ```
 
 Prefer `--api-key -`: a key passed as an argument is visible to other processes on the machine and lands in shell history. The key is stored in `~/.keenable/config.json` (mode 0600, in a 0700 directory). `configure-mcp` also writes it into each configured client's MCP config; `logout` lists those clients, and `keenable reset --all` removes it from them.

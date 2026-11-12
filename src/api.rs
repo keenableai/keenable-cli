@@ -414,7 +414,7 @@ pub async fn validate_api_key_at(base: &str, api_key: &str) -> KeyCheck {
         Err(e) => return KeyCheck::Unreachable(Some(Box::new(e.into()))),
     };
     let resp = client
-        .get(format!("{base}/v1/auth/user"))
+        .get(api_url_at(base, "/v1/auth/user"))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await;
@@ -558,7 +558,13 @@ pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
 }
 
 pub fn api_url(path: &str) -> String {
-    format!("{}{}", api_base(), path)
+    api_url_at(api_base(), path)
+}
+
+/// `path` on a given API base. Every API URL is built here; `api_url` is
+/// this with the current base.
+pub fn api_url_at(base: &str, path: &str) -> String {
+    format!("{}{}", base, path)
 }
 
 /// The error is boxed: it is only built on the error path, and keeps

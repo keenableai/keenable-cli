@@ -482,11 +482,17 @@ pub fn logout() {
     daemon::kill_daemon();
     config::ensure_config_writable();
     config::clear_credentials();
-    config::remove_api_key();
+    let kept = config::remove_api_key();
 
     ui::step_done("Cleared credentials");
     ui::step_done("Removed API key");
     ui::success("Logged out");
+    if !kept.is_empty() {
+        ui::info(&format!(
+            "Keys saved for other API addresses were kept: {}. Run keenable logout with KEENABLE_API_URL set to remove one.",
+            kept.join(", ")
+        ));
+    }
     // configure-mcp copied the key into these clients' own config files;
     // logging out of the CLI does not reach them.
     let holding = crate::commands::mcp_common::clients_holding_api_key();

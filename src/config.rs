@@ -231,47 +231,65 @@ pub fn remove_config_value(key: &str) {
     });
 }
 
+/// The key for the production API. Every key saved before keys were bound
+/// to a base lives here, and production keys keep living here.
 const API_KEY: &str = "api_key";
-/// The API base the stored key was saved for. Absent means production:
-/// that is where every key saved before this field existed came from.
-const API_KEY_BASE: &str = "api_key_base";
+/// Keys for other API bases (`KEENABLE_API_URL` overrides), by base. Kept
+/// apart from `api_key` so logging in under an override never replaces the
+/// production key.
+const API_KEYS: &str = "api_keys";
 
 /// The stored API key, as seen from the API base this process talks to.
 #[derive(Debug, PartialEq)]
 pub enum StoredKey {
     None,
     Usable(String),
-    /// A key is stored, but for another API base. It is never sent to this
-    /// one: `KEENABLE_API_URL` can come from anything that sets environment
-    /// variables, and must not be able to redirect the key to another host.
+    /// No key for this base, but the production key exists. It is never
+    /// sent here: `KEENABLE_API_URL` can come from anything that sets
+    /// environment variables, and must not be able to redirect the key.
     OtherBase {
         saved_for: String,
     },
+}
+
+fn non_empty_key(v: &Value) -> Option<String> {
+    v.as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+fn is_production(base: &str) -> bool {
+    same_base(base, crate::constants::DEFAULT_API_BASE_URL)
+}
+
+/// The key saved for `base`, if any.
+fn key_for_base(config: &Value, base: &str) -> Option<String> {
+    if is_production(base) {
+        return non_empty_key(&config[API_KEY]);
+    }
+    config[API_KEYS]
+        .as_object()?
+        .iter()
+        .find(|(saved_for, _)| same_base(saved_for, base))
+        .and_then(|(_, key)| non_empty_key(key))
 }
 
 /// Pure for unit tests. Keys are trimmed on save AND read (read covers
 /// configs written by older versions or by hand): stray whitespace breaks
 /// HTTP header building.
 fn stored_key_for(config: &Value, current_base: &str) -> StoredKey {
-    let Some(key) = config[API_KEY]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
-        return StoredKey::None;
-    };
-    let saved_for = config[API_KEY_BASE]
-        .as_str()
-        .map(|s| s.trim().trim_end_matches('/'))
-        .filter(|s| !s.is_empty())
-        .unwrap_or(crate::constants::DEFAULT_API_BASE_URL);
-    if same_base(saved_for, current_base) {
-        StoredKey::Usable(key.to_string())
-    } else {
-        StoredKey::OtherBase {
-            saved_for: saved_for.to_string(),
-        }
+    if let Some(key) = key_for_base(config, current_base) {
+        return StoredKey::Usable(key);
     }
+    // Under an override with only a production key, say so rather than go
+    // anonymous: the user would otherwise not notice their key isn't used.
+    if !is_production(current_base) && non_empty_key(&config[API_KEY]).is_some() {
+        return StoredKey::OtherBase {
+            saved_for: crate::constants::DEFAULT_API_BASE_URL.to_string(),
+        };
+    }
+    StoredKey::None
 }
 
 /// The stored key if it was saved for `base`. configure-mcp writes the
@@ -314,23 +332,52 @@ pub fn get_api_key() -> Option<String> {
 }
 
 /// Save `key` together with the API base it belongs to.
+/// Save `key` for the current API base: production's slot, or this
+/// override's entry in `api_keys`. Keys for other bases are left alone.
 pub fn set_api_key(key: &str) {
     let base = crate::api::api_base();
+    let key = Value::String(key.trim().to_string());
     update_config(|map| {
-        map.insert(API_KEY.into(), Value::String(key.trim().to_string()));
-        if base == crate::constants::DEFAULT_API_BASE_URL {
-            map.remove(API_KEY_BASE);
-        } else {
-            map.insert(API_KEY_BASE.into(), Value::String(base.to_string()));
+        if is_production(base) {
+            map.insert(API_KEY.into(), key);
+            return;
+        }
+        let keys = map
+            .entry(API_KEYS)
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !keys.is_object() {
+            *keys = Value::Object(Default::default());
+        }
+        if let Value::Object(keys) = keys {
+            keys.retain(|saved_for, _| !same_base(saved_for, base));
+            keys.insert(base.to_string(), key);
         }
     });
 }
 
-pub fn remove_api_key() {
+/// Remove the key for the current API base. Returns the other bases that
+/// still have a saved key, so logout can say they were kept.
+pub fn remove_api_key() -> Vec<String> {
+    let base = crate::api::resolved_api_base().unwrap_or("");
+    let mut kept = Vec::new();
     update_config(|map| {
-        map.remove(API_KEY);
-        map.remove(API_KEY_BASE);
+        if is_production(base) {
+            map.remove(API_KEY);
+        } else if let Some(Value::Object(keys)) = map.get_mut(API_KEYS) {
+            keys.retain(|saved_for, _| !same_base(saved_for, base));
+        }
+        if let Some(Value::Object(keys)) = map.get(API_KEYS) {
+            if keys.is_empty() {
+                map.remove(API_KEYS);
+            } else {
+                kept.extend(keys.keys().cloned());
+            }
+        }
+        if !is_production(base) && map.get(API_KEY).and_then(non_empty_key).is_some() {
+            kept.insert(0, crate::constants::DEFAULT_API_BASE_URL.to_string());
+        }
     });
+    kept
 }
 
 pub fn clear_credentials() {
@@ -404,23 +451,37 @@ mod tests {
     }
 
     #[test]
-    fn key_saved_for_an_override_is_usable_only_there() {
-        let config = json!({"api_key": "keen_x", "api_key_base": "http://localhost:8080/"});
+    fn keys_for_an_override_and_production_live_side_by_side() {
+        let config = json!({
+            "api_key": "keen_prod",
+            "api_keys": {"http://localhost:8080/": "keen_local"}
+        });
         assert_eq!(
             stored_key_for(&config, "http://localhost:8080"),
-            StoredKey::Usable("keen_x".into())
+            StoredKey::Usable("keen_local".into())
         );
         assert_eq!(
             stored_key_for(&config, DEFAULT_API_BASE_URL),
-            StoredKey::OtherBase {
-                saved_for: "http://localhost:8080".into()
-            }
+            StoredKey::Usable("keen_prod".into())
         );
         assert_eq!(
-            stored_key_for(&config, ""),
+            stored_key_for(&config, "https://gw.example"),
             StoredKey::OtherBase {
-                saved_for: "http://localhost:8080".into()
+                saved_for: DEFAULT_API_BASE_URL.into()
             }
+        );
+    }
+
+    #[test]
+    fn a_key_only_for_an_override_leaves_production_anonymous() {
+        let config = json!({"api_keys": {"http://localhost:8080": "keen_local"}});
+        assert_eq!(
+            stored_key_for(&config, DEFAULT_API_BASE_URL),
+            StoredKey::None
+        );
+        assert_eq!(
+            stored_key_for(&config, "https://gw.example"),
+            StoredKey::None
         );
     }
 

@@ -257,13 +257,15 @@ async fn key_saved_under_an_override_is_sent_only_there() {
     let home = temp_home("saved");
     let base = format!("http://127.0.0.1:{port}");
 
+    // A production key saved earlier must survive logging in elsewhere.
+    write_config(&home, r#"{"api_key":"keen_prod"}"#);
     let out = keenable(&home, &base, &["login", "--api-key", "keen_local"]).await;
     assert!(out.status.success(), "{}", text(&out.stderr));
-    let config = std::fs::read_to_string(home.join(".keenable/config.json")).unwrap();
-    assert!(
-        config.contains(&format!(r#""api_key_base": "{base}""#)),
-        "{config}"
-    );
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join(".keenable/config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["api_key"], "keen_prod", "{config}");
+    assert_eq!(config["api_keys"][&base], "keen_local", "{config}");
 
     let out = keenable(&home, &format!("{base}/"), &["search", "q", "-v"]).await;
     assert!(out.status.success(), "{}", text(&out.stderr));
@@ -282,6 +284,20 @@ async fn key_saved_under_an_override_is_sent_only_there() {
     .await;
     assert_eq!(out.status.code(), Some(1));
     assert!(other_log.lock().unwrap().is_empty());
+
+    // Logging out under the override removes only that base's key.
+    let out = keenable(&home, &base, &["logout"]).await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("were kept"),
+        "{}",
+        text(&out.stderr)
+    );
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join(".keenable/config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["api_key"], "keen_prod", "{config}");
+    assert!(config.get("api_keys").is_none(), "{config}");
     std::fs::remove_dir_all(&home).ok();
 }
 

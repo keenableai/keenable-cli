@@ -87,6 +87,10 @@ def test_free_tier_daemon_starts_unauthenticated(short_home):
         # Whether the request returns results or is rate-limited, the daemon is
         # spun up before the request, so its socket must exist either way.
         assert res.code in (0, exit_code(4)), res.err  # 4: rate limited
+        if res.code != 0:
+            # On binaries before per-kind exit codes every failure is 1, so
+            # check the error is the rate limit, not something unrelated.
+            assert "increase your limits" in res.yaml().get("hint", ""), res.out
         assert (keenable_dir / "daemon.sock").exists(), "unauthenticated daemon did not start"
         # The daemon ran bare: no API key was persisted. The CLI stores the
         # key in config.json (api_key); credentials.json holds only OAuth
