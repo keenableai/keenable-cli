@@ -185,6 +185,17 @@ pub fn printable(text: &str) -> String {
         .collect()
 }
 
+/// Write machine output to stdout. A reader that went away (`| head`, a
+/// closed pipe) is not an error: the rest is dropped and the command ends
+/// with its own exit code, instead of Rust's broken-pipe panic (exit 101).
+pub fn stdout(text: &str) {
+    write_or_drop(&mut std::io::stdout().lock(), text);
+}
+
+fn write_or_drop(out: &mut impl std::io::Write, text: &str) {
+    let _ = out.write_all(text.as_bytes()).and_then(|_| out.flush());
+}
+
 /// Print `error: <msg>` to stderr as exactly one unstyled line, never
 /// wrapped: the summary YAML mode adds for scripts that read stderr.
 pub fn error_line(msg: &str) {
@@ -259,6 +270,23 @@ mod one_line_tests {
         let line = one_line(&msg);
         assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
         assert!(line.starts_with("first line second line xxx"));
+    }
+
+    #[test]
+    fn writing_to_a_closed_reader_does_not_panic() {
+        struct Closed;
+        impl std::io::Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        super::write_or_drop(&mut Closed, "results: []\n");
+        let mut buf = Vec::new();
+        super::write_or_drop(&mut buf, "ok\n");
+        assert_eq!(buf, b"ok\n");
     }
 
     #[test]

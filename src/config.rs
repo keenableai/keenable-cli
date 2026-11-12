@@ -18,10 +18,22 @@ pub fn home_dir() -> Option<PathBuf> {
     }
 }
 
+/// The home directory, or exit 1 with the fix: a container or service
+/// account can run with no `HOME` and no passwd entry, and that must be a
+/// clear error, not a panic.
+pub fn require_home_dir() -> PathBuf {
+    home_dir().unwrap_or_else(|| {
+        crate::ui::error("Cannot determine your home directory");
+        crate::ui::hint(
+            "Set HOME, or set KEENABLE_HOME to the directory keenable should keep its .keenable folder in.",
+        );
+        eprintln!();
+        std::process::exit(1);
+    })
+}
+
 fn config_dir() -> PathBuf {
-    home_dir()
-        .expect("cannot determine home directory")
-        .join(".keenable")
+    require_home_dir().join(".keenable")
 }
 
 /// Create `~/.keenable` if needed and keep it private to the user: it holds

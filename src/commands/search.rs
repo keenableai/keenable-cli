@@ -272,8 +272,11 @@ fn dates_line(item: &Value) -> Option<String> {
 
 fn print_yaml(data: &Value) {
     match serde_yaml::to_string(data) {
-        Ok(yaml) => print!("{}", yaml),
-        Err(_) => println!("{}", serde_json::to_string_pretty(data).unwrap()),
+        Ok(yaml) => ui::stdout(&yaml),
+        Err(_) => ui::stdout(&format!(
+            "{}\n",
+            serde_json::to_string_pretty(data).unwrap_or_default()
+        )),
     }
 }
 

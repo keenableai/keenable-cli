@@ -236,9 +236,7 @@ mod platform {
     }
 
     fn daemon_dir() -> PathBuf {
-        config::home_dir()
-            .expect("cannot determine home directory")
-            .join(".keenable")
+        config::require_home_dir().join(".keenable")
     }
 
     /// Socket of the daemon for this process's API base.

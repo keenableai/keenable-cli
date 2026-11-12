@@ -524,7 +524,7 @@ pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
         });
         // Like API errors in YAML mode: the structured error on stdout and
         // a one-line summary on stderr.
-        print!("{}", serde_yaml::to_string(&out).unwrap_or_default());
+        crate::ui::stdout(&serde_yaml::to_string(&out).unwrap_or_default());
         crate::ui::error_line(msg);
     } else {
         crate::ui::error(msg);
