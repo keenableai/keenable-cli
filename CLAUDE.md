@@ -54,7 +54,7 @@ assets/
 - **`keenable login`** — interactive device-code flow. Opens browser, provisions API key, enables MCP configuration via `configure-mcp`.
 - **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed. `--api-key -` reads the key from stdin (keeps it out of argv and shell history), or prompts without echo when stdin is a terminal; help text and docs lead with that form.
 - The device flow uses the server's `verification_uri` only when it is https (or http to loopback), and prints that same link in the hint; any other link stops the login with a hint to use `--api-key -`.
-- `login` and `logout` check that `config.json` can be written before doing anything (`config::ensure_config_writable`), so login never provisions a key it can't save; `logout` stops the daemon first. `logout` warns when client MCP configs still hold a key (`mcp_common::clients_holding_api_key`) and points at `keenable reset --all`.
+- `login` and `logout` check that `config.json` can be written before doing anything (`config::ensure_config_writable`), so login never provisions a key it can't save; `logout` stops the daemon first, and again after removing the key, so a daemon a concurrent command started with the old key doesn't survive. `logout` warns when client MCP configs still hold a key (`mcp_common::clients_holding_api_key`) and points at `keenable reset --all`.
 
 ### Output Format
 
@@ -115,7 +115,7 @@ Bases are compared by scheme, host, port and path (`config::same_base`), so `htt
 
 **Redirects** (`net::redirect_policy`) are followed only within the same scheme, host and port, at most 5 hops: reqwest strips only the standard auth headers across hosts, and `X-API-Key` would otherwise follow.
 
-**Config writes** go through `config::update_config` / `config::atomic_write`: a `config.json` that is not a JSON object is never overwritten (exit 1, "Not changing …"); `~/.keenable` is kept 0700 (`config::ensure_private_config_dir`); temp files are opened `create_new`; a symlinked target is written through, so the link survives.
+**Config writes** go through `config::update_config` / `config::atomic_write`: `update_config` holds an exclusive lock on `config.json.lock` for the read-modify-write, so concurrent commands (two logins) don't drop each other's changes; a `config.json` that is not a JSON object is never overwritten (exit 1, "Not changing …"); `~/.keenable` is kept 0700 (`config::ensure_private_config_dir`); temp files are opened `create_new`; a symlinked target is written through, so the link survives.
 
 **Pretty output** passes all text from the API or a web page through `ui::printable` (multi-line content) or `ui::one_line` (titles, URLs, dates), which drop control characters and bidi controls so a page can't drive the terminal. `ApiError::display()` applies the same filter, since its text comes from the server. Machine output goes through `ui::stdout`, which ignores only a closed reader (`BrokenPipe`); any other write error exits 1.
 

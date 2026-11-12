@@ -212,11 +212,30 @@ pub fn get_config() -> Value {
 /// Read-modify-write of the config object. Refuses (exit 1) to touch a
 /// config file that exists but can't be parsed.
 fn update_config(change: impl FnOnce(&mut serde_json::Map<String, Value>)) {
+    // Two commands updating the config at once (say, logins for two API
+    // bases) must not both read the old file: the later write would drop
+    // the earlier one's change. The lock is released when `_lock` drops.
+    let _lock = lock_config();
     let mut config = read_config_for_write();
     if let Value::Object(map) = &mut config {
         change(map);
     }
     write_json(&config_file(), &config);
+}
+
+/// An exclusive lock on `config.json.lock`, held for a read-modify-write of
+/// the config. Best effort: when the lock file can't be created or locked,
+/// the update goes ahead unlocked, as it did before locking existed.
+fn lock_config() -> Option<fs::File> {
+    ensure_private_config_dir().ok()?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(config_dir().join("config.json.lock"))
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
 }
 
 pub fn set_config_value(key: &str, value: Value) {

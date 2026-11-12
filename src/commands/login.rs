@@ -483,6 +483,10 @@ pub fn logout() {
     config::ensure_config_writable();
     config::clear_credentials();
     let kept = config::remove_api_key();
+    // A command run between the first stop and the removal may have started
+    // a daemon that loaded the old key; stop it too. Any daemon started from
+    // here on reads the config without the key.
+    daemon::kill_daemon();
 
     ui::step_done("Cleared credentials");
     ui::step_done("Removed API key");

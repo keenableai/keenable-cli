@@ -334,6 +334,46 @@ async fn configure_mcp_under_an_override_never_sends_the_stored_key_there() {
 }
 
 #[tokio::test]
+async fn concurrent_logins_for_different_bases_keep_every_key() {
+    let (port, _log) = spawn_stub().await;
+    let home = temp_home("concurrent");
+    let bases: Vec<String> = (0..8)
+        .map(|i| format!("http://127.0.0.1:{port}/gw{i}"))
+        .collect();
+    let logins = bases.iter().enumerate().map(|(i, base)| {
+        let home = home.clone();
+        let base = base.clone();
+        async move {
+            let key = format!("keen_{i}");
+            keenable(&home, &base, &["login", "--api-key", &key]).await
+        }
+    });
+    for out in futures_join_all(logins).await {
+        assert!(out.status.success(), "{}", text(&out.stderr));
+    }
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join(".keenable/config.json")).unwrap())
+            .unwrap();
+    for (i, base) in bases.iter().enumerate() {
+        assert_eq!(config["api_keys"][base], format!("keen_{i}"), "{config}");
+    }
+    std::fs::remove_dir_all(&home).ok();
+}
+
+async fn futures_join_all<F>(futures: impl Iterator<Item = F>) -> Vec<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let handles: Vec<_> = futures.map(tokio::spawn).collect();
+    let mut out = Vec::new();
+    for h in handles {
+        out.push(h.await.unwrap());
+    }
+    out
+}
+
+#[tokio::test]
 async fn unparseable_config_is_never_overwritten() {
     let (port, _log) = spawn_stub().await;
     let home = temp_home("broken");
@@ -517,9 +557,8 @@ async fn logout_removes_files_of_the_daemon_it_stopped() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn logout_keeps_files_of_a_concurrently_started_daemon() {
-    assert_eq!(
-        logout_with_fake_daemon(true).await,
-        (true, Some("222".to_string()))
-    );
+async fn logout_also_stops_a_daemon_started_while_it_ran() {
+    // A daemon started between logout's first stop and the key's removal
+    // may hold the old key, so logout stops it as well.
+    assert_eq!(logout_with_fake_daemon(true).await, (false, None));
 }
