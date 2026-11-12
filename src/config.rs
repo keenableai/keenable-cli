@@ -411,6 +411,7 @@ mod tests {
         assert!(parse_config_for_write(Some("[]")).is_err());
     }
 
+    #[cfg(unix)]
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kn-config-{name}-{}", std::process::id()));
         fs::remove_dir_all(&dir).ok();
