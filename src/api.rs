@@ -257,6 +257,7 @@ impl ApiError {
                         | "payment_settlement_failed"
                         | "search_rate_limited"
                         | "fetch_rate_limited"
+                        | "prompt_input_too_long"
                 )
             )
     }
@@ -1072,6 +1073,21 @@ mod tests {
                 if status == 400 || status == 422 {
                     assert!(h.contains("retrying unchanged fails"), "{code}: {h}");
                 }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_errors_show_the_server_fix() {
+        for code in ["prompt_input_too_long", "prompt_extraction_failed"] {
+            let entry = catalog().into_iter().find(|e| e["code"] == code).unwrap();
+            let status = entry["status"].as_u64().unwrap() as u16;
+            let e = respond(status, &v1_body(&entry)).await;
+            let fix = entry["fix"].as_str().unwrap();
+            for authed in [true, false] {
+                let h = e.hint(authed).unwrap();
+                assert_eq!(h, fix, "{code}");
+                assert!(!h.contains("retrying unchanged fails"), "{code}: {h}");
             }
         }
     }
