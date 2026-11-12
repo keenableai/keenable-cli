@@ -105,14 +105,14 @@ pub async fn check_for_update() -> Option<String> {
         "last_check": now_epoch(),
         "latest_version": latest.as_deref().or(cached_version.as_deref()),
     });
-    if let Some(dir) = cache_file.parent() {
-        fs::create_dir_all(dir).ok();
+    if config::ensure_private_config_dir().is_ok() {
+        config::atomic_write(
+            &cache_file,
+            &serde_json::to_string(&cache).unwrap_or_default(),
+            false,
+        )
+        .ok();
     }
-    fs::write(
-        &cache_file,
-        serde_json::to_string(&cache).unwrap_or_default(),
-    )
-    .ok();
 
     let latest = latest?;
     if is_newer(&latest, current_version()) {

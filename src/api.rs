@@ -476,6 +476,15 @@ fn resolve_api_base(env_value: Option<&str>) -> Result<String, String> {
     if url.query().is_some() || url.fragment().is_some() {
         return Err(invalid(" with no query or fragment"));
     }
+    // Credentials in the URL would be sent as Basic auth and end up in
+    // error messages and daemon file names' inputs; the API key is the auth.
+    if !url.username().is_empty() || url.password().is_some() {
+        // Not `invalid(..)`: it echoes the value, password included.
+        return Err(format!(
+            "{API_URL_ENV} must not contain a user or password (host: {})",
+            url.host_str().unwrap_or_default()
+        ));
+    }
     match url.scheme() {
         "https" => Ok(raw.to_string()),
         "http" if local => Ok(raw.to_string()),
@@ -936,6 +945,19 @@ mod tests {
     }
 
     #[test]
+    fn api_base_rejects_embedded_credentials_without_echoing_them() {
+        for bad in [
+            "https://user:hunter2@gw.example",
+            "https://token@gw.example/x",
+        ] {
+            let err = resolve_api_base(Some(bad)).unwrap_err();
+            assert!(err.contains("must not contain a user or password"), "{err}");
+            assert!(err.contains("gw.example"), "{err}");
+            assert!(!err.contains("hunter2") && !err.contains("token"), "{err}");
+        }
+    }
+
+    #[test]
     fn display_joins_error_and_message() {
         let mut e = err(500, "Server error");
         assert_eq!(e.display(), "Server error");
@@ -1106,37 +1128,94 @@ mod tests {
     /// mapping can't pass by being copied into the test. A code missing here
     /// (after refreshing the catalog) fails the test until it is added.
     const EXPECTED_EXIT_CODES: &[(&str, i32)] = &[
+        ("allowance_unavailable", exit_code::SERVER),
+        ("api_key_required", exit_code::AUTH),
+        ("auth_internal_error", exit_code::SERVER),
         ("auth_unavailable", exit_code::SERVER),
+        ("authorization_pending", exit_code::INVALID_REQUEST),
+        ("balance_check_unavailable", exit_code::SERVER),
+        ("billing_account_not_found", exit_code::SERVER),
+        ("card_expired", exit_code::INVALID_REQUEST),
+        ("card_not_found", exit_code::INVALID_REQUEST),
+        ("card_storage_unavailable", exit_code::SERVER),
+        ("card_too_large", exit_code::SERVER),
+        ("company_email_required", exit_code::AUTH),
         ("content_not_extracted", exit_code::TARGET),
         ("credentials_forbidden", exit_code::AUTH),
+        ("device_code_already_used", exit_code::INVALID_REQUEST),
+        ("device_code_client_mismatch", exit_code::INVALID_REQUEST),
+        ("device_code_denied", exit_code::AUTH),
+        ("device_code_expired", exit_code::INVALID_REQUEST),
+        ("device_login_unavailable", exit_code::SERVER),
+        ("dns_lookup_failed", exit_code::SERVER),
+        ("domain_record_missing", exit_code::INVALID_REQUEST),
+        ("domain_taken", exit_code::INVALID_REQUEST),
+        ("fetch_mode_unavailable", exit_code::SERVER),
         ("fetch_rate_limited", exit_code::RATE_LIMITED),
+        ("fetcher_unavailable", exit_code::SERVER),
         ("forbidden", exit_code::AUTH),
         ("insufficient_credits", exit_code::OUT_OF_CREDITS),
         ("internal_error", exit_code::SERVER),
+        ("internal_route_not_public", exit_code::INVALID_REQUEST),
         ("invalid_api_key", exit_code::AUTH),
+        ("invalid_authorization_header", exit_code::AUTH),
         ("invalid_bearer_token", exit_code::AUTH),
+        ("invalid_json", exit_code::INVALID_REQUEST),
+        ("invalid_or_expired_promo_code", exit_code::INVALID_REQUEST),
         ("invalid_parameter", exit_code::INVALID_REQUEST),
         ("invalid_request", exit_code::INVALID_REQUEST),
+        ("invalid_session_token", exit_code::AUTH),
+        ("mcp_host_not_allowed", exit_code::AUTH),
+        ("mcp_message_too_complex", exit_code::INVALID_REQUEST),
+        ("mcp_not_acceptable", exit_code::INVALID_REQUEST),
+        ("mcp_origin_not_allowed", exit_code::AUTH),
+        ("method_not_allowed", exit_code::INVALID_REQUEST),
         ("missing_api_key", exit_code::AUTH),
         ("missing_app_title", exit_code::INVALID_REQUEST),
         ("missing_parameter", exit_code::INVALID_REQUEST),
+        ("missing_session_token", exit_code::AUTH),
+        ("mode_requires_api_key", exit_code::AUTH),
+        ("no_active_organization", exit_code::INVALID_REQUEST),
         ("not_found", exit_code::INVALID_REQUEST),
         ("page_not_found", exit_code::TARGET),
         ("paid_rate_limit_per_second", exit_code::RATE_LIMITED),
         ("payment_facilitator_error", exit_code::SERVER),
+        ("payment_rejected", exit_code::ERROR),
         ("payment_required", exit_code::ERROR),
         ("payment_settlement_failed", exit_code::ERROR),
+        ("payment_verification_unavailable", exit_code::SERVER),
         ("payments_region_unavailable", exit_code::ERROR),
         ("payments_unavailable", exit_code::SERVER),
         ("private_url_not_allowed", exit_code::INVALID_REQUEST),
+        ("promo_card_required", exit_code::AUTH),
+        ("promo_card_reused", exit_code::AUTH),
+        ("promo_code_not_active", exit_code::AUTH),
+        ("promo_new_accounts_only", exit_code::AUTH),
+        ("prompt_extraction_failed", exit_code::SERVER),
+        ("prompt_input_too_long", exit_code::INVALID_REQUEST),
         ("public_rate_limit_hourly", exit_code::RATE_LIMITED),
         ("public_rate_limit_per_second", exit_code::RATE_LIMITED),
+        ("query_rejected", exit_code::INVALID_REQUEST),
         ("rate_limit_per_second", exit_code::RATE_LIMITED),
         ("rate_limited", exit_code::RATE_LIMITED),
         ("request_rejected", exit_code::INVALID_REQUEST),
         ("request_too_large", exit_code::INVALID_REQUEST),
+        ("route_not_found", exit_code::INVALID_REQUEST),
+        ("search_failed_upstream", exit_code::SERVER),
         ("search_overloaded", exit_code::SERVER),
         ("search_rate_limited", exit_code::RATE_LIMITED),
+        ("search_rejected_upstream", exit_code::INVALID_REQUEST),
+        ("search_upstream_error", exit_code::SERVER),
+        ("select_concurrency_limited", exit_code::RATE_LIMITED),
+        ("select_disabled", exit_code::SERVER),
+        ("select_internal_error", exit_code::SERVER),
+        ("select_query_failed", exit_code::INVALID_REQUEST),
+        ("select_query_invalid", exit_code::INVALID_REQUEST),
+        ("select_timeout", exit_code::SERVER),
+        ("select_unavailable", exit_code::SERVER),
+        ("service_not_configured", exit_code::SERVER),
+        ("sign_in_required", exit_code::AUTH),
+        ("slow_down", exit_code::RATE_LIMITED),
         ("target_blocked", exit_code::TARGET),
         ("target_http_error", exit_code::TARGET),
         ("target_paywalled", exit_code::TARGET),
@@ -1144,11 +1223,25 @@ mod tests {
         ("target_timeout", exit_code::TARGET),
         ("target_unreachable", exit_code::TARGET),
         ("target_wrong_page", exit_code::TARGET),
+        ("time_machine_not_enabled", exit_code::AUTH),
         ("unauthenticated", exit_code::AUTH),
         ("unknown_parameter", exit_code::INVALID_REQUEST),
+        ("unknown_tool", exit_code::INVALID_REQUEST),
         ("unprocessable", exit_code::INVALID_REQUEST),
+        ("unsupported_content_encoding", exit_code::INVALID_REQUEST),
+        ("unsupported_grant_type", exit_code::INVALID_REQUEST),
+        ("user_code_not_found", exit_code::INVALID_REQUEST),
+        ("user_code_used", exit_code::INVALID_REQUEST),
+        ("version_not_found", exit_code::INVALID_REQUEST),
         ("zdr_prompt_unsupported", exit_code::INVALID_REQUEST),
         ("zdr_unsupported_profile", exit_code::INVALID_REQUEST),
+        ("zeroclick_allowance_denied", exit_code::ERROR),
+        ("zeroclick_request_id_missing", exit_code::AUTH),
+        ("zeroclick_signature_expired", exit_code::AUTH),
+        ("zeroclick_signature_invalid", exit_code::AUTH),
+        ("zeroclick_signature_malformed", exit_code::AUTH),
+        ("zeroclick_signature_missing", exit_code::AUTH),
+        ("zeroclick_signing_key_unknown", exit_code::AUTH),
     ];
 
     #[tokio::test]

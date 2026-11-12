@@ -258,13 +258,46 @@ pub fn client_builder() -> Result<reqwest::ClientBuilder, CertFileError> {
     if verbose() {
         REPORTED.call_once(|| report(roots));
     }
-    let mut builder = reqwest::Client::builder();
+    let mut builder = reqwest::Client::builder().redirect(redirect_policy());
     for cert in &roots.certs {
         if let Ok(c) = reqwest::Certificate::from_der(cert.as_ref()) {
             builder = builder.add_root_certificate(c);
         }
     }
     Ok(builder)
+}
+
+/// Scheme, host and port all match. reqwest only strips the standard auth
+/// headers on a cross-host redirect; `X-API-Key` would travel with it, and a
+/// same-host https to http downgrade keeps every header.
+fn same_origin(a: &reqwest::Url, b: &reqwest::Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+const MAX_REDIRECTS: usize = 5;
+
+/// Follow redirects only within the origin the request was sent to, so the
+/// API key never reaches another host or an unencrypted hop.
+fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.error("too many redirects");
+        }
+        let stays = attempt
+            .previous()
+            .last()
+            .is_some_and(|prev| same_origin(attempt.url(), prev));
+        if stays {
+            attempt.follow()
+        } else {
+            let to = attempt.url().origin().ascii_serialization();
+            attempt.error(format!(
+                "refused a redirect to another origin ({to}); the API key is only sent to the API it was configured for"
+            ))
+        }
+    })
 }
 
 fn report(roots: &Roots) {
@@ -749,5 +782,22 @@ mod tests {
         );
         let err = load_cert_file(&path).unwrap_err();
         assert!(err.reason.contains("could be parsed"), "{err}");
+    }
+
+    #[test]
+    fn same_origin_needs_scheme_host_and_port_to_match() {
+        let url = |s: &str| reqwest::Url::parse(s).unwrap();
+        let api = url("https://api.keenable.ai/v1/search");
+        assert!(same_origin(&api, &url("https://api.keenable.ai:443/other")));
+        assert!(!same_origin(&api, &url("http://api.keenable.ai/v1/search")));
+        assert!(!same_origin(
+            &api,
+            &url("https://api.keenable.ai:8443/v1/search")
+        ));
+        assert!(!same_origin(&api, &url("https://evil.example/v1/search")));
+        assert!(!same_origin(
+            &api,
+            &url("https://api.keenable.ai.evil.example/")
+        ));
     }
 }

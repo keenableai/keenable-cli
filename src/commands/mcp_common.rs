@@ -250,6 +250,13 @@ pub async fn configure(selected_flags: Vec<String>, yes: bool) {
             }
         },
         None => {
+            if let config::StoredKey::OtherBase { saved_for } = config::stored_key() {
+                ui::warning(&format!(
+                    "The stored API key was saved for {} and is not used with {}",
+                    saved_for,
+                    crate::api::api_base()
+                ));
+            }
             ui::info("No API key — configuring for free tier (IP-based rate limits)");
             ui::sub_info(&format!(
                 "Run {} for higher limits",
@@ -798,6 +805,28 @@ fn has_product_entry(ide: &IDEDef) -> bool {
         || servers
             .values()
             .any(|entry| extract_url(entry).is_some_and(|url| is_keenable_url(&url)))
+}
+
+/// Names of the clients whose MCP config still holds an API key in a
+/// Keenable entry (written there by configure-mcp).
+pub fn clients_holding_api_key() -> Vec<&'static str> {
+    all_ides()
+        .iter()
+        .filter(|ide| {
+            let config = read_config_lenient(&ide.config_path);
+            config
+                .get(ide.servers_key)
+                .and_then(|v| v.as_object())
+                .is_some_and(|servers| {
+                    servers.iter().any(|(name, entry)| {
+                        (name == ENTRY_NAME
+                            || extract_url(entry).is_some_and(|url| is_keenable_url(&url)))
+                            && extract_entry_api_key(entry).is_some()
+                    })
+                })
+        })
+        .map(|ide| ide.name)
+        .collect()
 }
 
 fn warn_unmatched_flags(selected_flags: &[String], all: &[IDEDef], detected: &[&IDEDef]) {

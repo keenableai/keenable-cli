@@ -43,6 +43,32 @@ fn error_detail(body: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// The first non-empty line of `input`, trimmed: the API key for
+/// `login --api-key -`.
+fn read_key(input: impl std::io::BufRead) -> Result<String, &'static str> {
+    for line in input.lines() {
+        let line = line.map_err(|_| "Could not read the API key from stdin")?;
+        let key = line.trim();
+        if !key.is_empty() {
+            return Ok(key.to_string());
+        }
+    }
+    Err("No API key on stdin")
+}
+
+/// An https link, or http to this machine (a local API under
+/// `KEENABLE_API_URL`). Anything else is not opened.
+fn is_web_link(link: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(link) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => url.host_str().is_some(),
+        "http" => matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
+        _ => false,
+    }
+}
+
 fn login_error(msg: impl Into<String>) -> ApiError {
     ApiError {
         error: msg.into(),
@@ -322,6 +348,22 @@ pub async fn login(api_key: Option<&str>) {
     // A bad SSL_CERT_FILE must not pass for "network error, saving anyway".
     crate::api::exit_on_bad_cert_file();
 
+    // `--api-key -` reads the key from stdin, keeping it out of the process
+    // list and shell history.
+    let from_stdin = match api_key {
+        Some("-") => match read_key(std::io::stdin().lock()) {
+            Ok(key) => Some(key),
+            Err(why) => {
+                ui::error(why);
+                ui::hint("Pipe the key in: printenv KEENABLE_API_KEY | keenable login --api-key -");
+                eprintln!();
+                std::process::exit(1);
+            }
+        },
+        _ => None,
+    };
+    let api_key = from_stdin.as_deref().or(api_key);
+
     // Fast path: --api-key provided, skip browser login
     if let Some(key) = api_key {
         // Catch a typo'd key now rather than at first search; an unreachable
@@ -367,25 +409,37 @@ pub async fn login(api_key: Option<&str>) {
     };
     ui::step_done("Requested device code");
 
-    // Step 2: Try to open verification link in browser
-    open::that(&code.verification_uri).ok();
-    ui::step_done("Tried opening link in browser");
+    // Step 2: Try to open verification link in browser. The link comes from
+    // the server: only a web page is handed to the OS opener, never a file
+    // or an app URL scheme.
+    let link = ui::one_line(&code.verification_uri);
+    if is_web_link(&link) {
+        open::that(&link).ok();
+        ui::step_done("Tried opening link in browser");
+    } else {
+        ui::warning("The server sent a link that is not a web page; not opening it");
+    }
     ui::sub_hint(&format!(
         "If you are an agent or on a remote machine, open {} and enter code {}",
-        "keenable.ai/link".cyan(),
-        code.user_code.yellow().bold()
+        link.cyan(),
+        ui::one_line(&code.user_code).yellow().bold()
     ));
 
     // Step 3: Poll for approval
     let step_lines = ui::step("Waiting for approval...");
-    let api_key =
-        match poll_for_token(&client, &code.device_code, code.interval, code.expires_in).await {
-            Ok(key) => key,
-            Err(e) => {
-                ui::error(&e);
-                std::process::exit(1);
-            }
-        };
+    let api_key = match poll_for_token(&client, &code.device_code, code.interval, code.expires_in)
+        .await
+    {
+        Ok(key) => key,
+        Err(e) => {
+            ui::error(&ui::printable(&e));
+            ui::hint(
+                "Run keenable login again, or save a key from https://keenable.ai/console with: keenable login --api-key -",
+            );
+            eprintln!();
+            std::process::exit(1);
+        }
+    };
     ui::step_done_replace("Approved", step_lines);
 
     // Step 4: Save API key and restart daemon with new credentials
@@ -403,18 +457,64 @@ pub fn logout() {
     ui::header("keenable logout");
 
     config::clear_credentials();
-    config::remove_config_value("api_key");
+    config::remove_api_key();
     daemon::kill_daemon();
 
     ui::step_done("Cleared credentials");
     ui::step_done("Removed API key");
     ui::success("Logged out");
+    // configure-mcp copied the key into these clients' own config files;
+    // logging out of the CLI does not reach them.
+    let holding = crate::commands::mcp_common::clients_holding_api_key();
+    if !holding.is_empty() {
+        ui::warning(&format!(
+            "An API key is still stored in the MCP config of: {}",
+            holding.join(", ")
+        ));
+        ui::hint(&format!(
+            "Remove it there too with: {}",
+            "keenable reset --all".cyan()
+        ));
+    }
     eprintln!();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_key_takes_the_first_non_empty_line() {
+        assert_eq!(
+            read_key(&b"\n  keen_abc \r\nignored\n"[..]),
+            Ok("keen_abc".into())
+        );
+        assert_eq!(read_key(&b"keen_abc"[..]), Ok("keen_abc".into()));
+        assert_eq!(read_key(&b""[..]), Err("No API key on stdin"));
+        assert_eq!(read_key(&b" \n\n"[..]), Err("No API key on stdin"));
+    }
+
+    #[test]
+    fn only_web_links_are_opened() {
+        for ok in [
+            "https://keenable.ai/link?code=ABCD",
+            "http://localhost:3000/link",
+            "http://127.0.0.1:3000/link",
+            "http://[::1]:3000/link",
+        ] {
+            assert!(is_web_link(ok), "{ok}");
+        }
+        for bad in [
+            "file:///etc/passwd",
+            "http://keenable.ai/link",
+            "ms-msdt:/id",
+            "javascript:alert(1)",
+            "keenable.ai/link",
+            "",
+        ] {
+            assert!(!is_web_link(bad), "{bad}");
+        }
+    }
     use serde_json::json;
 
     fn wait(interval: u64, next_wait: u64) -> PollStep {

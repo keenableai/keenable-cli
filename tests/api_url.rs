@@ -62,11 +62,23 @@ async fn serve(stream: TcpStream, seen: Log) -> std::io::Result<()> {
 
     let payload =
         format!(r#"{{"results":[{{"url":"https://stub.example{path}","title":"stub"}}]}}"#);
+    // `/redirect/<port>/...` answers with a redirect to another loopback port.
+    let redirect = path
+        .strip_prefix("/redirect/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(port, rest)| format!("http://127.0.0.1:{port}/{rest}"));
     seen.lock().unwrap().push(Seen {
         method,
         path,
         api_key,
     });
+    if let Some(location) = redirect {
+        let response = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+        );
+        stream.get_mut().write_all(response.as_bytes()).await?;
+        return stream.get_mut().shutdown().await;
+    }
     let response = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
         payload.len(),
@@ -184,6 +196,114 @@ async fn keyed_direct_search_goes_to_the_override() {
     assert_eq!(seen[0].method, "POST");
     assert_eq!(seen[0].path, "/v1/search");
     assert_eq!(seen[0].api_key.as_deref(), Some("keen_test"));
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
+async fn api_key_does_not_follow_a_redirect_to_another_origin() {
+    let (port, log) = spawn_stub().await;
+    let (other_port, other_log) = spawn_stub().await;
+    let home = temp_home("redirect");
+    let out = keenable(
+        &home,
+        &format!("http://127.0.0.1:{port}/redirect/{other_port}"),
+        &["search", "q", "--api-key", "keen_test"],
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(7), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout).contains("refused a redirect to another origin"),
+        "{}",
+        text(&out.stdout)
+    );
+    assert_eq!(log.lock().unwrap().len(), 1);
+    let leaked = other_log.lock().unwrap().clone();
+    assert!(leaked.is_empty(), "{leaked:?}");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+fn write_config(home: &Path, json: &str) {
+    std::fs::write(home.join(".keenable/config.json"), json).unwrap();
+}
+
+#[tokio::test]
+async fn stored_production_key_is_not_sent_to_an_override() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("bound");
+    write_config(&home, r#"{"api_key":"keen_stored"}"#);
+    let base = format!("http://127.0.0.1:{port}");
+
+    for args in [&["search", "q"][..], &["fetch", "https://example.org"][..]] {
+        let out = keenable(&home, &base, args).await;
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            text(&out.stderr)
+        );
+        let stdout = text(&out.stdout);
+        assert!(stdout.contains("Stored API key not used"), "{stdout}");
+        assert!(stdout.contains("KEENABLE_API_KEY"), "{stdout}");
+        assert!(!stdout.contains("keen_stored"), "{stdout}");
+    }
+    let seen = log.lock().unwrap().clone();
+    assert!(seen.is_empty(), "{seen:?}");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
+async fn key_saved_under_an_override_is_sent_only_there() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("saved");
+    let base = format!("http://127.0.0.1:{port}");
+
+    let out = keenable(&home, &base, &["login", "--api-key", "keen_local"]).await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let config = std::fs::read_to_string(home.join(".keenable/config.json")).unwrap();
+    assert!(
+        config.contains(&format!(r#""api_key_base": "{base}""#)),
+        "{config}"
+    );
+
+    let out = keenable(&home, &format!("{base}/"), &["search", "q", "-v"]).await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let seen = log.lock().unwrap().clone();
+    let last = seen.last().unwrap();
+    assert_eq!(last.path, "/v1/search");
+    assert_eq!(last.api_key.as_deref(), Some("keen_local"));
+
+    // Another base: the key stays home.
+    let (other_port, other_log) = spawn_stub().await;
+    let out = keenable(
+        &home,
+        &format!("http://127.0.0.1:{other_port}"),
+        &["search", "q"],
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(1));
+    assert!(other_log.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
+async fn unparseable_config_is_never_overwritten() {
+    let (port, _log) = spawn_stub().await;
+    let home = temp_home("broken");
+    let broken = r#"{"api_key":"keen_stored""#;
+    write_config(&home, broken);
+    let base = format!("http://127.0.0.1:{port}");
+
+    for args in [
+        &["login", "--api-key", "keen_new"][..],
+        &["config", "set", "default_search_mode", "pro"][..],
+        &["logout"][..],
+    ] {
+        let out = keenable(&home, &base, args).await;
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert!(text(&out.stderr).contains("Not changing"), "{args:?}");
+        let now = std::fs::read_to_string(home.join(".keenable/config.json")).unwrap();
+        assert_eq!(now, broken, "{args:?}");
+    }
     std::fs::remove_dir_all(&home).ok();
 }
 

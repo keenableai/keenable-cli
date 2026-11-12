@@ -299,6 +299,11 @@ type Failure = Box<(ApiError, bool)>;
 /// --verbose (so the network details shown are this process's own), go
 /// direct (skip daemon). Otherwise try daemon first, fall back to direct HTTP.
 async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<Value, Failure> {
+    if api_key_override.is_none()
+        && let config::StoredKey::OtherBase { saved_for } = config::stored_key()
+    {
+        return Err(Box::new((stored_key_not_used(&saved_for), false)));
+    }
     let use_daemon = api_key_override.is_none() && !net::verbose();
     // A bad SSL_CERT_FILE must surface as a clear error, not as a daemon
     // that fails to start. Its hint doesn't depend on the auth state.
@@ -327,6 +332,24 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
     send_direct(&client, req, authenticated)
         .await
         .map_err(|e| Box::new((*e, authenticated)))
+}
+
+/// The stored key belongs to another API base than the one this process
+/// talks to. Stop rather than send it there, or quietly go anonymous.
+fn stored_key_not_used(saved_for: &str) -> ApiError {
+    let base = crate::api::api_base();
+    ApiError {
+        error: "Stored API key not used".into(),
+        message: Some(format!(
+            "The stored API key was saved for {saved_for} and is not sent to {base}."
+        )),
+        transport_hint: Some(format!(
+            "Pass a key for {base} with KEENABLE_API_KEY or --api-key, or run `keenable login` with {} set to save one for it. Unset {} to use {saved_for}.",
+            crate::constants::API_URL_ENV,
+            crate::constants::API_URL_ENV
+        )),
+        ..Default::default()
+    }
 }
 
 async fn send_direct(
@@ -451,18 +474,19 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
     let hint = err.hint(authenticated);
 
     if human {
-        ui::error(&err.display());
+        ui::error(&ui::printable(&err.display()));
         err.print_cause();
         if let Some(hint) = &hint {
+            let hint = ui::printable(hint);
             ui::hint(&hint.replace("`keenable login`", &format!("{}", "keenable login".cyan())));
         }
         if let Some(url) = &err.docs_url {
-            ui::hint(&format!("Docs: {}", url));
+            ui::hint(&format!("Docs: {}", ui::one_line(url)));
         }
         if let Some(id) = &err.request_id {
             ui::hint(&format!(
                 "Request ID: {} (quote it when contacting support)",
-                id
+                ui::one_line(id)
             ));
         }
         eprintln!();
@@ -591,16 +615,18 @@ pub async fn search(
             if human {
                 ui::header(&format!("keenable search \"{}\"", query));
                 if let Some(warning) = response_warning(&data) {
-                    ui::warning(warning);
+                    ui::warning(&ui::printable(warning));
                     eprintln!();
                 }
                 let results = data["results"].as_array().filter(|r| !r.is_empty());
                 if let Some(results) = results {
                     for (i, result) in results.iter().enumerate() {
-                        let title = result["title"].as_str().unwrap_or("Untitled");
-                        let url = result["url"].as_str().unwrap_or("");
+                        // Titles, URLs and snippets come from web pages:
+                        // never let them drive the terminal.
+                        let title = ui::one_line(result["title"].as_str().unwrap_or("Untitled"));
+                        let url = ui::one_line(result["url"].as_str().unwrap_or(""));
                         let snippet = result["snippet"].as_str().unwrap_or("");
-                        let snippet_flat = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let snippet_flat = ui::one_line(snippet);
                         let snippet_truncated: String = snippet_flat.chars().take(200).collect();
 
                         let num = format!("{:>2}.", i + 1).dimmed();
@@ -610,7 +636,7 @@ pub async fn search(
                             eprintln!("      {}", snippet_truncated.dimmed());
                         }
                         if let Some(dates) = dates_line(result) {
-                            eprintln!("      {}", dates.dimmed());
+                            eprintln!("      {}", ui::one_line(&dates).dimmed());
                         }
                         eprintln!();
                     }
@@ -660,12 +686,12 @@ pub async fn fetch(
             mark_truncated(&mut data);
             if human {
                 ui::header("keenable fetch");
-                let title = data["title"].as_str().unwrap_or("Untitled");
-                let url = data["url"].as_str().unwrap_or("");
-                let content = data["content"].as_str().unwrap_or("");
+                let title = ui::one_line(data["title"].as_str().unwrap_or("Untitled"));
+                let url = ui::one_line(data["url"].as_str().unwrap_or(""));
+                let content = ui::printable(data["content"].as_str().unwrap_or(""));
                 eprintln!("   {} {}", title.bold(), url.cyan());
                 if let Some(dates) = dates_line(&data) {
-                    eprintln!("   {}", dates.dimmed());
+                    eprintln!("   {}", ui::one_line(&dates).dimmed());
                 }
                 eprintln!("   {}", "─".repeat(60).dimmed());
                 for line in content.lines() {

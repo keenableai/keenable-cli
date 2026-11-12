@@ -200,7 +200,7 @@ mod platform {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
     use tokio::sync::{Mutex, Notify};
     use tokio::time::Instant;
@@ -250,6 +250,20 @@ mod platform {
         daemon_dir().join(format!("{}.pid", daemon_stem(api_base())))
     }
 
+    /// Most a single connection may send: far above any real request (a
+    /// query and its filters), far below anything that strains memory.
+    const MAX_CONNECTION_INPUT: u64 = 1024 * 1024;
+
+    /// Whether a connecting peer runs as the daemon's own user. Unknown on
+    /// either side means the platform couldn't say; the socket's 0600 mode
+    /// is then the only gate, as before.
+    fn same_user(peer_uid: Option<u32>, own_uid: Option<u32>) -> bool {
+        match (peer_uid, own_uid) {
+            (Some(peer), Some(own)) => peer == own,
+            _ => true,
+        }
+    }
+
     pub async fn run_daemon() {
         let api_key = config::get_api_key();
         let authenticated = api_key.is_some();
@@ -269,11 +283,7 @@ mod platform {
 
         // Ensure parent dir exists; it holds credentials and the daemon
         // socket, so keep it private to the user.
-        if let Some(parent) = sock.parent() {
-            fs::create_dir_all(parent).ok();
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).ok();
-        }
+        config::ensure_private_config_dir().ok();
 
         let listener = match UnixListener::bind(&sock) {
             Ok(l) => l,
@@ -292,8 +302,16 @@ mod platform {
             fs::set_permissions(&sock, fs::Permissions::from_mode(0o600)).ok();
         }
 
+        // Only this user's processes may use the daemon (and with it the
+        // stored API key). The file mode already says so; the peer check
+        // also covers a socket whose mode could not be set.
+        let own_uid = {
+            use std::os::unix::fs::MetadataExt;
+            fs::metadata(&sock).map(|m| m.uid()).ok()
+        };
+
         // Write PID file
-        fs::write(pid_path(), std::process::id().to_string()).ok();
+        config::atomic_write(&pid_path(), &std::process::id().to_string(), true).ok();
 
         let client = match &api_key {
             Some(key) => api_key_client(key),
@@ -354,6 +372,9 @@ mod platform {
             };
             match accepted {
                 Ok((stream, _)) => {
+                    if !same_user(stream.peer_cred().ok().map(|c| c.uid()), own_uid) {
+                        continue;
+                    }
                     *last_activity.lock().await = Instant::now();
                     let client = client.clone();
                     let authenticated = authenticated.clone();
@@ -364,7 +385,10 @@ mod platform {
                     let stop = stop.clone();
                     tokio::spawn(async move {
                         let (reader, mut writer) = stream.into_split();
-                        let mut lines = BufReader::new(reader).lines();
+                        // A connection carries a handshake and one request;
+                        // cap what it may send so a runaway peer can't make
+                        // the daemon buffer without bound.
+                        let mut lines = BufReader::new(reader.take(MAX_CONNECTION_INPUT)).lines();
 
                         while let Ok(Some(line)) = lines.next_line().await {
                             *last_activity.lock().await = Instant::now();
@@ -638,12 +662,17 @@ mod platform {
             return false;
         }
         // Try to connect to verify it's alive
+        let pid = pid_path();
+        let before = fs::read_to_string(&pid).ok();
         match std::os::unix::net::UnixStream::connect(&sock) {
             Ok(_) => true,
             Err(_) => {
-                // Stale socket, clean up
-                fs::remove_file(&sock).ok();
-                fs::remove_file(pid_path()).ok();
+                // Stale socket, clean up — unless a daemon started meanwhile
+                // (it rewrites the pid file); its files must survive.
+                if fs::read_to_string(&pid).ok() == before {
+                    fs::remove_file(&sock).ok();
+                    fs::remove_file(&pid).ok();
+                }
                 false
             }
         }
@@ -776,6 +805,15 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn only_the_daemons_own_user_may_connect() {
+            assert!(same_user(Some(501), Some(501)));
+            assert!(!same_user(Some(0), Some(501)));
+            assert!(!same_user(Some(502), Some(501)));
+            assert!(same_user(None, Some(501)));
+            assert!(same_user(Some(501), None));
+        }
         use crate::api::ApiError;
 
         fn forbidden() -> ApiError {

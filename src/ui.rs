@@ -171,6 +171,20 @@ pub fn one_line(msg: &str) -> String {
         .join(" ")
 }
 
+/// Text from the API or a web page, safe to print in pretty mode: control
+/// characters (escape sequences that restyle the terminal, rewrite its title
+/// or write the clipboard) and bidirectional overrides (which reorder what
+/// is shown) are dropped. Line breaks and tabs stay.
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .filter(|c| match c {
+            '\n' | '\t' => true,
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => false,
+            c => !c.is_control(),
+        })
+        .collect()
+}
+
 /// Print `error: <msg>` to stderr as exactly one unstyled line, never
 /// wrapped: the summary YAML mode adds for scripts that read stderr.
 pub fn error_line(msg: &str) {
@@ -245,6 +259,13 @@ mod one_line_tests {
         let line = one_line(&msg);
         assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
         assert!(line.starts_with("first line second line xxx"));
+    }
+
+    #[test]
+    fn printable_drops_escapes_and_bidi_overrides_but_keeps_layout() {
+        let page = "Title\u{1b}]0;pwned\u{7}\n\tline \u{9b}2J\u{202e}txt.exe\u{2066}";
+        assert_eq!(super::printable(page), "Title]0;pwned\n\tline 2Jtxt.exe");
+        assert_eq!(super::printable("plain ünïcode 👀"), "plain ünïcode 👀");
     }
 
     #[test]

@@ -51,11 +51,11 @@ enum ConfigAction {
 enum Commands {
     /// Authenticate with Keenable and provision an API key
     #[command(
-        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY\n  keenable login -v                          Show proxy, trusted CAs and full errors\n\nBehind a corporate proxy: set HTTPS_PROXY, and SSL_CERT_FILE to your company's CA bundle\nif it inspects TLS."
+        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  printenv KEENABLE_API_KEY | keenable login --api-key -\n                                             Save a key from stdin (stays out of\n                                             the process list and shell history)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login -v                          Show proxy, trusted CAs and full errors\n\nBehind a corporate proxy: set HTTPS_PROXY, and SSL_CERT_FILE to your company's CA bundle\nif it inspects TLS."
     )]
     Login {
-        /// API key to save directly (skips browser login)
-        #[arg(long = "api-key")]
+        /// API key to save directly (skips browser login); `-` reads it from stdin
+        #[arg(long = "api-key", allow_hyphen_values = true)]
         api_key: Option<String>,
     },
 
@@ -439,7 +439,7 @@ async fn run() {
         eprintln!();
         ui::warning(&format!(
             "A newer version of keenable ({}) is available",
-            version
+            ui::one_line(&version)
         ));
         ui::hint(&format!("Run: {}", update::update_hint()));
     }
