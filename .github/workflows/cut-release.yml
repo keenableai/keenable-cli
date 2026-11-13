@@ -2,9 +2,9 @@ name: Cut release
 
 # Automates the manual steps in RELEASE.md, with the default GITHUB_TOKEN only
 # (no PAT).
-#   1. Run this workflow (Actions -> Cut release -> Run workflow) with a bump.
-#      It opens a "Release vX.Y.Z" PR that only touches Cargo.toml + Cargo.lock
-#      and dispatches CI on the PR branch.
+#   1. Run this workflow (Actions -> Cut release -> Run workflow, on main) with a
+#      bump. It opens a "Release vX.Y.Z" PR that only touches Cargo.toml +
+#      Cargo.lock and dispatches CI on the PR branch.
 #   2. Merge the PR. The push to main tags vX.Y.Z and dispatches release.yml on
 #      that tag (dist: binaries, installers, GitHub Release, Homebrew formula).
 #
@@ -12,6 +12,10 @@ name: Cut release
 # workflow, except workflow_dispatch. So CI on the PR and release.yml on the tag
 # are started explicitly with `gh workflow run`. release.yml carries a
 # hand-added workflow_dispatch trigger for this.
+#
+# Both jobs are safe to re-run after a partial failure: the PR job resumes an
+# existing release branch, and the tag job only dispatches release.yml when no
+# release or release run exists for the tag yet.
 #
 # Repo setting needed: Settings -> Actions -> General -> Workflow permissions ->
 # "Allow GitHub Actions to create and approve pull requests".
@@ -41,6 +45,15 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      # The release branch is cut from this checkout, so any other ref would
+      # carry its unmerged changes into the release PR.
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::run this workflow on main (got $GITHUB_REF)"
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
 
       - name: Compute next version
@@ -94,15 +107,23 @@ jobs:
           branch="release/v$NEXT"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
-          git add Cargo.toml Cargo.lock
-          git commit -m "Release v$NEXT"
-          git push origin "$branch"
-          gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "Release v$NEXT" \
-            --body "Bumps keenable-cli $CUR -> $NEXT. Merging tags \`v$NEXT\` and starts the dist release workflow (binaries, installers, GitHub Release, Homebrew formula)."
+          # A re-run after a failure further down finds the branch already
+          # pushed; resume from it instead of pushing a second, divergent commit.
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then
+            echo "$branch already exists, resuming"
+          else
+            git checkout -b "$branch"
+            git add Cargo.toml Cargo.lock
+            git commit -m "Release v$NEXT"
+            git push origin "$branch"
+          fi
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "Release v$NEXT" \
+              --body "Bumps keenable-cli $CUR -> $NEXT. Merging tags \`v$NEXT\` and starts the dist release workflow (binaries, installers, GitHub Release, Homebrew formula)."
+          fi
           # A PR opened with GITHUB_TOKEN triggers no CI; run it on the branch so
           # its checks show up on the PR head commit.
           gh workflow run ci.yml --ref "$branch"
@@ -112,25 +133,58 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Two quick merges must not race on the same tag or dispatch.
+    concurrency:
+      group: cut-release-tag
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # history to read the pre-push version, and all tags
 
-      - name: Tag if the version changed and is untagged, then release
+      - name: Tag a new version, then start its release
         env:
           GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          ver=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          if git ls-remote --exit-code --tags origin "refs/tags/v$ver" >/dev/null; then
-            echo "v$ver already tagged, nothing to do"
+          version_of() { sed -n 's/^version = "\(.*\)"$/\1/p' | head -1; }
+          ver=$(version_of < Cargo.toml)
+          prev=$(git show "$BEFORE:Cargo.toml" 2>/dev/null | version_of || true)
+          # Cargo.toml also changes for dependency and metadata edits; only a
+          # version change is a release.
+          if [ "$ver" = "$prev" ]; then
+            echo "version unchanged at $ver, nothing to release"
             exit 0
           fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "v$ver"
-          git push origin "v$ver"
-          # A tag pushed with GITHUB_TOKEN starts nothing, so start the release.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$ver" >/dev/null; then
+            if [ "$(git rev-parse "v$ver^{commit}")" != "$GITHUB_SHA" ]; then
+              echo "::error::tag v$ver already exists at another commit"
+              exit 1
+            fi
+            echo "v$ver already tagged at this commit"
+          else
+            git tag "v$ver"
+            git push origin "v$ver"
+          fi
+
+          # A tag pushed with GITHUB_TOKEN starts nothing, so start the release,
+          # unless it is done or already running (this also makes a re-run after
+          # a failed dispatch work, and avoids a double run after a manual tag).
+          if gh release view "v$ver" >/dev/null 2>&1; then
+            echo "release v$ver already exists"
+            exit 0
+          fi
+          started=$(gh run list --workflow release.yml --branch "v$ver" --json status,conclusion \
+            --jq '[.[] | select(.status != "completed" or .conclusion == "success")] | length')
+          if [ "$started" != "0" ]; then
+            echo "release.yml already running or succeeded for v$ver"
+            exit 0
+          fi
           gh workflow run release.yml --ref "v$ver"
