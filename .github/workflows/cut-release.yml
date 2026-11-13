@@ -1,5 +1,8 @@
 name: Cut release
 
+# Includes the version so tools/release.sh can find the run it dispatched.
+run-name: Cut release ${{ inputs.bump }}
+
 # Automates the manual steps in RELEASE.md, with the default GITHUB_TOKEN only
 # (no PAT).
 #   1. Run this workflow (Actions -> Cut release -> Run workflow, on main) with a
@@ -111,9 +114,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # A re-run after a failure further down finds the branch already
-          # pushed; resume from it instead of pushing a second, divergent commit.
+          # pushed; resume from it instead of pushing a second, divergent
+          # commit. Only our own untouched branch is resumed: one bot commit
+          # on top of this main that changes just the release files. Anything
+          # else (main moved on, someone pushed to it) is not ours to reuse.
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then
-            echo "$branch already exists, resuming"
+            git fetch --quiet --depth=2 origin "$branch"
+            extra=$(git diff --name-only HEAD FETCH_HEAD | grep -v -x -E 'Cargo\.toml|Cargo\.lock' || true)
+            if [ "$(git rev-parse FETCH_HEAD^)" != "$(git rev-parse HEAD)" ] ||
+              [ "$(git log -1 --format=%ae FETCH_HEAD)" != "41898282+github-actions[bot]@users.noreply.github.com" ] ||
+              [ -n "$extra" ]; then
+              echo "::error::$branch exists but is not one bot release commit on the current main (stale or edited). Delete it (git push origin --delete $branch) and re-run."
+              exit 1
+            fi
+            echo "$branch already exists and is ours, resuming"
           else
             git checkout -b "$branch"
             git add Cargo.toml Cargo.lock
@@ -136,9 +150,11 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Two quick merges must not race on the same tag or dispatch.
+    # One run per pushed commit. A shared group would drop a middle pending run
+    # when three merges land at once, and nothing needs serializing: each push
+    # only releases the version it changed, so two runs never share a tag.
     concurrency:
-      group: cut-release-tag
+      group: cut-release-tag-${{ github.sha }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -178,12 +194,10 @@ jobs:
           fi
 
           # A tag pushed with GITHUB_TOKEN starts nothing, so start the release,
-          # unless it is done or already running (this also makes a re-run after
-          # a failed dispatch work, and avoids a double run after a manual tag).
-          if gh release view "v$ver" >/dev/null 2>&1; then
-            echo "release v$ver already exists"
-            exit 0
-          fi
+          # unless a run is going or succeeded. The run state, not the GitHub
+          # Release, says whether publishing is done: dist creates the Release
+          # early and can still fail after it (Homebrew), and a re-run must
+          # resume that. This also avoids a double run after a manual tag.
           started=$(gh run list --workflow release.yml --branch "v$ver" --json status,conclusion \
             --jq '[.[] | select(.status != "completed" or .conclusion == "success")] | length')
           if [ "$started" != "0" ]; then
