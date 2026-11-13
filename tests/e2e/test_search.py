@@ -7,6 +7,7 @@ import pytest
 
 from conftest import (
     SEARCH_QUERY,
+    errors_on_stderr,
     exit_code,
     host_of,
     host_under,
@@ -329,9 +330,11 @@ def test_invalid_api_key(kn):
     assert res.code == exit_code(3)  # authentication
     data = res.yaml()
     assert data["error"] == "Authentication failed"
-    # YAML stays on stdout; a one-line summary goes to stderr too (on
-    # binaries with per-kind exit codes, which shipped together with it).
-    if exit_code(3) == 3:
+    # On a failure the structured error is on stderr and stdout is empty.
+    if errors_on_stderr():
+        assert res.out == ""
+        assert res.err.startswith("error: Authentication failed")
+    elif exit_code(3) == 3:
         assert "Authentication failed" in res.err
     assert data["message"] == "Invalid API key"
     assert "keenable login" in data["hint"]

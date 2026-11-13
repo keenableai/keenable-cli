@@ -536,7 +536,7 @@ pub fn api_base() -> &'static str {
 }
 
 /// Report an invalid `KEENABLE_API_URL` with the fix and exit 1: as a
-/// structured YAML error on stdout when `yaml` (agent-facing commands),
+/// structured YAML error on stderr when `yaml` (agent-facing commands),
 /// otherwise as human text on stderr.
 pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
     let hint = format!("Fix {API_URL_ENV} or unset it to use {DEFAULT_API_BASE_URL}.");
@@ -546,10 +546,9 @@ pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
             "message": msg,
             "hint": hint,
         });
-        // Like API errors in YAML mode: the structured error on stdout and
-        // a one-line summary on stderr.
-        crate::ui::stdout(&serde_yaml::to_string(&out).unwrap_or_default());
-        crate::ui::error_line(msg);
+        // Like API errors in YAML mode: the structured error on stderr,
+        // stdout stays empty.
+        eprint!("{}", serde_yaml::to_string(&out).unwrap_or_default());
     } else {
         crate::ui::error(msg);
         crate::ui::hint(&hint);

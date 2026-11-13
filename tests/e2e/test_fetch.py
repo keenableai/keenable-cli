@@ -69,6 +69,17 @@ def test_fetch_max_chars(kn):
     assert data["total_chars"] > 50
 
 
+def test_fetch_default_cap_is_20k(kn):
+    # No --max-chars: the CLI sends 20000. Skip when the page is shorter.
+    res = kn("fetch", "https://en.wikipedia.org/wiki/Rust_(programming_language)")
+    assert res.code == 0
+    data = res.yaml()
+    if data.get("total_chars", 0) <= 20000:
+        pytest.skip("page shorter than the cap")
+    assert len(data["content"]) <= 20000
+    assert data["truncated"] is True
+
+
 def test_fetch_max_chars_rejects_zero(kn):
     res = kn("fetch", "https://example.com", "--max-chars", "0")
     assert res.code == 2

@@ -15,7 +15,7 @@ pub struct DaemonRequest {
     /// instruction's output instead of the full page.
     #[serde(default)]
     pub prompt: Option<String>,
-    /// Fetch only: content-length cap; the API defaults to 50000 when unset.
+    /// Fetch only: content-length cap; the CLI sends 20000 when unset.
     #[serde(default)]
     pub max_chars: Option<u64>,
     /// Fetch only: groups the call with related searches and fetches.

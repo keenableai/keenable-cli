@@ -143,19 +143,17 @@ async fn invalid_value_exits_with_message_and_hint() {
     let message = r#"KEENABLE_API_URL must be an https:// URL (http is allowed only for localhost, 127.0.0.1 and ::1), got "http://example.com""#;
     let hint = "Fix KEENABLE_API_URL or unset it to use https://api.keenable.ai.";
 
-    // Agent-facing: structured YAML on stdout and a one-line summary on
-    // stderr, like API errors.
+    // Agent-facing: structured YAML on stderr, stdout empty, like API errors.
     let out = keenable(&home, "http://example.com", &["search", "q"]).await;
     assert_eq!(out.status.code(), Some(1));
-    let stdout = text(&out.stdout);
-    assert!(
-        stdout.contains("error: Invalid KEENABLE_API_URL"),
-        "{stdout}"
-    );
-    assert!(stdout.contains(&format!("hint: {hint}")), "{stdout}");
+    assert_eq!(text(&out.stdout), "");
     let stderr = text(&out.stderr);
-    assert_eq!(stderr.trim(), format!("error: {message}"), "{stderr}");
-    assert!(stdout.contains("http://example.com"), "{stdout}");
+    assert!(
+        stderr.contains("error: Invalid KEENABLE_API_URL"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&format!("hint: {hint}")), "{stderr}");
+    assert!(stderr.contains("http://example.com"), "{stderr}");
 
     // Management commands: the same message and fix on stderr.
     for args in [
@@ -211,10 +209,11 @@ async fn api_key_does_not_follow_a_redirect_to_another_origin() {
     )
     .await;
     assert_eq!(out.status.code(), Some(7), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "");
     assert!(
-        text(&out.stdout).contains("refused a redirect to another origin"),
+        text(&out.stderr).contains("refused a redirect to another origin"),
         "{}",
-        text(&out.stdout)
+        text(&out.stderr)
     );
     assert_eq!(log.lock().unwrap().len(), 1);
     let leaked = other_log.lock().unwrap().clone();
@@ -241,10 +240,11 @@ async fn stored_production_key_is_not_sent_to_an_override() {
             "{args:?}: {}",
             text(&out.stderr)
         );
-        let stdout = text(&out.stdout);
-        assert!(stdout.contains("Stored API key not used"), "{stdout}");
-        assert!(stdout.contains("KEENABLE_API_KEY"), "{stdout}");
-        assert!(!stdout.contains("keen_stored"), "{stdout}");
+        assert_eq!(text(&out.stdout), "");
+        let stderr = text(&out.stderr);
+        assert!(stderr.contains("Stored API key not used"), "{stderr}");
+        assert!(stderr.contains("KEENABLE_API_KEY"), "{stderr}");
+        assert!(!stderr.contains("keen_stored"), "{stderr}");
     }
     let seen = log.lock().unwrap().clone();
     assert!(seen.is_empty(), "{seen:?}");
