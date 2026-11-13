@@ -138,19 +138,27 @@ seconds); `-p` shows it as `Credits left: N`.
 
 ### API endpoint
 
-Set `KEENABLE_API_URL` to send API calls somewhere other than `https://api.keenable.ai`, e.g. a local gateway that adds credentials. It must be `https://`, except `http://` to `localhost`, `127.0.0.1` or `::1`. `configure-mcp` still writes the production MCP URL.
+Set `KEENABLE_API_URL` to send API calls somewhere other than `https://api.keenable.ai`, e.g. a local gateway that adds credentials. It must be `https://`, except `http://` to `localhost`, `127.0.0.1` or `::1`, and must not contain a user or password. `configure-mcp` still writes the production MCP URL.
 
 ```bash
 KEENABLE_API_URL=http://127.0.0.1:8080 keenable search "query"
 ```
 
+A stored API key is only sent to the API it was saved for. `keenable login` saves the key for the current `KEENABLE_API_URL` (production when unset), next to any key you saved for another API, so logging in under an override keeps your production key. A command run against an API with no key of its own stops with exit code 1 instead of sending the production key there. Under an override, pass a key with `KEENABLE_API_KEY` or `--api-key`, or run `keenable login` with the override set. This keeps a `KEENABLE_API_URL` set by a project's environment from redirecting your key to another host.
+
+Redirects are followed only within the same scheme, host and port, so the API key never follows a redirect to another host or to plain http.
+
 ### Authentication
 
 ```bash
 keenable login                          # Device-code login (opens browser)
-keenable login --api-key <KEY>          # Save API key directly (CI, servers)
-keenable logout                         # Clear stored credentials
+printenv KEENABLE_API_KEY | keenable login --api-key -
+                                        # Save a key from stdin (CI, servers)
+keenable login --api-key <KEY>          # Save API key directly
+keenable logout                         # Remove the key for the current API address
 ```
+
+Prefer `--api-key -`: a key passed as an argument is visible to other processes on the machine and lands in shell history. The key is stored in `~/.keenable/config.json` (mode 0600, in a 0700 directory). `configure-mcp` also writes it into each configured client's MCP config; `logout` lists those clients, and `keenable reset --all` removes it from them.
 
 ### MCP setup
 
@@ -173,7 +181,7 @@ export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle-with-proxy-ca.pem
 keenable search "query"
 ```
 
-The background daemon (macOS/Linux) keeps the environment it was started with and exits after 5 minutes idle. After changing these variables, stop it with `pkill -f "keenable daemon"` so the next command starts a fresh one. Commands run with `--api-key` or `KEENABLE_API_KEY` skip the daemon.
+The background daemon (macOS/Linux) exits after 5 minutes idle. It restarts on its own when the proxy or certificate variables change, so there is nothing to do after changing them. Commands run with `--api-key`, `KEENABLE_API_KEY` or `-v` skip the daemon.
 
 ## Updating
 

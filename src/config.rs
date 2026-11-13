@@ -18,10 +18,42 @@ pub fn home_dir() -> Option<PathBuf> {
     }
 }
 
+/// The home directory, or exit 1 with the fix: a container or service
+/// account can run with no `HOME` and no passwd entry, and that must be a
+/// clear error, not a panic.
+pub const NO_HOME: &str = "Cannot determine your home directory";
+pub const NO_HOME_HINT: &str =
+    "Set HOME, or set KEENABLE_HOME to the directory keenable should keep its .keenable folder in.";
+
+pub fn require_home_dir() -> PathBuf {
+    home_dir().unwrap_or_else(|| {
+        crate::ui::error(NO_HOME);
+        crate::ui::hint(NO_HOME_HINT);
+        eprintln!();
+        std::process::exit(1);
+    })
+}
+
 fn config_dir() -> PathBuf {
-    home_dir()
-        .expect("cannot determine home directory")
-        .join(".keenable")
+    require_home_dir().join(".keenable")
+}
+
+/// Create `~/.keenable` if needed and keep it private to the user: it holds
+/// the API key and the daemon socket. Best effort on the mode (a directory
+/// owned by someone else can't be changed); a no-op for the mode on Windows.
+pub fn ensure_private_config_dir() -> std::io::Result<PathBuf> {
+    let dir = config_dir();
+    fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&dir)
+            && meta.permissions().mode() & 0o077 != 0
+        {
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).ok();
+        }
+    }
+    Ok(dir)
 }
 
 fn config_file() -> PathBuf {
@@ -39,6 +71,68 @@ fn read_json(path: &PathBuf) -> Value {
     }
 }
 
+/// Parse the config for a read-modify-write. A missing or empty file is an
+/// empty config; a file that exists but is not a JSON object is an error, so
+/// a write never silently replaces it (and the API key in it) with `{}`.
+fn parse_config_for_write(content: Option<&str>) -> Result<Value, String> {
+    let content = match content {
+        Some(c) if !c.trim().is_empty() => c,
+        _ => return Ok(Value::Object(Default::default())),
+    };
+    match serde_json::from_str::<Value>(content) {
+        Ok(v) if v.is_object() => Ok(v),
+        Ok(_) => Err("it is not a JSON object".to_string()),
+        Err(e) => Err(format!("it is not valid JSON ({e})")),
+    }
+}
+
+fn read_config_for_write() -> Value {
+    let path = config_file();
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => Some(c),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => exit_config_error(&path, &format!("it could not be read ({e})")),
+    };
+    match parse_config_for_write(content.as_deref()) {
+        Ok(v) => v,
+        Err(why) => exit_config_error(&path, &why),
+    }
+}
+
+/// Exit 1 now if a later write to config.json would be refused, before a
+/// command does anything that can't be undone (provisioning a key).
+pub fn ensure_config_writable() {
+    read_config_for_write();
+}
+
+fn exit_config_error(path: &Path, why: &str) -> ! {
+    crate::ui::error(&format!("Not changing {}: {}", path.display(), why));
+    crate::ui::hint("Fix the file, or delete it and run keenable login again.");
+    eprintln!();
+    std::process::exit(1);
+}
+
+/// The file a write to `path` should land in: the link's target when `path`
+/// is a symlink (dotfile managers link client configs into a repo), so the
+/// link survives and the real file is the one updated.
+fn write_target(path: &Path) -> PathBuf {
+    let is_link = fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if !is_link {
+        return path.to_path_buf();
+    }
+    if let Ok(real) = fs::canonicalize(path) {
+        return real;
+    }
+    // Dangling link: write where it points, one hop.
+    match fs::read_link(path) {
+        Ok(target) if target.is_absolute() => target,
+        Ok(target) => path.parent().unwrap_or(Path::new(".")).join(target),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 /// Atomically replace `path` with `content`: write a uniquely-named temp file
 /// in the same directory, then rename, so concurrent readers see either the
 /// old or the new file, never a partial one. With `restrict`, the temp is
@@ -48,6 +142,7 @@ pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Resu
     // `restrict` only governs Unix file modes (0o600); Windows has no equivalent.
     #[cfg(not(unix))]
     let _ = restrict;
+    let path = &write_target(path);
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -57,8 +152,11 @@ pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Resu
     let tmp = path.with_file_name(tmp_name);
 
     let result = (|| {
+        // create_new: never write through a file or symlink someone else
+        // left at the temp name. A leftover from a crashed run with the same
+        // pid is removed (remove_file does not follow links) and retried once.
         let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         if restrict {
             use std::os::unix::fs::OpenOptionsExt;
@@ -66,8 +164,15 @@ pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Resu
         }
         {
             use std::io::Write;
-            let mut f = opts.open(&tmp)?;
+            let mut f = match opts.open(&tmp) {
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    fs::remove_file(&tmp)?;
+                    opts.open(&tmp)?
+                }
+                other => other?,
+            };
             f.write_all(content.as_bytes())?;
+            f.sync_all().ok();
         }
         #[cfg(unix)]
         if !restrict && let Ok(meta) = fs::metadata(path) {
@@ -92,7 +197,8 @@ pub fn atomic_write(path: &Path, content: &str, restrict: bool) -> std::io::Resu
 fn write_json(path: &Path, data: &Value) {
     let content = serde_json::to_string_pretty(data).unwrap();
     // restrict: the config holds API keys — never world-readable, even briefly
-    if let Err(e) = atomic_write(path, &content, true) {
+    let written = ensure_private_config_dir().and_then(|_| atomic_write(path, &content, true));
+    if let Err(e) = written {
         crate::ui::error(&format!("Failed to write {}: {}", path.display(), e));
         eprintln!();
         std::process::exit(1);
@@ -103,38 +209,194 @@ pub fn get_config() -> Value {
     read_json(&config_file())
 }
 
-pub fn set_config_value(key: &str, value: Value) {
-    let mut config = get_config();
-    // A valid-JSON-but-not-object file (e.g. hand-edited to `[]`) would make
-    // the index assignment panic; start over instead.
-    if !config.is_object() {
-        config = Value::Object(Default::default());
+/// Read-modify-write of the config object. Refuses (exit 1) to touch a
+/// config file that exists but can't be parsed.
+fn update_config(change: impl FnOnce(&mut serde_json::Map<String, Value>)) {
+    // Two commands updating the config at once (say, logins for two API
+    // bases) must not both read the old file: the later write would drop
+    // the earlier one's change. The lock is released when `_lock` drops.
+    let _lock = lock_config();
+    let mut config = read_config_for_write();
+    if let Value::Object(map) = &mut config {
+        change(map);
     }
-    config[key] = value;
     write_json(&config_file(), &config);
+}
+
+/// An exclusive lock on `config.json.lock`, held for a read-modify-write of
+/// the config. Best effort: when the lock file can't be created or locked,
+/// the update goes ahead unlocked, as it did before locking existed.
+fn lock_config() -> Option<fs::File> {
+    ensure_private_config_dir().ok()?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(config_dir().join("config.json.lock"))
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
+}
+
+pub fn set_config_value(key: &str, value: Value) {
+    update_config(|map| {
+        map.insert(key.to_string(), value);
+    });
 }
 
 pub fn remove_config_value(key: &str) {
-    let mut config = get_config();
-    if let Value::Object(ref mut map) = config {
+    update_config(|map| {
         map.remove(key);
-    }
-    write_json(&config_file(), &config);
+    });
 }
 
-// Keys are trimmed on save AND read (read covers configs written by older
-// versions or by hand) — stray whitespace breaks HTTP header building.
+/// The key for the production API. Every key saved before keys were bound
+/// to a base lives here, and production keys keep living here.
+const API_KEY: &str = "api_key";
+/// Keys for other API bases (`KEENABLE_API_URL` overrides), by base. Kept
+/// apart from `api_key` so logging in under an override never replaces the
+/// production key.
+const API_KEYS: &str = "api_keys";
 
-pub fn get_api_key() -> Option<String> {
-    get_config()["api_key"]
-        .as_str()
+/// The stored API key, as seen from the API base this process talks to.
+#[derive(Debug, PartialEq)]
+pub enum StoredKey {
+    None,
+    Usable(String),
+    /// No key for this base, but the production key exists. It is never
+    /// sent here: `KEENABLE_API_URL` can come from anything that sets
+    /// environment variables, and must not be able to redirect the key.
+    OtherBase {
+        saved_for: String,
+    },
+}
+
+fn non_empty_key(v: &Value) -> Option<String> {
+    v.as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
 }
 
+fn is_production(base: &str) -> bool {
+    same_base(base, crate::constants::DEFAULT_API_BASE_URL)
+}
+
+/// The key saved for `base`, if any.
+fn key_for_base(config: &Value, base: &str) -> Option<String> {
+    if is_production(base) {
+        return non_empty_key(&config[API_KEY]);
+    }
+    config[API_KEYS]
+        .as_object()?
+        .iter()
+        .find(|(saved_for, _)| same_base(saved_for, base))
+        .and_then(|(_, key)| non_empty_key(key))
+}
+
+/// Pure for unit tests. Keys are trimmed on save AND read (read covers
+/// configs written by older versions or by hand): stray whitespace breaks
+/// HTTP header building.
+fn stored_key_for(config: &Value, current_base: &str) -> StoredKey {
+    if let Some(key) = key_for_base(config, current_base) {
+        return StoredKey::Usable(key);
+    }
+    // Under an override with only a production key, say so rather than go
+    // anonymous: the user would otherwise not notice their key isn't used.
+    if !is_production(current_base) && non_empty_key(&config[API_KEY]).is_some() {
+        return StoredKey::OtherBase {
+            saved_for: crate::constants::DEFAULT_API_BASE_URL.to_string(),
+        };
+    }
+    StoredKey::None
+}
+
+/// The stored key if it was saved for `base`. configure-mcp writes the
+/// production MCP URL whatever `KEENABLE_API_URL` says, so it asks for the
+/// production key here rather than the current base's.
+pub fn api_key_for(base: &str) -> Option<String> {
+    match stored_key_for(&get_config(), base) {
+        StoredKey::Usable(key) => Some(key),
+        _ => None,
+    }
+}
+
+/// Two API bases name the same API: equal scheme, host and port (so
+/// `HTTPS://API.keenable.ai:443` is production) and the same path prefix.
+fn same_base(a: &str, b: &str) -> bool {
+    let parse = |s: &str| reqwest::Url::parse(s.trim().trim_end_matches('/')).ok();
+    match (parse(a), parse(b)) {
+        (Some(a), Some(b)) => {
+            a.scheme() == b.scheme()
+                && a.host_str() == b.host_str()
+                && a.port_or_known_default() == b.port_or_known_default()
+                && a.path().trim_end_matches('/') == b.path().trim_end_matches('/')
+        }
+        _ => a == b,
+    }
+}
+
+pub fn stored_key() -> StoredKey {
+    // An invalid KEENABLE_API_URL matches no saved base: nothing is usable.
+    let base = crate::api::resolved_api_base().unwrap_or("");
+    stored_key_for(&get_config(), base)
+}
+
+/// The stored key, only when it was saved for the current API base.
+pub fn get_api_key() -> Option<String> {
+    match stored_key() {
+        StoredKey::Usable(key) => Some(key),
+        _ => None,
+    }
+}
+
+/// Save `key` together with the API base it belongs to.
+/// Save `key` for the current API base: production's slot, or this
+/// override's entry in `api_keys`. Keys for other bases are left alone.
 pub fn set_api_key(key: &str) {
-    set_config_value("api_key", Value::String(key.trim().to_string()));
+    let base = crate::api::api_base();
+    let key = Value::String(key.trim().to_string());
+    update_config(|map| {
+        if is_production(base) {
+            map.insert(API_KEY.into(), key);
+            return;
+        }
+        let keys = map
+            .entry(API_KEYS)
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !keys.is_object() {
+            *keys = Value::Object(Default::default());
+        }
+        if let Value::Object(keys) = keys {
+            keys.retain(|saved_for, _| !same_base(saved_for, base));
+            keys.insert(base.to_string(), key);
+        }
+    });
+}
+
+/// Remove the key for the current API base. Returns the other bases that
+/// still have a saved key, so logout can say they were kept.
+pub fn remove_api_key() -> Vec<String> {
+    let base = crate::api::resolved_api_base().unwrap_or("");
+    let mut kept = Vec::new();
+    update_config(|map| {
+        if is_production(base) {
+            map.remove(API_KEY);
+        } else if let Some(Value::Object(keys)) = map.get_mut(API_KEYS) {
+            keys.retain(|saved_for, _| !same_base(saved_for, base));
+        }
+        if let Some(Value::Object(keys)) = map.get(API_KEYS) {
+            if keys.is_empty() {
+                map.remove(API_KEYS);
+            } else {
+                kept.extend(keys.keys().cloned());
+            }
+        }
+        if !is_production(base) && map.get(API_KEY).and_then(non_empty_key).is_some() {
+            kept.insert(0, crate::constants::DEFAULT_API_BASE_URL.to_string());
+        }
+    });
+    kept
 }
 
 pub fn clear_credentials() {
@@ -154,8 +416,10 @@ pub fn set_skip_setup_confirmation(value: bool) {
     set_config_value("skip_setup_confirmation", Value::Bool(value));
 }
 
-pub fn update_check_file() -> PathBuf {
-    config_dir().join(".update_check")
+/// None without a home directory: the update check is optional and must
+/// never end a command that doesn't need one.
+pub fn update_check_file() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".keenable").join(".update_check"))
 }
 
 // Tools that configure-mcp itself added to Claude Code's deny list. Reset
@@ -182,4 +446,158 @@ pub fn add_managed_deny_tools(tools: &[String]) {
 
 pub fn clear_managed_deny_tools() {
     remove_config_value("managed_deny_tools");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::DEFAULT_API_BASE_URL;
+    use serde_json::json;
+
+    #[test]
+    fn key_without_a_saved_base_belongs_to_production() {
+        let config = json!({"api_key": " keen_x \n"});
+        assert_eq!(
+            stored_key_for(&config, DEFAULT_API_BASE_URL),
+            StoredKey::Usable("keen_x".into())
+        );
+        assert_eq!(
+            stored_key_for(&config, "https://evil.example"),
+            StoredKey::OtherBase {
+                saved_for: DEFAULT_API_BASE_URL.into()
+            }
+        );
+    }
+
+    #[test]
+    fn keys_for_an_override_and_production_live_side_by_side() {
+        let config = json!({
+            "api_key": "keen_prod",
+            "api_keys": {"http://localhost:8080/": "keen_local"}
+        });
+        assert_eq!(
+            stored_key_for(&config, "http://localhost:8080"),
+            StoredKey::Usable("keen_local".into())
+        );
+        assert_eq!(
+            stored_key_for(&config, DEFAULT_API_BASE_URL),
+            StoredKey::Usable("keen_prod".into())
+        );
+        assert_eq!(
+            stored_key_for(&config, "https://gw.example"),
+            StoredKey::OtherBase {
+                saved_for: DEFAULT_API_BASE_URL.into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_key_only_for_an_override_leaves_production_anonymous() {
+        let config = json!({"api_keys": {"http://localhost:8080": "keen_local"}});
+        assert_eq!(
+            stored_key_for(&config, DEFAULT_API_BASE_URL),
+            StoredKey::None
+        );
+        assert_eq!(
+            stored_key_for(&config, "https://gw.example"),
+            StoredKey::None
+        );
+    }
+
+    #[test]
+    fn the_same_base_spelled_differently_still_matches() {
+        let config = json!({"api_key": "keen_x"});
+        for base in [
+            "HTTPS://API.keenable.ai",
+            "https://api.keenable.ai:443",
+            "https://api.keenable.ai/",
+        ] {
+            assert_eq!(
+                stored_key_for(&config, base),
+                StoredKey::Usable("keen_x".into()),
+                "{base}"
+            );
+        }
+        for base in [
+            "https://api.keenable.ai:8443",
+            "http://api.keenable.ai",
+            "https://api.keenable.ai/gw",
+        ] {
+            assert!(
+                matches!(stored_key_for(&config, base), StoredKey::OtherBase { .. }),
+                "{base}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_key_is_none_whatever_the_base() {
+        for config in [json!({}), json!({"api_key": "  "}), json!({"api_key": 7})] {
+            assert_eq!(
+                stored_key_for(&config, DEFAULT_API_BASE_URL),
+                StoredKey::None
+            );
+        }
+    }
+
+    #[test]
+    fn unparseable_config_is_refused_for_writes() {
+        assert_eq!(parse_config_for_write(None), Ok(json!({})));
+        assert_eq!(parse_config_for_write(Some("  \n")), Ok(json!({})));
+        assert_eq!(
+            parse_config_for_write(Some(r#"{"api_key":"k"}"#)),
+            Ok(json!({"api_key": "k"}))
+        );
+        assert!(parse_config_for_write(Some(r#"{"api_key":"k""#)).is_err());
+        assert!(parse_config_for_write(Some("[]")).is_err());
+    }
+
+    #[cfg(unix)]
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kn-config-{name}-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writing_a_symlinked_file_updates_the_target_and_keeps_the_link() {
+        let dir = scratch("symlink");
+        let real = dir.join("real.json");
+        let link = dir.join("link.json");
+        fs::write(&real, "old").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        atomic_write(&link, "new", false).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_temp_symlink_is_not_written_through() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("tmp-link");
+        let victim = dir.join("victim");
+        fs::write(&victim, "untouched").unwrap();
+        let path = dir.join("config.json");
+        let tmp = dir.join(format!("config.json.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &tmp).unwrap();
+
+        atomic_write(&path, "secret", true).unwrap();
+
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret");
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        fs::remove_dir_all(&dir).ok();
+    }
 }

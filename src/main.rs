@@ -1,3 +1,24 @@
+/// `eprintln!` that never panics: when stderr's reader is gone (`2>&1 | head`)
+/// the rest of the human output is dropped instead of crashing with exit 101.
+macro_rules! eprintln {
+    () => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr());
+    }};
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+/// `eprint!` that never panics (see `eprintln!`).
+macro_rules! eprint {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 mod api;
 mod commands;
 mod config;
@@ -51,10 +72,10 @@ enum ConfigAction {
 enum Commands {
     /// Authenticate with Keenable and provision an API key
     #[command(
-        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login --api-key $KEENABLE_API_KEY\n  keenable login -v                          Show proxy, trusted CAs and full errors\n\nBehind a corporate proxy: set HTTPS_PROXY, and SSL_CERT_FILE to your company's CA bundle\nif it inspects TLS."
+        after_help = "Agent-friendly device flow: shows a code for the user to approve.\nWorks on local machines, remote servers, and agent environments.\n\nWith --api-key, saves the key directly (useful for CI and servers).\n\nAfter login, run: keenable configure-mcp --all\n\nExamples:\n  keenable login                             Device flow (agent-friendly)\n  printenv KEENABLE_API_KEY | keenable login --api-key -\n                                             Save a key from stdin (stays out of\n                                             the process list and shell history)\n  keenable login --api-key keen_***_*****    Save API key directly\n  keenable login -v                          Show proxy, trusted CAs and full errors\n\nBehind a corporate proxy: set HTTPS_PROXY, and SSL_CERT_FILE to your company's CA bundle\nif it inspects TLS."
     )]
     Login {
-        /// API key to save directly (skips browser login)
+        /// API key to save directly (skips browser login); `-` reads it from stdin
         #[arg(long = "api-key")]
         api_key: Option<String>,
     },
@@ -439,7 +460,7 @@ async fn run() {
         eprintln!();
         ui::warning(&format!(
             "A newer version of keenable ({}) is available",
-            version
+            ui::one_line(&version)
         ));
         ui::hint(&format!("Run: {}", update::update_hint()));
     }

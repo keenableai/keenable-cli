@@ -164,11 +164,47 @@ pub fn error(msg: &str) {
 /// the result never spans lines or restyles the terminal.
 pub fn one_line(msg: &str) -> String {
     msg.chars()
+        .filter(|c| !is_bidi_control(*c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Text from the API or a web page, safe to print in pretty mode: control
+/// characters (escape sequences that restyle the terminal, rewrite its title
+/// or write the clipboard) and bidirectional overrides (which reorder what
+/// is shown) are dropped. Line breaks and tabs stay.
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .filter(|&c| matches!(c, '\n' | '\t') || !(c.is_control() || is_bidi_control(c)))
+        .collect()
+}
+
+/// Bidirectional embedding, override and isolate controls: they are not
+/// control characters to Unicode, but they reorder what the terminal shows.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}')
+}
+
+/// Write machine output to stdout. A reader that went away (`| head`, a
+/// closed pipe) is not an error: the rest is dropped and the command ends
+/// with its own exit code, instead of Rust's broken-pipe panic (exit 101).
+/// Any other write failure (a full disk, an I/O error) exits 1, so a script
+/// never takes truncated output for success.
+pub fn stdout(text: &str) {
+    if let Err(e) = write_or_drop(&mut std::io::stdout().lock(), text) {
+        error_line(&format!("could not write output: {e}"));
+        std::process::exit(1);
+    }
+}
+
+fn write_or_drop(out: &mut impl std::io::Write, text: &str) -> std::io::Result<()> {
+    match out.write_all(text.as_bytes()).and_then(|_| out.flush()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 /// Print `error: <msg>` to stderr as exactly one unstyled line, never
@@ -245,6 +281,50 @@ mod one_line_tests {
         let line = one_line(&msg);
         assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
         assert!(line.starts_with("first line second line xxx"));
+    }
+
+    #[test]
+    fn writing_to_a_closed_reader_does_not_panic() {
+        struct Closed;
+        impl std::io::Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        assert!(super::write_or_drop(&mut Closed, "results: []\n").is_ok());
+        let mut buf = Vec::new();
+        super::write_or_drop(&mut buf, "ok\n").unwrap();
+        assert_eq!(buf, b"ok\n");
+    }
+
+    #[test]
+    fn other_write_errors_are_reported() {
+        struct Full;
+        impl std::io::Write for Full {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("No space left on device"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(super::write_or_drop(&mut Full, "results: []\n").is_err());
+    }
+
+    #[test]
+    fn printable_drops_escapes_and_bidi_overrides_but_keeps_layout() {
+        let page = "Title\u{1b}]0;pwned\u{7}\n\tline \u{9b}2J\u{202e}txt.exe\u{2066}";
+        assert_eq!(super::printable(page), "Title]0;pwned\n\tline 2Jtxt.exe");
+        assert_eq!(super::printable("plain ünïcode 👀"), "plain ünïcode 👀");
+    }
+
+    #[test]
+    fn one_line_drops_bidi_controls() {
+        let url = "https://example.com/\u{202e}gnp.exe\u{2066}x\u{200f}";
+        assert_eq!(one_line(url), "https://example.com/gnp.exex");
     }
 
     #[test]
