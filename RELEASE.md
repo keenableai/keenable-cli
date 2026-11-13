@@ -2,7 +2,17 @@
 
 ## Cutting a release (automated)
 
-Actions -> **Cut release** -> Run workflow, with `patch`, `minor`, `major` or an exact version. It opens a `Release vX.Y.Z` PR (only `Cargo.toml` + `Cargo.lock`). Merge it: the push to `main` tags `vX.Y.Z` and dispatches the release workflow below on that tag. No tokens: it uses the default `GITHUB_TOKEN`, so `release.yml` has a hand-added `workflow_dispatch` trigger (`allow-dirty = ["ci"]` in `dist-workspace.toml`); re-add it if you ever run `dist generate`. Needs "Allow GitHub Actions to create and approve pull requests" in repo settings.
+One command, from any machine with `gh` logged in:
+
+```bash
+tools/release.sh patch      # or minor, major, or an exact version like 0.6.0
+```
+
+It runs the **Cut release** workflow (bumps `Cargo.toml` + `Cargo.lock` on a `release/vX.Y.Z` branch and runs CI), opens the PR as you, waits for checks and the Qodo approval, squash-merges it, and waits for the release. The push to `main` tags `vX.Y.Z` and dispatches the release workflow below on that tag. Pass `--yes` to skip the confirmation, `--dry-run` to see the version only.
+
+Without the script: Actions -> **Cut release** -> Run workflow, then open the PR from the `release/vX.Y.Z` branch yourself and merge it. The workflow doesn't open the PR itself: a PR authored by `github-actions[bot]` can't be approved by the approval bridge, which also runs as that bot.
+
+No tokens: the workflow uses the default `GITHUB_TOKEN`, so `release.yml` has a hand-added `workflow_dispatch` trigger (`allow-dirty = ["ci"]` in `dist-workspace.toml`); re-add it if you ever run `dist generate`.
 
 ## Cutting a release (manual)
 

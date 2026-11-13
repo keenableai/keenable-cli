@@ -3,22 +3,27 @@ name: Cut release
 # Automates the manual steps in RELEASE.md, with the default GITHUB_TOKEN only
 # (no PAT).
 #   1. Run this workflow (Actions -> Cut release -> Run workflow, on main) with a
-#      bump. It opens a "Release vX.Y.Z" PR that only touches Cargo.toml +
-#      Cargo.lock and dispatches CI on the PR branch.
-#   2. Merge the PR. The push to main tags vX.Y.Z and dispatches release.yml on
-#      that tag (dist: binaries, installers, GitHub Release, Homebrew formula).
+#      bump. It pushes a release/vX.Y.Z branch that only touches Cargo.toml +
+#      Cargo.lock, and dispatches CI on it.
+#   2. A person opens the PR from that branch (tools/release.sh does steps
+#      1-3 in one command) and merges it. The push to main tags vX.Y.Z and
+#      dispatches release.yml on that tag (dist: binaries, installers, GitHub
+#      Release, Homebrew formula).
 #
-# Why dispatch: events made with GITHUB_TOKEN (PRs, tag pushes) trigger no other
-# workflow, except workflow_dispatch. So CI on the PR and release.yml on the tag
-# are started explicitly with `gh workflow run`. release.yml carries a
-# hand-added workflow_dispatch trigger for this.
+# Why the workflow doesn't open the PR: main requires an approval, which the
+# Qodo bridge (auto-approve.yml) gives as github-actions[bot]. A PR authored by
+# that same bot could not be approved by it (an author can't approve their own
+# PR), and creating PRs from Actions needs an admin setting. A PR opened by a
+# person is approved by the bridge like any other.
 #
-# Both jobs are safe to re-run after a partial failure: the PR job resumes an
-# existing release branch, and the tag job only dispatches release.yml when no
-# release or release run exists for the tag yet.
+# Why dispatch: events made with GITHUB_TOKEN (branch and tag pushes) trigger no
+# other workflow, except workflow_dispatch. So CI on the branch and release.yml
+# on the tag are started explicitly with `gh workflow run`. release.yml carries
+# a hand-added workflow_dispatch trigger for this.
 #
-# Repo setting needed: Settings -> Actions -> General -> Workflow permissions ->
-# "Allow GitHub Actions to create and approve pull requests".
+# Both jobs are safe to re-run after a partial failure: the branch job resumes
+# an existing release branch, and the tag job only dispatches release.yml when
+# no release or release run exists for the tag yet.
 
 on:
   workflow_dispatch:
@@ -35,14 +40,13 @@ permissions:
   contents: read
 
 jobs:
-  open-pr:
-    name: Open release PR
+  release-branch:
+    name: Push release branch
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
-      pull-requests: write
       actions: write
     steps:
       # The release branch is cut from this checkout, so any other ref would
@@ -97,10 +101,9 @@ jobs:
           cargo update --workspace
           git diff --stat
 
-      - name: Open PR and run CI on it
+      - name: Push the release branch and run CI on it
         env:
           GH_TOKEN: ${{ github.token }}
-          CUR: ${{ steps.ver.outputs.current }}
           NEXT: ${{ steps.ver.outputs.next }}
         run: |
           set -euo pipefail
@@ -114,19 +117,19 @@ jobs:
           else
             git checkout -b "$branch"
             git add Cargo.toml Cargo.lock
-            git commit -m "Release v$NEXT"
+            git commit -m "chore: release $NEXT"
             git push origin "$branch"
           fi
-          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
-            gh pr create \
-              --base main \
-              --head "$branch" \
-              --title "Release v$NEXT" \
-              --body "Bumps keenable-cli $CUR -> $NEXT. Merging tags \`v$NEXT\` and starts the dist release workflow (binaries, installers, GitHub Release, Homebrew formula)."
-          fi
-          # A PR opened with GITHUB_TOKEN triggers no CI; run it on the branch so
-          # its checks show up on the PR head commit.
+          # A branch pushed with GITHUB_TOKEN triggers no CI; run it on the
+          # branch so its checks show up on the PR head commit.
           gh workflow run ci.yml --ref "$branch"
+          {
+            echo "### Release branch \`$branch\` is ready"
+            echo
+            echo "Open the PR: https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+            echo
+            echo "Or run \`tools/release.sh\` to open, wait and merge it for you."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   tag:
     name: Tag release
