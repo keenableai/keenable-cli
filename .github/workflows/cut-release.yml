@@ -1,5 +1,8 @@
 name: Cut release
 
+# Includes the version so tools/release.sh can find the run it dispatched.
+run-name: Cut release ${{ inputs.bump }}
+
 # Automates the manual steps in RELEASE.md, with the default GITHUB_TOKEN only
 # (no PAT).
 #   1. Run this workflow (Actions -> Cut release -> Run workflow, on main) with a
@@ -29,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "patch, minor, major, or an exact version like 0.5.0 (prerelease suffixes like 0.5.0-beta.1 are fine)"
+        description: "patch, minor, major, or an exact version like 0.5.0 (prereleases like 0.5.0-beta.1 are fine). Only pushes a release branch: prefer tools/release.sh, which also opens and merges the PR"
         required: true
         default: patch
   push:
@@ -111,9 +114,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # A re-run after a failure further down finds the branch already
-          # pushed; resume from it instead of pushing a second, divergent commit.
+          # pushed; resume from it instead of pushing a second, divergent
+          # commit. Only our own untouched branch is resumed: one bot commit
+          # on top of this main that changes just the release files. Anything
+          # else (main moved on, someone pushed to it) is not ours to reuse.
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then
-            echo "$branch already exists, resuming"
+            git fetch --quiet --depth=2 origin "$branch"
+            extra=$(git diff --name-only HEAD FETCH_HEAD | grep -v -x -E 'Cargo\.toml|Cargo\.lock' || true)
+            if [ "$(git rev-parse FETCH_HEAD^)" != "$(git rev-parse HEAD)" ] ||
+              [ "$(git log -1 --format=%ae FETCH_HEAD)" != "41898282+github-actions[bot]@users.noreply.github.com" ] ||
+              [ -n "$extra" ]; then
+              echo "::error::$branch exists but is not one bot release commit on the current main (stale or edited). Delete it (git push origin --delete $branch) and re-run."
+              exit 1
+            fi
+            echo "$branch already exists and is ours, resuming"
           else
             git checkout -b "$branch"
             git add Cargo.toml Cargo.lock
@@ -123,12 +137,19 @@ jobs:
           # A branch pushed with GITHUB_TOKEN triggers no CI; run it on the
           # branch so its checks show up on the PR head commit.
           gh workflow run ci.yml --ref "$branch"
+          # A green run is not a release: nothing ships until the PR is merged.
+          # Say so where the run page shows it (annotation + summary).
+          pr_url="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+          echo "::warning title=NOT RELEASED YET::Branch $branch is pushed and CI is running, but v$NEXT ships only after its PR is merged. Open it: $pr_url (or run tools/release.sh, which does all of this)."
           {
-            echo "### Release branch \`$branch\` is ready"
+            echo "### :warning: v$NEXT is NOT released yet"
             echo
-            echo "Open the PR: https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+            echo "Branch \`$branch\` is pushed and CI is running. The release happens when its PR is merged."
             echo
-            echo "Or run \`tools/release.sh\` to open, wait and merge it for you."
+            echo "1. Open the PR: $pr_url"
+            echo "2. Merge it once checks and the Qodo approval are in. The push to main tags v$NEXT and starts the release."
+            echo
+            echo "\`tools/release.sh\` does all of this in one command."
           } >> "$GITHUB_STEP_SUMMARY"
 
   tag:
@@ -136,9 +157,11 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Two quick merges must not race on the same tag or dispatch.
+    # One run per pushed commit. A shared group would drop a middle pending run
+    # when three merges land at once, and nothing needs serializing: each push
+    # only releases the version it changed, so two runs never share a tag.
     concurrency:
-      group: cut-release-tag
+      group: cut-release-tag-${{ github.sha }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -178,16 +201,29 @@ jobs:
           fi
 
           # A tag pushed with GITHUB_TOKEN starts nothing, so start the release,
-          # unless it is done or already running (this also makes a re-run after
-          # a failed dispatch work, and avoids a double run after a manual tag).
-          if gh release view "v$ver" >/dev/null 2>&1; then
-            echo "release v$ver already exists"
-            exit 0
-          fi
+          # unless a run is going or succeeded (this also avoids a double run
+          # after a manual tag). The run state, not the GitHub Release, says
+          # whether publishing is done: dist creates the Release early and can
+          # still fail after it (Homebrew).
           started=$(gh run list --workflow release.yml --branch "v$ver" --json status,conclusion \
             --jq '[.[] | select(.status != "completed" or .conclusion == "success")] | length')
           if [ "$started" != "0" ]; then
             echo "release.yml already running or succeeded for v$ver"
             exit 0
           fi
-          gh workflow run release.yml --ref "v$ver"
+          # The newest run for this tag did not succeed. A failed run keeps the
+          # work already done: re-run just its failed jobs. A fresh dispatch
+          # would stop at the host job, which calls `gh release create`
+          # unconditionally, before reaching a failed Homebrew job when the
+          # GitHub Release already exists. `--failed` does not pick up
+          # cancelled jobs, so a cancelled or timed-out run is re-run whole.
+          last=$(gh run list --workflow release.yml --branch "v$ver" --limit 1 --json databaseId,conclusion --jq '.[0] | "\(.databaseId) \(.conclusion)"' 2>/dev/null || true)
+          if [ -z "$last" ] || [ "$last" = "null null" ]; then
+            gh workflow run release.yml --ref "v$ver"
+          else
+            run_id=${last% *}
+            case "${last#* }" in
+              failure) gh run rerun "$run_id" --failed ;;
+              *) gh run rerun "$run_id" ;;
+            esac
+          fi
