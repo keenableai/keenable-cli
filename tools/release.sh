@@ -27,6 +27,7 @@ done
 log() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 command -v gh >/dev/null || die "gh is required (brew install gh)"
+command -v jq >/dev/null || die "jq is required (brew install jq)"
 gh auth status >/dev/null 2>&1 || die "run: gh auth login"
 
 version_of() { sed -n 's/^version = "\(.*\)"$/\1/p' | head -1; }
@@ -86,6 +87,7 @@ for _ in $(seq 1 30); do
 done
 [ -n "$ci" ] || die "CI was not dispatched on $branch; check the Actions tab"
 gh run watch "$ci" --repo "$repo" --exit-status >/dev/null || die "CI failed on $branch: https://github.com/$repo/actions/runs/$ci"
+ci_sha=$(gh run view "$ci" --repo "$repo" --json headSha --jq .headSha)
 
 me=$(gh api user --jq .login)
 allowed='^(Cargo\.toml|Cargo\.lock)$'
@@ -104,20 +106,28 @@ Changes since v$cur:
 $changes" | sed 's#.*/##')
 fi
 
-log "PR #$pr: waiting for approval"
+log "PR #$pr: waiting for checks and approval"
 state=""
+pending=1
 for _ in $(seq 1 90); do
+  # Opening the PR starts its own CI run, which the ruleset doesn't require:
+  # a failure there must stop us, and a run still going must be waited for.
+  failed=$(gh pr checks "$pr" --repo "$repo" --json bucket --jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || echo 0)
+  [ "$failed" = 0 ] || die "a check failed: https://github.com/$repo/pull/$pr/checks"
+  pending=$(gh pr checks "$pr" --repo "$repo" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 0)
   state=$(gh pr view "$pr" --repo "$repo" --json mergeStateStatus --jq .mergeStateStatus)
   case "$state" in
-    CLEAN) break ;;
+    CLEAN) [ "$pending" = 0 ] && break ;;
     DIRTY | BEHIND) die "PR #$pr is $state; resolve it, then re-run" ;;
   esac
   sleep 20
 done
-[ "$state" = CLEAN ] || die "PR #$pr is not mergeable yet ($state): https://github.com/$repo/pull/$pr"
+{ [ "$state" = CLEAN ] && [ "$pending" = 0 ]; } || die "PR #$pr is not mergeable yet ($state, $pending checks pending): https://github.com/$repo/pull/$pr"
 
-# Merge exactly what was checked: only the release files, at the head we saw.
+# Merge exactly what was checked: only the release files, at the head we saw,
+# and that head must be the commit the CI run we watched tested.
 head=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid)
+[ "$ci_sha" = "$head" ] || die "CI ran on ${ci_sha:0:7} but PR #$pr head is ${head:0:7}; the branch changed after CI started, re-run"
 extra=$(gh api "repos/$repo/pulls/$pr/files" --paginate --jq '.[].filename' | grep -v -E "$allowed" || true)
 [ -z "$extra" ] || die "PR #$pr changes more than the release files ($extra); review it, then merge by hand"
 
@@ -126,6 +136,7 @@ gh pr merge "$pr" --repo "$repo" --squash --delete-branch --match-head-commit "$
 
 log "waiting for the dist release of v$next"
 seen=0
+merged=$SECONDS # the 15 min "no run appeared" timeout counts from the merge, not script start
 for _ in $(seq 1 360); do
   runs=$(gh run list --repo "$repo" --workflow release.yml --branch "v$next" --json status,conclusion 2>/dev/null || echo '[]')
   if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")" != 0 ]; then
@@ -139,7 +150,7 @@ for _ in $(seq 1 360); do
     if [ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")" = 0 ]; then
       die "release.yml did not succeed for v$next ($(jq -r '[.[].conclusion] | join(", ")' <<<"$runs")): https://github.com/$repo/actions/workflows/release.yml"
     fi
-  elif [ "$seen" = 0 ] && [ "${SECONDS}" -gt 900 ]; then
+  elif [ "$seen" = 0 ] && [ $((SECONDS - merged)) -gt 900 ]; then
     die "no release.yml run for v$next after 15 min; the tag job may have failed: https://github.com/$repo/actions/workflows/cut-release.yml"
   fi
   sleep 10

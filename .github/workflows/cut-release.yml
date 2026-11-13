@@ -201,14 +201,23 @@ jobs:
           fi
 
           # A tag pushed with GITHUB_TOKEN starts nothing, so start the release,
-          # unless a run is going or succeeded. The run state, not the GitHub
-          # Release, says whether publishing is done: dist creates the Release
-          # early and can still fail after it (Homebrew), and a re-run must
-          # resume that. This also avoids a double run after a manual tag.
+          # unless a run is going or succeeded (this also avoids a double run
+          # after a manual tag). The run state, not the GitHub Release, says
+          # whether publishing is done: dist creates the Release early and can
+          # still fail after it (Homebrew).
           started=$(gh run list --workflow release.yml --branch "v$ver" --json status,conclusion \
             --jq '[.[] | select(.status != "completed" or .conclusion == "success")] | length')
           if [ "$started" != "0" ]; then
             echo "release.yml already running or succeeded for v$ver"
             exit 0
           fi
-          gh workflow run release.yml --ref "v$ver"
+          # A run for this tag failed or was cancelled: re-run its failed jobs.
+          # A fresh dispatch would stop at the host job, which calls
+          # `gh release create` unconditionally, before reaching a failed
+          # Homebrew job when the GitHub Release already exists.
+          last=$(gh run list --workflow release.yml --branch "v$ver" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$last" ]; then
+            gh run rerun "$last" --failed
+          else
+            gh workflow run release.yml --ref "v$ver"
+          fi
