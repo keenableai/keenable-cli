@@ -63,9 +63,18 @@ class Result:
         self.err = proc.stderr
 
     def yaml(self) -> dict:
-        data = yaml.safe_load(self.out)
-        assert isinstance(data, dict), f"stdout is not a YAML map:\n{self.out[:500]}"
+        # Failures: structured error on stderr, stdout empty. Binaries from
+        # before that wrote it to stdout, so read stdout first.
+        text = self.out if self.out.strip() or self.code == 0 else self.err
+        data = yaml.safe_load(text)
+        assert isinstance(data, dict), f"output is not a YAML map:\n{text[:500]}"
         return data
+
+
+def errors_on_stderr() -> bool:
+    """True when the binary keeps stdout empty on failure (help says so)."""
+    proc = subprocess.run([BIN, "search", "--help"], capture_output=True, text=True, timeout=30)
+    return "nothing is written to stdout" in proc.stdout + proc.stderr
 
 
 class Runner:

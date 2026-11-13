@@ -518,10 +518,10 @@ fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
         if let Some(hint) = hint {
             val["hint"] = Value::String(hint);
         }
-        print_yaml(&val);
-        // One line on stderr too, so a script that reads only stderr (or
-        // only checks it) sees the failure; the exit code says which kind.
-        ui::error_line(&err.display());
+        // Errors go to stderr (stdout stays empty); the YAML opens with an
+        // `error:` line and the exit code says which kind.
+        let yaml = serde_yaml::to_string(&val).unwrap_or_default();
+        eprint!("{}", yaml);
     }
     std::process::exit(err.exit_code());
 }
@@ -670,6 +670,9 @@ pub async fn search(
     }
 }
 
+/// Default content cap for `fetch`, matching the MCP server.
+pub const DEFAULT_FETCH_MAX_CHARS: u64 = 20_000;
+
 pub async fn fetch(
     url: &str,
     live: bool,
@@ -684,7 +687,7 @@ pub async fn fetch(
         urls: Some(vec![url.to_string()]),
         live,
         prompt,
-        max_chars,
+        max_chars: Some(max_chars.unwrap_or(DEFAULT_FETCH_MAX_CHARS)),
         session_id,
         ..Default::default()
     };

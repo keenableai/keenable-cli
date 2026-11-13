@@ -222,13 +222,13 @@ async fn rejects_proxy_ca_that_is_not_trusted() {
 
     let out = search_via_proxy(&proxy, &dir, Some(&other_ca), &[]).await;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // 7: a transport failure (here TLS trust), distinct from API errors.
-    assert_eq!(out.status.code(), Some(7), "stdout: {stdout}");
-    assert!(stdout.contains("Request failed"), "stdout: {stdout}");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // 7: a transport failure (here TLS trust), distinct from API errors.
+    assert_eq!(out.status.code(), Some(7), "stderr: {stderr}");
+    assert_eq!(stdout, "", "stdout stays empty on failure");
     assert!(stderr.contains("Request failed"), "stderr: {stderr}");
-    assert!(stdout.contains("SSL_CERT_FILE"), "hint: {stdout}");
-    assert!(!stdout.contains(CANNED_RESULT_URL), "stdout: {stdout}");
+    assert!(stderr.contains("SSL_CERT_FILE"), "hint: {stderr}");
+    assert!(!stderr.contains(CANNED_RESULT_URL), "stderr: {stderr}");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -249,14 +249,10 @@ async fn corrupt_ssl_cert_file_is_a_clear_error() {
     .unwrap();
 
     let out = search_via_proxy(&proxy, &dir, Some(&corrupt), &[]).await;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "stdout: {stdout}\nstderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(stdout.contains("Invalid SSL_CERT_FILE"), "stdout: {stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+    assert!(stderr.contains("Invalid SSL_CERT_FILE"), "stderr: {stderr}");
 
     let out = search_via_proxy(&proxy, &dir, Some(&corrupt), &["-p"]).await;
     assert_eq!(out.status.code(), Some(1));

@@ -96,7 +96,7 @@ keenable fetch https://example.com      # Fetch page content
 keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://example.com --live   # Fetch the live page (skip cache)
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
-keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char content cap
+keenable fetch https://example.com --max-chars 200000   # Raise the 20000-char content cap
 keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
 ```
 
@@ -104,10 +104,11 @@ When content is cut at the character cap, it ends with the API's truncation note
 
 ### Errors and exit codes in scripts
 
-On a failed `search` or `fetch`, YAML mode prints the structured error on
-stdout (`error`, `type`, `code`, `message`, `fix`, `retry_after`, `hint`, ...)
-and a one-line summary on stderr. `-p` prints only to stderr. The exit code
-says what failed, so a script does not need to parse the output:
+On a failed `search` or `fetch`, nothing is written to stdout. YAML mode
+prints the structured error (`error`, `type`, `code`, `message`, `fix`,
+`retry_after`, `hint`, ...) on stderr, starting with an `error:` line. `-p`
+prints human text to stderr. The exit code says what failed, so a script does
+not need to parse the output:
 
 | Code | Meaning |
 |---|---|
