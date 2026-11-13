@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "patch, minor, major, or an exact version like 0.5.0 (prerelease suffixes like 0.5.0-beta.1 are fine)"
+        description: "patch, minor, major, or an exact version like 0.5.0 (prereleases like 0.5.0-beta.1 are fine). Only pushes a release branch: prefer tools/release.sh, which also opens and merges the PR"
         required: true
         default: patch
   push:
@@ -137,12 +137,19 @@ jobs:
           # A branch pushed with GITHUB_TOKEN triggers no CI; run it on the
           # branch so its checks show up on the PR head commit.
           gh workflow run ci.yml --ref "$branch"
+          # A green run is not a release: nothing ships until the PR is merged.
+          # Say so where the run page shows it (annotation + summary).
+          pr_url="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+          echo "::warning title=NOT RELEASED YET::Branch $branch is pushed and CI is running, but v$NEXT ships only after its PR is merged. Open it: $pr_url (or run tools/release.sh, which does all of this)."
           {
-            echo "### Release branch \`$branch\` is ready"
+            echo "### :warning: v$NEXT is NOT released yet"
             echo
-            echo "Open the PR: https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+            echo "Branch \`$branch\` is pushed and CI is running. The release happens when its PR is merged."
             echo
-            echo "Or run \`tools/release.sh\` to open, wait and merge it for you."
+            echo "1. Open the PR: $pr_url"
+            echo "2. Merge it once checks and the Qodo approval are in. The push to main tags v$NEXT and starts the release."
+            echo
+            echo "\`tools/release.sh\` does all of this in one command."
           } >> "$GITHUB_STEP_SUMMARY"
 
   tag:
