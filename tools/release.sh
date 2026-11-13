@@ -109,20 +109,26 @@ fi
 log "PR #$pr: waiting for checks and approval"
 state=""
 pending=1
+total=0
 for _ in $(seq 1 90); do
   # Opening the PR starts its own CI run, which the ruleset doesn't require:
-  # a failure there must stop us, and a run still going must be waited for.
-  failed=$(gh pr checks "$pr" --repo "$repo" --json bucket --jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || echo 0)
+  # a failure there must stop us, a run still going must be waited for, and at
+  # least one check must have appeared (right after opening there are none).
+  # One read, no `|| echo 0`: a failed query stops the script instead of
+  # passing as "no checks pending".
+  snap=$(gh pr view "$pr" --repo "$repo" --json statusCheckRollup,mergeStateStatus)
+  state=$(jq -r .mergeStateStatus <<<"$snap")
+  total=$(jq '.statusCheckRollup | length' <<<"$snap")
+  pending=$(jq '[.statusCheckRollup[] | select((.__typename == "StatusContext" and .state == "PENDING") or (.__typename != "StatusContext" and .status != "COMPLETED"))] | length' <<<"$snap")
+  failed=$(jq '[.statusCheckRollup[] | select((.__typename == "StatusContext" and (.state | IN("FAILURE", "ERROR"))) or (.__typename != "StatusContext" and .status == "COMPLETED" and (.conclusion | IN("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"))))] | length' <<<"$snap")
   [ "$failed" = 0 ] || die "a check failed: https://github.com/$repo/pull/$pr/checks"
-  pending=$(gh pr checks "$pr" --repo "$repo" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 0)
-  state=$(gh pr view "$pr" --repo "$repo" --json mergeStateStatus --jq .mergeStateStatus)
   case "$state" in
-    CLEAN) [ "$pending" = 0 ] && break ;;
+    CLEAN) { [ "$total" != 0 ] && [ "$pending" = 0 ]; } && break ;;
     DIRTY | BEHIND) die "PR #$pr is $state; resolve it, then re-run" ;;
   esac
   sleep 20
 done
-{ [ "$state" = CLEAN ] && [ "$pending" = 0 ]; } || die "PR #$pr is not mergeable yet ($state, $pending checks pending): https://github.com/$repo/pull/$pr"
+{ [ "$state" = CLEAN ] && [ "$total" != 0 ] && [ "$pending" = 0 ]; } || die "PR #$pr is not mergeable yet ($state, $total checks, $pending pending): https://github.com/$repo/pull/$pr"
 
 # Merge exactly what was checked: only the release files, at the head we saw,
 # and that head must be the commit the CI run we watched tested.

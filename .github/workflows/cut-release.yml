@@ -211,13 +211,19 @@ jobs:
             echo "release.yml already running or succeeded for v$ver"
             exit 0
           fi
-          # A run for this tag failed or was cancelled: re-run its failed jobs.
-          # A fresh dispatch would stop at the host job, which calls
-          # `gh release create` unconditionally, before reaching a failed
-          # Homebrew job when the GitHub Release already exists.
-          last=$(gh run list --workflow release.yml --branch "v$ver" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-          if [ -n "$last" ]; then
-            gh run rerun "$last" --failed
-          else
+          # The newest run for this tag did not succeed. A failed run keeps the
+          # work already done: re-run just its failed jobs. A fresh dispatch
+          # would stop at the host job, which calls `gh release create`
+          # unconditionally, before reaching a failed Homebrew job when the
+          # GitHub Release already exists. `--failed` does not pick up
+          # cancelled jobs, so a cancelled or timed-out run is re-run whole.
+          last=$(gh run list --workflow release.yml --branch "v$ver" --limit 1 --json databaseId,conclusion --jq '.[0] | "\(.databaseId) \(.conclusion)"' 2>/dev/null || true)
+          if [ -z "$last" ] || [ "$last" = "null null" ]; then
             gh workflow run release.yml --ref "v$ver"
+          else
+            run_id=${last% *}
+            case "${last#* }" in
+              failure) gh run rerun "$run_id" --failed ;;
+              *) gh run rerun "$run_id" ;;
+            esac
           fi
