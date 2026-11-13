@@ -1,0 +1,136 @@
+name: Cut release
+
+# Automates the manual steps in RELEASE.md, with the default GITHUB_TOKEN only
+# (no PAT).
+#   1. Run this workflow (Actions -> Cut release -> Run workflow) with a bump.
+#      It opens a "Release vX.Y.Z" PR that only touches Cargo.toml + Cargo.lock
+#      and dispatches CI on the PR branch.
+#   2. Merge the PR. The push to main tags vX.Y.Z and dispatches release.yml on
+#      that tag (dist: binaries, installers, GitHub Release, Homebrew formula).
+#
+# Why dispatch: events made with GITHUB_TOKEN (PRs, tag pushes) trigger no other
+# workflow, except workflow_dispatch. So CI on the PR and release.yml on the tag
+# are started explicitly with `gh workflow run`. release.yml carries a
+# hand-added workflow_dispatch trigger for this.
+#
+# Repo setting needed: Settings -> Actions -> General -> Workflow permissions ->
+# "Allow GitHub Actions to create and approve pull requests".
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "patch, minor, major, or an exact version like 0.5.0 (prerelease suffixes like 0.5.0-beta.1 are fine)"
+        required: true
+        default: patch
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+
+permissions:
+  contents: read
+
+jobs:
+  open-pr:
+    name: Open release PR
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute next version
+        id: ver
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          cur=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          base=${cur%%-*}
+          IFS=. read -r maj min pat <<<"$base"
+          case "$BUMP" in
+            patch) next="$maj.$min.$((pat + 1))" ;;
+            minor) next="$maj.$((min + 1)).0" ;;
+            major) next="$((maj + 1)).0.0" ;;
+            *)
+              if ! [[ "$BUMP" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+                echo "::error::bump must be patch, minor, major or a semver like 1.2.3"
+                exit 1
+              fi
+              next="$BUMP"
+              ;;
+          esac
+          if [ "$next" = "$cur" ]; then
+            echo "::error::Cargo.toml is already at $cur"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$next" >/dev/null; then
+            echo "::error::tag v$next already exists"
+            exit 1
+          fi
+          echo "current=$cur" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Bump Cargo.toml and Cargo.lock
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          perl -0pi -e 's/^version = ".*"$/version = "$ENV{NEXT}"/m' Cargo.toml
+          cargo update --workspace
+          git diff --stat
+
+      - name: Open PR and run CI on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUR: ${{ steps.ver.outputs.current }}
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          branch="release/v$NEXT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add Cargo.toml Cargo.lock
+          git commit -m "Release v$NEXT"
+          git push origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "Release v$NEXT" \
+            --body "Bumps keenable-cli $CUR -> $NEXT. Merging tags \`v$NEXT\` and starts the dist release workflow (binaries, installers, GitHub Release, Homebrew formula)."
+          # A PR opened with GITHUB_TOKEN triggers no CI; run it on the branch so
+          # its checks show up on the PR head commit.
+          gh workflow run ci.yml --ref "$branch"
+
+  tag:
+    name: Tag release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag if the version changed and is untagged, then release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if git ls-remote --exit-code --tags origin "refs/tags/v$ver" >/dev/null; then
+            echo "v$ver already tagged, nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v$ver"
+          git push origin "v$ver"
+          # A tag pushed with GITHUB_TOKEN starts nothing, so start the release.
+          gh workflow run release.yml --ref "v$ver"

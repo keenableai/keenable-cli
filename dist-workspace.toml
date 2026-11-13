@@ -21,6 +21,8 @@ install-updater = false
 tap = "keenableai/homebrew-tap"
 # Publish Homebrew formula on release
 publish-jobs = ["homebrew"]
+# release.yml carries a hand-added workflow_dispatch trigger (see its `on:`)
+allow-dirty = ["ci"]
 
 [dist.github-custom-runners]
 # dist 0.31 builds Apple Silicon on macos-14 by default, which GitHub has

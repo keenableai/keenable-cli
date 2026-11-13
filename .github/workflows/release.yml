@@ -40,6 +40,10 @@ permissions:
 # will be marked as a prerelease.
 on:
   pull_request:
+  # Hand-added (dist-workspace.toml allow-dirty = ["ci"]): cut-release.yml
+  # tags with the default GITHUB_TOKEN, whose tag pushes trigger no workflow,
+  # so it dispatches this one on the tag instead. Re-add after `dist generate`.
+  workflow_dispatch:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'

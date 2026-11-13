@@ -1,6 +1,10 @@
 # Release Process
 
-## Cutting a release
+## Cutting a release (automated)
+
+Actions -> **Cut release** -> Run workflow, with `patch`, `minor`, `major` or an exact version. It opens a `Release vX.Y.Z` PR (only `Cargo.toml` + `Cargo.lock`). Merge it: the push to `main` tags `vX.Y.Z` and dispatches the release workflow below on that tag. No tokens: it uses the default `GITHUB_TOKEN`, so `release.yml` has a hand-added `workflow_dispatch` trigger (`allow-dirty = ["ci"]` in `dist-workspace.toml`); re-add it if you ever run `dist generate`. Needs "Allow GitHub Actions to create and approve pull requests" in repo settings.
+
+## Cutting a release (manual)
 
 1. **Bump the version** in `Cargo.toml`:
 
