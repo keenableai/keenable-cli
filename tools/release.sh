@@ -118,9 +118,18 @@ for _ in $(seq 1 90); do
   # passing as "no checks pending".
   snap=$(gh pr view "$pr" --repo "$repo" --json statusCheckRollup,mergeStateStatus)
   state=$(jq -r .mergeStateStatus <<<"$snap")
-  total=$(jq '.statusCheckRollup | length' <<<"$snap")
-  pending=$(jq '[.statusCheckRollup[] | select((.__typename == "StatusContext" and .state == "PENDING") or (.__typename != "StatusContext" and .status != "COMPLETED"))] | length' <<<"$snap")
-  failed=$(jq '[.statusCheckRollup[] | select((.__typename == "StatusContext" and (.state | IN("FAILURE", "ERROR"))) or (.__typename != "StatusContext" and .status == "COMPLETED" and (.conclusion | IN("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"))))] | length' <<<"$snap")
+  # The rollup lists every run on the head commit, including ones a newer run
+  # replaced (a retried release re-dispatches CI on the same commit): keep only
+  # the newest run per check, so an old failure doesn't outvote the new pass. A
+  # run that hasn't started (zero startedAt) ranks newest, so it counts as pending.
+  checks=$(jq -c '
+    def rank: if (.startedAt == null or (.startedAt | startswith("0001"))) then "9999" else .startedAt end;
+    .statusCheckRollup
+    | group_by(if .__typename == "StatusContext" then "ctx:" + (.context // "") else "run:" + (.workflowName // "") + "/" + (.name // "") end)
+    | map(max_by(rank))' <<<"$snap")
+  total=$(jq 'length' <<<"$checks")
+  pending=$(jq '[.[] | select((.__typename == "StatusContext" and .state == "PENDING") or (.__typename != "StatusContext" and .status != "COMPLETED"))] | length' <<<"$checks")
+  failed=$(jq '[.[] | select((.__typename == "StatusContext" and (.state | IN("FAILURE", "ERROR"))) or (.__typename != "StatusContext" and .status == "COMPLETED" and (.conclusion | IN("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"))))] | length' <<<"$checks")
   [ "$failed" = 0 ] || die "a check failed: https://github.com/$repo/pull/$pr/checks"
   case "$state" in
     CLEAN) { [ "$total" != 0 ] && [ "$pending" = 0 ]; } && break ;;
