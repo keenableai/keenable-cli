@@ -142,11 +142,14 @@ impl ApiError {
     }
 
     /// Human-readable summary: "error: message" or just "error".
+    /// `error: message`, safe to print: both can come from a server, so
+    /// control characters and bidi overrides are dropped.
     pub fn display(&self) -> String {
-        match &self.message {
+        let text = match &self.message {
             Some(msg) => format!("{}: {}", self.error, msg),
             None => self.error.clone(),
-        }
+        };
+        ui::printable(&text)
     }
 
     /// Read the v1 fields (`type`, `code`, `fix`, `docs_url`) from an API
@@ -238,7 +241,7 @@ impl ApiError {
     pub fn print_details(&self) {
         self.print_cause();
         if let Some(hint) = &self.transport_hint {
-            ui::hint(hint);
+            ui::hint(&ui::printable(hint));
         }
     }
 
@@ -248,10 +251,10 @@ impl ApiError {
         if net::verbose() && self.chain.len() > 1 {
             ui::sub_info("Error chain:");
             for (i, msg) in self.chain.iter().enumerate() {
-                ui::sub_info(&format!("{}. {}", i + 1, msg));
+                ui::sub_info(&format!("{}. {}", i + 1, ui::one_line(msg)));
             }
         } else if let Some(cause) = self.cause() {
-            ui::sub_info(&format!("Cause: {}", cause));
+            ui::sub_info(&format!("Cause: {}", ui::one_line(&cause)));
         }
     }
 
@@ -400,12 +403,18 @@ pub enum KeyCheck {
 /// Ping the auth endpoint with a short timeout — this is a pre-flight check,
 /// not worth stalling a command for the full 60s client timeout.
 pub async fn validate_api_key(api_key: &str) -> KeyCheck {
+    validate_api_key_at(api_base(), api_key).await
+}
+
+/// `validate_api_key` against a given API base: configure-mcp checks the
+/// production key against production, never against an override.
+pub async fn validate_api_key_at(base: &str, api_key: &str) -> KeyCheck {
     let client = match api_key_client(api_key) {
         Ok(c) => c,
         Err(e) => return KeyCheck::Unreachable(Some(Box::new(e.into()))),
     };
     let resp = client
-        .get(api_url("/v1/auth/user"))
+        .get(api_url_at(base, "/v1/auth/user"))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await;
@@ -449,14 +458,29 @@ pub fn bare_client() -> Result<Client, net::CertFileError> {
 /// read the same variable with the same core rule, but accept only the exact
 /// strings `127.0.0.1` / `::1`, and the Python SDK allows a query. Pure for
 /// unit tests.
+/// `scheme://user:pass@host/...` with the user and password replaced by
+/// `***`, so an invalid URL can be shown without its credentials.
+fn redact_userinfo(raw: &str) -> String {
+    let Some((scheme, rest)) = raw.split_once("://") else {
+        return raw.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://***@{}", &rest[at + 1..]),
+        None => raw.to_string(),
+    }
+}
+
 fn resolve_api_base(env_value: Option<&str>) -> Result<String, String> {
     let raw = match env_value.map(str::trim) {
         Some(v) if !v.is_empty() => v.trim_end_matches('/'),
         _ => return Ok(DEFAULT_API_BASE_URL.to_string()),
     };
+    // Shown in errors: anything between "://" and "@" may be a password.
+    let shown = redact_userinfo(raw);
     let invalid = |why: &str| {
         format!(
-            "{API_URL_ENV} must be an https:// URL{why} (http is allowed only for localhost, 127.0.0.1 and ::1), got {raw:?}"
+            "{API_URL_ENV} must be an https:// URL{why} (http is allowed only for localhost, 127.0.0.1 and ::1), got {shown:?}"
         )
     };
     let url = reqwest::Url::parse(raw).map_err(|_| invalid(" with a host"))?;
@@ -475,6 +499,15 @@ fn resolve_api_base(env_value: Option<&str>) -> Result<String, String> {
     };
     if url.query().is_some() || url.fragment().is_some() {
         return Err(invalid(" with no query or fragment"));
+    }
+    // Credentials in the URL would be sent as Basic auth and end up in
+    // error messages and daemon file names' inputs; the API key is the auth.
+    if !url.username().is_empty() || url.password().is_some() {
+        // Not `invalid(..)`: it echoes the value, password included.
+        return Err(format!(
+            "{API_URL_ENV} must not contain a user or password (host: {})",
+            url.host_str().unwrap_or_default()
+        ));
     }
     match url.scheme() {
         "https" => Ok(raw.to_string()),
@@ -515,7 +548,7 @@ pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
         });
         // Like API errors in YAML mode: the structured error on stdout and
         // a one-line summary on stderr.
-        print!("{}", serde_yaml::to_string(&out).unwrap_or_default());
+        crate::ui::stdout(&serde_yaml::to_string(&out).unwrap_or_default());
         crate::ui::error_line(msg);
     } else {
         crate::ui::error(msg);
@@ -525,7 +558,13 @@ pub fn exit_invalid_api_base(msg: &str, yaml: bool) -> ! {
 }
 
 pub fn api_url(path: &str) -> String {
-    format!("{}{}", api_base(), path)
+    api_url_at(api_base(), path)
+}
+
+/// `path` on a given API base. Every API URL is built here; `api_url` is
+/// this with the current base.
+pub fn api_url_at(base: &str, path: &str) -> String {
+    format!("{}{}", base, path)
 }
 
 /// The error is boxed: it is only built on the error path, and keeps
@@ -932,6 +971,28 @@ mod tests {
                 "{bad}: {err}"
             );
             assert!(err.contains(bad.trim_end_matches('/')), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn api_base_rejects_embedded_credentials_without_echoing_them() {
+        for bad in [
+            "https://user:hunter2@gw.example",
+            "https://token@gw.example/x",
+        ] {
+            let err = resolve_api_base(Some(bad)).unwrap_err();
+            assert!(err.contains("must not contain a user or password"), "{err}");
+            assert!(err.contains("gw.example"), "{err}");
+            assert!(!err.contains("hunter2") && !err.contains("token"), "{err}");
+        }
+        // Values that fail an earlier rule must not echo the password either.
+        for bad in [
+            "https://user:hunter2@gw.example/?x=1",
+            "https://user:hunter2@",
+            "ftp://user:hunter2@gw.example",
+        ] {
+            let err = resolve_api_base(Some(bad)).unwrap_err();
+            assert!(!err.contains("hunter2"), "{bad}: {err}");
         }
     }
 

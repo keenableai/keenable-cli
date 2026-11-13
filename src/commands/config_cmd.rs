@@ -55,7 +55,7 @@ pub fn config_get(key: &str) {
 
     let cfg = config::get_config();
     match cfg[key].as_str() {
-        Some(val) => println!("{}", val),
+        Some(val) => crate::ui::stdout(&format!("{}\n", val)),
         // Distinguishable from an empty value for scripts.
         None => std::process::exit(1),
     }
