@@ -21,7 +21,7 @@ assert against that error explicitly.
 import json
 from pathlib import Path
 
-from conftest import Runner, requires_posix, results_of
+from conftest import Runner, exit_code, requires_posix, results_of
 
 
 def test_free_tier_search_hits_public_endpoint(kn_fresh):
@@ -45,10 +45,12 @@ def test_free_tier_bad_param_hint(kn_fresh):
     """A 400 tells the user to fix the request, never to log in."""
     res = kn_fresh("search", "x", "--max-results", "0", key=False)
     data = res.yaml()
-    if res.code == 4:  # IP rate-limited; the 429 hint is covered above
-        assert "increase your limits" in data.get("hint", ""), data
+    # IP rate-limited; the 429 hint is covered above. (Told apart by the hint,
+    # not the code: binaries before per-kind exit codes exit 1 for both.)
+    if "increase your limits" in data.get("hint", ""):
+        assert res.code == exit_code(4), res.code
         return
-    assert res.code == 8  # invalid request
+    assert res.code == exit_code(8)  # invalid request
     assert '"max_results"' in data["message"]
     assert "retrying unchanged fails" in data["hint"]
     assert "keenable login" not in data["hint"]
@@ -84,7 +86,11 @@ def test_free_tier_daemon_starts_unauthenticated(short_home):
     try:
         # Whether the request returns results or is rate-limited, the daemon is
         # spun up before the request, so its socket must exist either way.
-        assert res.code in (0, 4), res.err  # 4: rate limited
+        assert res.code in (0, exit_code(4)), res.err  # 4: rate limited
+        if res.code != 0:
+            # On binaries before per-kind exit codes every failure is 1, so
+            # check the error is the rate limit, not something unrelated.
+            assert "increase your limits" in res.yaml().get("hint", ""), res.out
         assert (keenable_dir / "daemon.sock").exists(), "unauthenticated daemon did not start"
         # The daemon ran bare: no API key was persisted. The CLI stores the
         # key in config.json (api_key); credentials.json holds only OAuth
