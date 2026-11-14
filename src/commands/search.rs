@@ -957,9 +957,15 @@ mod tests {
         let gone = json!({"url": "u", "error": {"code": "page_not_found", "message": "gone"}});
         let read_with_failed_summary =
             json!({"url": "v", "title": "T", "error": {"code": "summary_failed", "message": "x"}});
-        assert!(every_url_failed(&json!({"results": [gone.clone(), gone.clone()]})));
-        assert!(!every_url_failed(&json!({"results": [gone, {"url": "w", "title": "T"}]})));
-        assert!(!every_url_failed(&json!({"results": [read_with_failed_summary]})));
+        assert!(every_url_failed(
+            &json!({"results": [gone.clone(), gone.clone()]})
+        ));
+        assert!(!every_url_failed(
+            &json!({"results": [gone, {"url": "w", "title": "T"}]})
+        ));
+        assert!(!every_url_failed(
+            &json!({"results": [read_with_failed_summary]})
+        ));
         assert!(!every_url_failed(&json!({"results": []})));
     }
 
