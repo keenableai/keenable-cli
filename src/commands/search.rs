@@ -822,10 +822,16 @@ pub fn read_schema_file(path: &str) -> Result<Value, String> {
     Ok(schema)
 }
 
+/// True when the entry's page could not be read: it has an error and no page fields.
+fn page_failed(result: &Value) -> bool {
+    result.get("error").is_some_and(Value::is_object) && result.get("title").is_none()
+}
+
 /// True when every URL failed: the call succeeded but returned no page.
 fn every_url_failed(data: &Value) -> bool {
-    let empty = |key: &str| data[key].as_array().is_none_or(|a| a.is_empty());
-    empty("results") && !empty("errors")
+    data["results"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty() && a.iter().all(page_failed))
 }
 
 /// `keenable fetch` on `POST /v1/fetch`: several URLs and the v1 options.
@@ -842,8 +848,14 @@ pub async fn fetch_many(args: FetchManyArgs, human: bool, api_key: Option<&str>)
             if human {
                 ui::header("keenable fetch");
                 for result in data["results"].as_array().into_iter().flatten() {
-                    let title = ui::one_line(result["title"].as_str().unwrap_or("Untitled"));
                     let url = ui::one_line(result["url"].as_str().unwrap_or(""));
+                    let error = ui::one_line(result["error"]["message"].as_str().unwrap_or(""));
+                    if page_failed(result) {
+                        ui::warning(&format!("{url}: {error}"));
+                        eprintln!();
+                        continue;
+                    }
+                    let title = ui::one_line(result["title"].as_str().unwrap_or("Untitled"));
                     eprintln!("   {} {}", title.bold(), url.cyan());
                     eprintln!("   {}", "─".repeat(60).dimmed());
                     let body = match &result["summary"] {
@@ -859,12 +871,10 @@ pub async fn fetch_many(args: FetchManyArgs, human: bool, api_key: Option<&str>)
                     if let Some(next) = result["next_offset"].as_u64() {
                         ui::hint(&format!("More text: pass --offset {next} to continue."));
                     }
+                    if !error.is_empty() {
+                        ui::warning(&format!("{url}: {error}"));
+                    }
                     eprintln!();
-                }
-                for error in data["errors"].as_array().into_iter().flatten() {
-                    let url = ui::one_line(error["url"].as_str().unwrap_or(""));
-                    let message = ui::one_line(error["message"].as_str().unwrap_or(""));
-                    ui::warning(&format!("{url}: {message}"));
                 }
             } else {
                 print_yaml(&data);
@@ -943,11 +953,13 @@ mod tests {
     }
 
     #[test]
-    fn every_url_failed_needs_errors_and_no_results() {
-        assert!(every_url_failed(
-            &json!({"results": [], "errors": [{"url": "u"}]})
-        ));
-        assert!(!every_url_failed(&json!({"results": [{"url": "u"}]})));
+    fn every_url_failed_needs_every_entry_unread() {
+        let gone = json!({"url": "u", "error": {"code": "page_not_found", "message": "gone"}});
+        let read_with_failed_summary =
+            json!({"url": "v", "title": "T", "error": {"code": "summary_failed", "message": "x"}});
+        assert!(every_url_failed(&json!({"results": [gone.clone(), gone.clone()]})));
+        assert!(!every_url_failed(&json!({"results": [gone, {"url": "w", "title": "T"}]})));
+        assert!(!every_url_failed(&json!({"results": [read_with_failed_summary]})));
         assert!(!every_url_failed(&json!({"results": []})));
     }
 
