@@ -944,7 +944,9 @@ mod tests {
 
     #[test]
     fn every_url_failed_needs_errors_and_no_results() {
-        assert!(every_url_failed(&json!({"results": [], "errors": [{"url": "u"}]})));
+        assert!(every_url_failed(
+            &json!({"results": [], "errors": [{"url": "u"}]})
+        ));
         assert!(!every_url_failed(&json!({"results": [{"url": "u"}]})));
         assert!(!every_url_failed(&json!({"results": []})));
     }
