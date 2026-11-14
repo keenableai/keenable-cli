@@ -178,12 +178,12 @@ enum Commands {
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors\n\nPOST /v1/fetch (preview, needs the fetch_post flag on your organization):\n  keenable fetch https://a.com https://b.com               Several pages in one call\n  keenable fetch https://example.com --offset 20000          Continue a long page\n  keenable fetch https://example.com --summary \"Card fees\" --schema-file fees.json   JSON in your shape\n  keenable fetch https://example.com --highlights pricing    Only the relevant passages\n  keenable fetch https://example.com --links 50 --images 5   Links and images with their text\n  keenable fetch https://example.com --max-age 1d --timeout 15s   Freshness and wait\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors\n\nPOST /v1/fetch (preview, needs the fetch_post flag on your organization):\n  keenable fetch https://a.com https://b.com               Several pages in one call\n  keenable fetch https://example.com --offset 20000          Continue a long page\n  keenable fetch https://example.com --summary \"Card fees\" --schema-file fees.json   JSON in your shape\n  keenable fetch https://example.com --highlights pricing    Only the relevant passages\n  keenable fetch https://example.com --links 50 --images 5   Links and images with their text\n  keenable fetch https://example.com --max-age 1d --timeout 15s   Freshness and wait\n  keenable fetch https://example.com --cache-only            Stored copy only, never contacts the site\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
     )]
     Fetch {
         /// URL(s) to fetch. More than one, or any of --offset, --summary,
         /// --schema-file, --highlights, --links, --images, --max-age,
-        /// --timeout or --no-text, uses POST /v1/fetch (preview).
+        /// --timeout, --cache-only or --no-text, uses POST /v1/fetch (preview).
         #[arg(required = true, num_args = 1..)]
         urls: Vec<String>,
 
@@ -231,6 +231,11 @@ enum Commands {
         /// Fetch the live page instead of the cached copy
         #[arg(long)]
         live: bool,
+
+        /// Return only stored copies and never contact the site; a page with
+        /// no stored copy gets the error not_cached (POST /v1/fetch)
+        #[arg(long = "cache-only", conflicts_with = "live")]
+        cache_only: bool,
 
         /// Extraction instruction: an LLM reads the page and returns only
         /// this instruction's output instead of the full page (max 2000 chars)
@@ -481,12 +486,19 @@ async fn run() {
             max_age,
             timeout,
             live,
+            cache_only,
             prompt,
             max_chars,
             session_id,
             pretty,
             api_key,
         } => {
+            if cache_only && max_age.as_deref().map(str::trim) == Some("0s") {
+                ui::error(
+                    "--cache-only never reads a page live, so it can't be combined with --max-age 0s",
+                );
+                std::process::exit(2);
+            }
             let v1 = urls.len() > 1
                 || offset.is_some()
                 || no_text
@@ -496,7 +508,8 @@ async fn run() {
                 || links.is_some()
                 || images.is_some()
                 || max_age.is_some()
-                || timeout.is_some();
+                || timeout.is_some()
+                || cache_only;
             if v1 {
                 let output_schema = match schema_file
                     .as_deref()
@@ -522,6 +535,7 @@ async fn run() {
                     images,
                     max_age: max_age.or(live.then(|| "0s".to_string())),
                     timeout,
+                    cache_only,
                     session_id,
                 };
                 commands::search::fetch_many(args, pretty, api_key.as_deref()).await;

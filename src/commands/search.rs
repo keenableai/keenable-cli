@@ -753,6 +753,7 @@ pub struct FetchManyArgs {
     pub images: Option<u64>,
     pub max_age: Option<String>,
     pub timeout: Option<String>,
+    pub cache_only: bool,
     pub session_id: Option<String>,
 }
 
@@ -807,6 +808,9 @@ pub fn build_fetch_body(args: &FetchManyArgs) -> Value {
         if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
             body.insert(key.into(), json!(v));
         }
+    }
+    if args.cache_only {
+        body.insert("cache_only".into(), json!(true));
     }
     Value::Object(body)
 }
@@ -934,6 +938,20 @@ mod tests {
                 "timeout": "15s",
                 "session_id": "run-1"
             })
+        );
+    }
+
+    #[test]
+    fn fetch_body_with_cache_only() {
+        let args = FetchManyArgs {
+            urls: vec!["https://a.example/".into()],
+            max_age: Some("7d".into()),
+            cache_only: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            build_fetch_body(&args),
+            json!({"urls": ["https://a.example/"], "content": {"text": true}, "max_age": "7d", "cache_only": true})
         );
     }
 
