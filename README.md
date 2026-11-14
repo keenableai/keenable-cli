@@ -95,6 +95,7 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
 keenable fetch https://example.com      # Fetch page content
 keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://example.com --live   # Fetch the live page (skip cache)
+keenable fetch https://example.com --cache-only   # Stored copy only, never contacts the site (POST /v1/fetch preview)
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
 keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char content cap
 keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
