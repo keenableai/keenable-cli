@@ -585,6 +585,19 @@ mod platform {
                 )
                 .await
             }
+            "fetch_post" => {
+                let body = match &req.body {
+                    Some(b) => b.clone(),
+                    None => return err_response("Missing body"),
+                };
+                send_api(
+                    client
+                        .post(endpoint(base, "/v1/fetch", authenticated))
+                        .json(&body),
+                    authenticated,
+                )
+                .await
+            }
             "fetch" => {
                 let query = match req.fetch_query() {
                     Some(q) => q,

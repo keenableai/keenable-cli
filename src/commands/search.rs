@@ -390,6 +390,16 @@ async fn send_direct(
                 .map_err(send_err)?;
             handle_response(resp).await
         }
+        "fetch_post" => {
+            let body = req.body.as_ref().ok_or_else(|| missing("body"))?;
+            let resp = client
+                .post(endpoint("/v1/fetch", authenticated))
+                .json(body)
+                .send()
+                .await
+                .map_err(send_err)?;
+            handle_response(resp).await
+        }
         "fetch" => {
             let query = req.fetch_query().ok_or_else(|| missing("urls"))?;
             let resp = client
@@ -728,9 +738,233 @@ pub async fn fetch(
     }
 }
 
+/// Options for `keenable fetch` sent to `POST /v1/fetch`.
+#[derive(Debug, Default)]
+pub struct FetchManyArgs {
+    pub urls: Vec<String>,
+    pub max_chars: Option<u64>,
+    pub offset: Option<u64>,
+    pub no_text: bool,
+    pub summary: Option<String>,
+    pub output_schema: Option<Value>,
+    pub highlights: bool,
+    pub highlights_query: Option<String>,
+    pub links: Option<u64>,
+    pub images: Option<u64>,
+    pub max_age: Option<String>,
+    pub timeout: Option<String>,
+    pub session_id: Option<String>,
+}
+
+/// The JSON body `POST /v1/fetch` takes. Unset options are left out; the
+/// API judges the values.
+pub fn build_fetch_body(args: &FetchManyArgs) -> Value {
+    let mut content = serde_json::Map::new();
+    if !args.no_text {
+        let mut limits = serde_json::Map::new();
+        if let Some(n) = args.max_chars {
+            limits.insert("max_chars".into(), json!(n));
+        }
+        if let Some(n) = args.offset {
+            limits.insert("offset".into(), json!(n));
+        }
+        let text = if limits.is_empty() {
+            json!(true)
+        } else {
+            Value::Object(limits)
+        };
+        content.insert("text".into(), text);
+    }
+    let mut summary = serde_json::Map::new();
+    if let Some(instructions) = args.summary.as_deref().filter(|s| !s.is_empty()) {
+        summary.insert("instructions".into(), json!(instructions));
+    }
+    if let Some(schema) = &args.output_schema {
+        summary.insert("output_schema".into(), schema.clone());
+    }
+    if !summary.is_empty() {
+        content.insert("summary".into(), Value::Object(summary));
+    }
+    if let Some(query) = args.highlights_query.as_deref().filter(|q| !q.is_empty()) {
+        content.insert("highlights".into(), json!({ "query": query }));
+    } else if args.highlights {
+        content.insert("highlights".into(), json!(true));
+    }
+    if let Some(n) = args.links {
+        content.insert("links".into(), json!(n));
+    }
+    if let Some(n) = args.images {
+        content.insert("images".into(), json!(n));
+    }
+    let mut body = serde_json::Map::new();
+    body.insert("urls".into(), json!(args.urls));
+    body.insert("content".into(), Value::Object(content));
+    for (key, value) in [
+        ("max_age", &args.max_age),
+        ("timeout", &args.timeout),
+        ("session_id", &args.session_id),
+    ] {
+        if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
+            body.insert(key.into(), json!(v));
+        }
+    }
+    Value::Object(body)
+}
+
+/// Read a JSON Schema file for `--schema-file`.
+pub fn read_schema_file(path: &str) -> Result<Value, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("Could not read {path}: {e}"))?;
+    let schema: Value =
+        serde_json::from_str(&text).map_err(|e| format!("{path} is not valid JSON: {e}"))?;
+    if !schema.is_object() {
+        return Err(format!("{path} must hold a JSON object (a JSON Schema)"));
+    }
+    Ok(schema)
+}
+
+/// True when every URL failed: the call succeeded but returned no page.
+fn every_url_failed(data: &Value) -> bool {
+    let empty = |key: &str| data[key].as_array().is_none_or(|a| a.is_empty());
+    empty("results") && !empty("errors")
+}
+
+/// `keenable fetch` on `POST /v1/fetch`: several URLs and the v1 options.
+pub async fn fetch_many(args: FetchManyArgs, human: bool, api_key: Option<&str>) {
+    let req = DaemonRequest {
+        command: "fetch_post".to_string(),
+        body: Some(build_fetch_body(&args)),
+        ..Default::default()
+    };
+    let api_key = key_override(api_key);
+    let api_key = api_key.as_deref();
+    match execute(&req, api_key).await {
+        Ok(data) => {
+            if human {
+                ui::header("keenable fetch");
+                for result in data["results"].as_array().into_iter().flatten() {
+                    let title = ui::one_line(result["title"].as_str().unwrap_or("Untitled"));
+                    let url = ui::one_line(result["url"].as_str().unwrap_or(""));
+                    eprintln!("   {} {}", title.bold(), url.cyan());
+                    eprintln!("   {}", "─".repeat(60).dimmed());
+                    let body = match &result["summary"] {
+                        Value::String(s) => s.clone(),
+                        Value::Object(_) => {
+                            serde_json::to_string_pretty(&result["summary"]).unwrap_or_default()
+                        }
+                        _ => result["text"].as_str().unwrap_or("").to_string(),
+                    };
+                    for line in ui::printable(&body).lines() {
+                        eprintln!("   {}", line);
+                    }
+                    if let Some(next) = result["next_offset"].as_u64() {
+                        ui::hint(&format!("More text: pass --offset {next} to continue."));
+                    }
+                    eprintln!();
+                }
+                for error in data["errors"].as_array().into_iter().flatten() {
+                    let url = ui::one_line(error["url"].as_str().unwrap_or(""));
+                    let message = ui::one_line(error["message"].as_str().unwrap_or(""));
+                    ui::warning(&format!("{url}: {message}"));
+                }
+            } else {
+                print_yaml(&data);
+            }
+            if every_url_failed(&data) {
+                std::process::exit(6);
+            }
+        }
+        Err(e) => handle_api_error(*e, human),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetch_body_defaults_to_text() {
+        let args = FetchManyArgs {
+            urls: vec!["https://a.example/".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            build_fetch_body(&args),
+            json!({"urls": ["https://a.example/"], "content": {"text": true}})
+        );
+    }
+
+    #[test]
+    fn fetch_body_carries_every_option() {
+        let args = FetchManyArgs {
+            urls: vec!["https://a.example/".into(), "https://b.example/".into()],
+            max_chars: Some(1000),
+            offset: Some(10),
+            summary: Some("Card fees".into()),
+            output_schema: Some(json!({"type": "object"})),
+            highlights_query: Some("pricing".into()),
+            links: Some(5),
+            images: Some(2),
+            max_age: Some("1d".into()),
+            timeout: Some("15s".into()),
+            session_id: Some("run-1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_fetch_body(&args),
+            json!({
+                "urls": ["https://a.example/", "https://b.example/"],
+                "content": {
+                    "text": {"max_chars": 1000, "offset": 10},
+                    "summary": {"instructions": "Card fees", "output_schema": {"type": "object"}},
+                    "highlights": {"query": "pricing"},
+                    "links": 5,
+                    "images": 2
+                },
+                "max_age": "1d",
+                "timeout": "15s",
+                "session_id": "run-1"
+            })
+        );
+    }
+
+    #[test]
+    fn fetch_body_without_text_and_with_default_highlights() {
+        let args = FetchManyArgs {
+            urls: vec!["https://a.example/".into()],
+            no_text: true,
+            highlights: true,
+            summary: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_fetch_body(&args),
+            json!({"urls": ["https://a.example/"], "content": {"highlights": true}})
+        );
+    }
+
+    #[test]
+    fn every_url_failed_needs_errors_and_no_results() {
+        assert!(every_url_failed(&json!({"results": [], "errors": [{"url": "u"}]})));
+        assert!(!every_url_failed(&json!({"results": [{"url": "u"}]})));
+        assert!(!every_url_failed(&json!({"results": []})));
+    }
+
+    #[test]
+    fn read_schema_file_rejects_non_objects() {
+        let dir = std::env::temp_dir().join(format!("keenable-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("good.json");
+        let bad = dir.join("bad.json");
+        std::fs::write(&good, r#"{"type":"object"}"#).unwrap();
+        std::fs::write(&bad, "[1]").unwrap();
+        assert_eq!(
+            read_schema_file(good.to_str().unwrap()).unwrap(),
+            json!({"type": "object"})
+        );
+        assert!(read_schema_file(bad.to_str().unwrap()).is_err());
+        assert!(read_schema_file(dir.join("missing.json").to_str().unwrap()).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn credits_remaining_line_shows_the_balance_only_when_sent() {

@@ -178,11 +178,55 @@ enum Commands {
 
     /// Fetch page content as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://example.com --live                  Fetch the live page (skip cache)\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors\n\nPOST /v1/fetch (preview, needs the fetch_post flag on your organization):\n  keenable fetch https://a.com https://b.com               Several pages in one call\n  keenable fetch https://example.com --offset 20000          Continue a long page\n  keenable fetch https://example.com --summary \"Card fees\" --schema-file fees.json   JSON in your shape\n  keenable fetch https://example.com --highlights pricing    Only the relevant passages\n  keenable fetch https://example.com --links 50 --images 5   Links and images with their text\n  keenable fetch https://example.com --max-age 1d --timeout 15s   Freshness and wait\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
     )]
     Fetch {
-        /// URL to fetch
-        url: String,
+        /// URL(s) to fetch. More than one, or any of --offset, --summary,
+        /// --schema-file, --highlights, --links, --images, --max-age,
+        /// --timeout or --no-text, uses POST /v1/fetch (preview).
+        #[arg(required = true, num_args = 1..)]
+        urls: Vec<String>,
+
+        /// Start the text at this character, to read a long page in parts
+        #[arg(long)]
+        offset: Option<u64>,
+
+        /// Leave the page text out (with --summary, --highlights, --links or --images)
+        #[arg(long = "no-text")]
+        no_text: bool,
+
+        /// Instruction for a per-page summary (POST /v1/fetch)
+        #[arg(long)]
+        summary: Option<String>,
+
+        /// JSON Schema file: the summary comes back as JSON in that shape
+        #[arg(long = "schema-file", value_name = "PATH")]
+        schema_file: Option<String>,
+
+        /// Return the passages most relevant to this query
+        #[arg(
+            long = "highlights",
+            value_name = "QUERY",
+            num_args = 0..=1,
+            default_missing_value = ""
+        )]
+        highlights: Option<String>,
+
+        /// Return up to this many links per page, with their text
+        #[arg(long)]
+        links: Option<u64>,
+
+        /// Return up to this many images per page, with their alt text
+        #[arg(long)]
+        images: Option<u64>,
+
+        /// Oldest copy accepted, e.g. 1d or 2h; 0s always reads the page live
+        #[arg(long = "max-age", value_name = "DURATION")]
+        max_age: Option<String>,
+
+        /// How long to wait for each live read, e.g. 15s (1s-90s)
+        #[arg(long, value_name = "DURATION")]
+        timeout: Option<String>,
 
         /// Fetch the live page instead of the cached copy
         #[arg(long)]
@@ -426,7 +470,16 @@ async fn run() {
             .await;
         }
         Commands::Fetch {
-            url,
+            urls,
+            offset,
+            no_text,
+            summary,
+            schema_file,
+            highlights,
+            links,
+            images,
+            max_age,
+            timeout,
             live,
             prompt,
             max_chars,
@@ -434,16 +487,56 @@ async fn run() {
             pretty,
             api_key,
         } => {
-            commands::search::fetch(
-                &url,
-                live,
-                prompt,
-                max_chars,
-                session_id,
-                pretty,
-                api_key.as_deref(),
-            )
-            .await;
+            let v1 = urls.len() > 1
+                || offset.is_some()
+                || no_text
+                || summary.is_some()
+                || schema_file.is_some()
+                || highlights.is_some()
+                || links.is_some()
+                || images.is_some()
+                || max_age.is_some()
+                || timeout.is_some();
+            if v1 {
+                let output_schema = match schema_file
+                    .as_deref()
+                    .map(commands::search::read_schema_file)
+                {
+                    Some(Ok(schema)) => Some(schema),
+                    Some(Err(message)) => {
+                        ui::error(&message);
+                        std::process::exit(2);
+                    }
+                    None => None,
+                };
+                let args = commands::search::FetchManyArgs {
+                    urls,
+                    max_chars,
+                    offset,
+                    no_text,
+                    summary: summary.or(prompt),
+                    output_schema,
+                    highlights: highlights.is_some(),
+                    highlights_query: highlights,
+                    links,
+                    images,
+                    max_age: max_age.or(live.then(|| "0s".to_string())),
+                    timeout,
+                    session_id,
+                };
+                commands::search::fetch_many(args, pretty, api_key.as_deref()).await;
+            } else {
+                commands::search::fetch(
+                    &urls[0],
+                    live,
+                    prompt,
+                    max_chars,
+                    session_id,
+                    pretty,
+                    api_key.as_deref(),
+                )
+                .await;
+            }
         }
         Commands::Update => {
             commands::update_cmd::update().await;
