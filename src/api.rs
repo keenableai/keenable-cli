@@ -426,11 +426,22 @@ pub async fn validate_api_key_at(base: &str, api_key: &str) -> KeyCheck {
     }
 }
 
+/// The `X-API-Key` header value for `api_key`; None for a blank key or one
+/// that is not a valid header value.
+fn api_key_header(api_key: &str) -> Option<reqwest::header::HeaderValue> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    key.parse().ok()
+}
+
 pub fn api_key_client(api_key: &str) -> Result<Client, net::CertFileError> {
     let mut headers = base_headers();
     // Keys from --api-key or a hand-edited config may carry stray whitespace
     // or control chars; a bad header value must yield a 401, not a panic.
-    if let Ok(value) = api_key.trim().parse() {
+    // A blank key sends no header at all, never an empty `X-API-Key:`.
+    if let Some(value) = api_key_header(api_key) {
         headers.insert("X-API-Key", value);
     }
     Ok(net::client_builder()?
@@ -1472,5 +1483,15 @@ mod tests {
         )
         .await;
         assert_eq!(e.retry_after, Some(9));
+    }
+
+    #[test]
+    fn a_blank_key_sends_no_api_key_header() {
+        for blank in ["", " ", "\t\n"] {
+            assert!(api_key_header(blank).is_none(), "{blank:?}");
+        }
+        assert_eq!(api_key_header(" keen_a_b\n").unwrap(), "keen_a_b");
+        // Not a valid header value: no header rather than a panic.
+        assert!(api_key_header("keen\u{1}x").is_none());
     }
 }

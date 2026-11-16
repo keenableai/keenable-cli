@@ -562,3 +562,142 @@ async fn logout_also_stops_a_daemon_started_while_it_ran() {
     // may hold the old key, so logout stops it as well.
     assert_eq!(logout_with_fake_daemon(true).await, (false, None));
 }
+
+/// A loopback port nothing listens on.
+async fn closed_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    listener.local_addr().unwrap().port()
+}
+
+async fn keenable_with_env(home: &Path, api_url: &str, args: &[&str], key_env: &str) -> Output {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_keenable"));
+    cmd.args(args)
+        .env("KEENABLE_HOME", home)
+        .env("KEENABLE_API_URL", api_url)
+        .env("KEENABLE_APP_TITLE", "keenable-cli-test")
+        .env("KEENABLE_API_KEY", key_env)
+        .stdin(std::process::Stdio::null());
+    for var in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        cmd.env_remove(var);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output())
+        .await
+        .expect("keenable timed out")
+        .unwrap()
+}
+
+fn read_config(home: &Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(home.join(".keenable/config.json")).unwrap())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn login_with_a_blank_key_keeps_the_stored_key() {
+    // Server reachable or not, a blank key is refused before any request.
+    let (port, log) = spawn_stub().await;
+    for (name, port) in [("blank-up", port), ("blank-down", closed_port().await)] {
+        let home = temp_home(name);
+        let base = format!("http://127.0.0.1:{port}");
+        write_config(
+            &home,
+            &format!(r#"{{"api_key":"keen_prod","api_keys":{{"{base}":"keen_local"}}}}"#),
+        );
+        for blank in ["", "  ", "\t"] {
+            let out = keenable(&home, &base, &["login", "--api-key", blank]).await;
+            assert_eq!(out.status.code(), Some(1), "{blank:?}");
+            let stderr = text(&out.stderr);
+            assert!(stderr.contains("The API key is empty"), "{stderr}");
+            assert!(out.stdout.is_empty());
+            let config = read_config(&home);
+            assert_eq!(config["api_key"], "keen_prod", "{config}");
+            assert_eq!(config["api_keys"][&base], "keen_local", "{config}");
+        }
+        std::fs::remove_dir_all(&home).ok();
+    }
+    assert!(log.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn blank_api_key_flag_is_an_error_not_a_fallback() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("blank-flag");
+    let base = format!("http://127.0.0.1:{port}");
+    write_config(
+        &home,
+        &format!(r#"{{"api_keys":{{"{base}":"keen_local"}}}}"#),
+    );
+
+    for args in [["search", "q"], ["fetch", "https://example.com"]] {
+        // YAML mode: structured error on stdout, one line on stderr.
+        let out = keenable(&home, &base, &[args[0], args[1], "--api-key", " "]).await;
+        assert_eq!(out.status.code(), Some(1));
+        let stdout = text(&out.stdout);
+        assert!(stdout.contains("error: Empty API key"), "{stdout}");
+        assert!(stdout.contains("hint:"), "{stdout}");
+        assert_eq!(
+            text(&out.stderr).trim(),
+            "error: Empty API key: --api-key was given an empty value."
+        );
+
+        // Pretty mode: everything on stderr.
+        let out = keenable(&home, &base, &[args[0], args[1], "-p", "--api-key", ""]).await;
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stdout.is_empty());
+        assert!(text(&out.stderr).contains("Empty API key"));
+
+        // A good key in the environment does not rescue a blank flag.
+        let out = keenable_with_env(
+            &home,
+            &base,
+            &[args[0], args[1], "--api-key", ""],
+            "keen_env",
+        )
+        .await;
+        assert_eq!(out.status.code(), Some(1));
+    }
+    // Neither the stored key nor an anonymous request went out.
+    assert!(log.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
+async fn blank_api_key_env_warns_and_is_ignored() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("blank-env");
+    let base = format!("http://127.0.0.1:{port}");
+
+    // No stored key: the public endpoint, with no X-API-Key header.
+    let out = keenable_with_env(&home, &base, &["search", "q", "-v"], "  ").await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("KEENABLE_API_KEY is set but empty"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(text(&out.stdout).contains("https://stub.example/v1/search/public"));
+    assert!(!text(&out.stdout).contains("KEENABLE_API_KEY"));
+
+    // With a stored key: that key is used.
+    write_config(
+        &home,
+        &format!(r#"{{"api_keys":{{"{base}":"keen_local"}}}}"#),
+    );
+    let out = keenable_with_env(&home, &base, &["search", "q", "-v"], "").await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("KEENABLE_API_KEY is set but empty"));
+
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].path, "/v1/search/public");
+    assert_eq!(seen[0].api_key, None);
+    assert_eq!(seen[1].path, "/v1/search");
+    assert_eq!(seen[1].api_key.as_deref(), Some("keen_local"));
+    std::fs::remove_dir_all(&home).ok();
+}

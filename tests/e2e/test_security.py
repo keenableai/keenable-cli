@@ -44,3 +44,44 @@ def test_config_file_is_owner_only(kn_fresh):
     assert cfg.exists(), "config set did not write config.json"
     mode = stat.S_IMODE(cfg.stat().st_mode)
     assert mode == 0o600, f"config.json is {oct(mode)}, expected 0o600"
+
+
+# A blank key is never a silent fallback. These exit before any request, so
+# they need no API key and no network.
+BLANK_KEYS = ["", " ", "\t"]
+
+
+@pytest.mark.parametrize("blank", BLANK_KEYS)
+@pytest.mark.parametrize("cmd", [["search", "q"], ["fetch", "https://example.com"]])
+def test_blank_api_key_flag_is_an_error(kn_fresh, cmd, blank):
+    r = kn_fresh(*cmd, "--api-key", blank, key=False)
+    assert r.code == 1
+    data = r.yaml()
+    assert data["error"] == "Empty API key"
+    assert "hint" in data
+    assert r.err.strip() == "error: Empty API key: --api-key was given an empty value."
+
+    pretty = kn_fresh(*cmd, "-p", "--api-key", blank, key=False)
+    assert pretty.code == 1
+    assert pretty.out == ""
+    assert "Empty API key" in pretty.err
+
+
+@pytest.mark.parametrize("blank", BLANK_KEYS)
+def test_login_with_a_blank_key_keeps_the_stored_key(kn_fresh, blank):
+    config = Path(kn_fresh.home) / ".keenable" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text('{"api_key": "keen_stored_key"}')
+
+    r = kn_fresh("login", "--api-key", blank, key=False)
+    assert r.code == 1
+    assert "The API key is empty" in r.err
+    assert r.out == ""
+    assert '"keen_stored_key"' in config.read_text()
+
+
+def test_blank_api_key_env_warns_and_goes_anonymous(kn_fresh):
+    """Live: the request itself goes to the public endpoint."""
+    r = kn_fresh("search", "rust", key=False, env={"KEENABLE_API_KEY": "  "})
+    assert "KEENABLE_API_KEY is set but empty" in r.err
+    assert "KEENABLE_API_KEY" not in r.out

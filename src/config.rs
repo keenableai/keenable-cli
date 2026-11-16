@@ -350,12 +350,18 @@ pub fn get_api_key() -> Option<String> {
     }
 }
 
-/// Save `key` together with the API base it belongs to.
 /// Save `key` for the current API base: production's slot, or this
 /// override's entry in `api_keys`. Keys for other bases are left alone.
-pub fn set_api_key(key: &str) {
+/// A blank key is never saved: it would replace a working key with nothing.
+/// Returns whether the key was saved.
+#[must_use]
+pub fn set_api_key(key: &str) -> bool {
+    let key = key.trim();
+    if key.is_empty() {
+        return false;
+    }
     let base = crate::api::api_base();
-    let key = Value::String(key.trim().to_string());
+    let key = Value::String(key.to_string());
     update_config(|map| {
         if is_production(base) {
             map.insert(API_KEY.into(), key);
@@ -372,6 +378,7 @@ pub fn set_api_key(key: &str) {
             keys.insert(base.to_string(), key);
         }
     });
+    true
 }
 
 /// Remove the key for the current API base. Returns the other bases that
@@ -599,5 +606,13 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_blank_key_is_never_saved() {
+        // Returns before reading or writing any file.
+        for blank in ["", " ", "\t\n", "  \r\n "] {
+            assert!(!set_api_key(blank), "{blank:?}");
+        }
     }
 }

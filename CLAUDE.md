@@ -52,7 +52,7 @@ assets/
 ### Login Modes
 
 - **`keenable login`** — interactive device-code flow. Opens browser, provisions API key, enables MCP configuration via `configure-mcp`.
-- **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed. `--api-key -` reads the key from stdin (keeps it out of argv and shell history), or prompts without echo when stdin is a terminal; help text and docs lead with that form.
+- **`keenable login --api-key <KEY>`** — for CI, servers, agent machines. Saves API key directly, no browser needed. `--api-key -` reads the key from stdin (keeps it out of argv and shell history), or prompts without echo when stdin is a terminal; help text and docs lead with that form. A blank key (`--api-key ""`, an empty line on stdin, an empty key from the server) is never saved: login exits 1 before any request, and the stored key and the daemon are left alone. `config::set_api_key` refuses a blank key and returns `false`.
 - The device flow uses the server's `verification_uri` only when it is https (or http to loopback), and prints that same link in the hint; any other link stops the login with a hint to use `--api-key -`.
 - `login` and `logout` check that `config.json` can be written before doing anything (`config::ensure_config_writable`), so login never provisions a key it can't save; `logout` stops the daemon first, and again after removing the key, so a daemon a concurrent command started with the old key doesn't survive. `logout` warns when client MCP configs still hold a key (`mcp_common::clients_holding_api_key`) and points at `keenable reset --all`.
 
@@ -60,7 +60,7 @@ assets/
 
 All tool commands (`search`, `fetch`) output **YAML by default** (token-efficient for agents). With a key, the response's `usage.credits_remaining` (credits left after the request) passes through to YAML, and `-p` shows it as a `Credits left: N` hint.
 Use `-p` / `--pretty` flag for pretty-printed human-readable output.
-Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct.
+Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct. A blank `--api-key` value is an error (exit 1, "Empty API key"), never a fallback to the stored key or to anonymous requests; a blank `KEENABLE_API_KEY` prints a warning on stderr and is ignored. `api::api_key_client` sends no `X-API-Key` header for a blank key.
 Use the global `-v` / `--verbose` flag to print network details to stderr: the proxy in use and its source, the trusted CA sources, and the full error chain on failure. It also bypasses the daemon (see Daemon).
 
 ```bash

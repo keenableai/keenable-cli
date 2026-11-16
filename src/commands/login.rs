@@ -57,6 +57,21 @@ fn read_key(input: impl std::io::BufRead) -> Result<String, &'static str> {
     Err("No API key on stdin")
 }
 
+const BLANK_KEY: &str = "The API key is empty — nothing saved";
+const BLANK_KEY_HINT: &str =
+    "Pass the key itself, or pipe it in: printenv KEENABLE_API_KEY | keenable login --api-key -";
+
+/// Save the key, or stop: a blank key is refused by `config::set_api_key`
+/// whatever path it came from.
+fn save_key(key: &str) {
+    if !config::set_api_key(key) {
+        crate::ui::error(BLANK_KEY);
+        crate::ui::hint(BLANK_KEY_HINT);
+        eprintln!();
+        std::process::exit(1);
+    }
+}
+
 /// An https link, or http to this machine (a local API under
 /// `KEENABLE_API_URL`). Anything else is not opened.
 fn is_web_link(link: &str) -> bool {
@@ -224,6 +239,10 @@ fn classify_poll(
             .as_str()
             .or_else(|| body["access_token"].as_str())
     {
+        // An empty key must never be saved over a working one.
+        if key.trim().is_empty() {
+            return PollStep::Fail("The server returned an empty API key.".to_string());
+        }
         return PollStep::Done(key.to_string());
     }
 
@@ -385,6 +404,14 @@ pub async fn login(api_key: Option<&str>) {
 
     // Fast path: --api-key provided, skip browser login
     if let Some(key) = api_key {
+        // A blank key (`--api-key "$UNSET_VAR"`) stops here: no request is
+        // sent, and the stored key and the daemon are left alone.
+        if key.trim().is_empty() {
+            ui::error(BLANK_KEY);
+            ui::hint(BLANK_KEY_HINT);
+            eprintln!();
+            std::process::exit(1);
+        }
         // Catch a typo'd key now rather than at first search; an unreachable
         // server must not block saving a possibly-good key.
         match crate::api::validate_api_key(key.trim()).await {
@@ -404,7 +431,7 @@ pub async fn login(api_key: Option<&str>) {
             }
             crate::api::KeyCheck::Valid => {}
         }
-        config::set_api_key(key);
+        save_key(key);
         daemon::kill_daemon();
         ui::success("API key saved");
         ui::hint("You can now use: keenable search \"query\"");
@@ -464,7 +491,7 @@ pub async fn login(api_key: Option<&str>) {
     ui::step_done_replace("Approved", step_lines);
 
     // Step 4: Save API key and restart daemon with new credentials
-    config::set_api_key(&api_key);
+    save_key(&api_key);
     daemon::kill_daemon();
     ui::success("Logged in");
 
@@ -767,5 +794,20 @@ mod tests {
     fn unparseable_bodies_keep_polling() {
         assert_eq!(classify_poll(200, None, None, 5), wait(5, 5));
         assert_eq!(classify_poll(502, None, None, 5), wait(5, 5));
+    }
+
+    #[test]
+    fn an_empty_key_from_the_server_fails_instead_of_being_saved() {
+        for body in [
+            json!({"api_key": ""}),
+            json!({"api_key": "  "}),
+            json!({"access_token": "\n"}),
+        ] {
+            assert_eq!(
+                classify_poll(200, None, Some(&body), 5),
+                PollStep::Fail("The server returned an empty API key.".into()),
+                "{body}"
+            );
+        }
     }
 }
