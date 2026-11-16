@@ -226,6 +226,11 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
+    # Hand-added (allow-dirty = ["ci"]), re-add after `dist generate`: the
+    # GitHub Release that the shell/PowerShell installers and the Homebrew
+    # formula download from is published only after a reviewer approves the
+    # `release` environment (KEE-1554). The Homebrew job needs this one.
+    environment: release
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
