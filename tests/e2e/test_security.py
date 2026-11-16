@@ -51,9 +51,23 @@ def test_config_file_is_owner_only(kn_fresh):
 BLANK_KEYS = ["", " ", "\t"]
 
 
+@pytest.fixture(scope="module")
+def refuses_blank_keys(kn):
+    """Skip on a binary that predates the blank-key refusal.
+
+    The nightly runs main's tests against the latest release, so tests for
+    merged but unreleased behavior must skip there. The refusal shipped with
+    its note in the login help.
+    """
+    res = kn("login", "--help", key=False)
+    assert res.code == 0, res.err  # a broken binary fails, not skips
+    if "an empty key is refused" not in res.out + res.err:
+        pytest.skip("binary predates the blank-key refusal")
+
+
 @pytest.mark.parametrize("blank", BLANK_KEYS)
 @pytest.mark.parametrize("cmd", [["search", "q"], ["fetch", "https://example.com"]])
-def test_blank_api_key_flag_is_an_error(kn_fresh, cmd, blank):
+def test_blank_api_key_flag_is_an_error(kn_fresh, refuses_blank_keys, cmd, blank):
     r = kn_fresh(*cmd, "--api-key", blank, key=False)
     assert r.code == 1
     data = r.yaml()
@@ -68,7 +82,7 @@ def test_blank_api_key_flag_is_an_error(kn_fresh, cmd, blank):
 
 
 @pytest.mark.parametrize("blank", BLANK_KEYS)
-def test_login_with_a_blank_key_keeps_the_stored_key(kn_fresh, blank):
+def test_login_with_a_blank_key_keeps_the_stored_key(kn_fresh, refuses_blank_keys, blank):
     config = Path(kn_fresh.home) / ".keenable" / "config.json"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text('{"api_key": "keen_stored_key"}')
@@ -80,7 +94,7 @@ def test_login_with_a_blank_key_keeps_the_stored_key(kn_fresh, blank):
     assert '"keen_stored_key"' in config.read_text()
 
 
-def test_blank_api_key_env_warns_and_goes_anonymous(kn_fresh):
+def test_blank_api_key_env_warns_and_goes_anonymous(kn_fresh, refuses_blank_keys):
     """Live: the request itself goes to the public endpoint."""
     r = kn_fresh("search", "rust", key=False, env={"KEENABLE_API_KEY": "  "})
     assert "KEENABLE_API_KEY is set but empty" in r.err
