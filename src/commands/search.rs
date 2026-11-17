@@ -67,6 +67,8 @@ pub struct SearchOptions {
     pub max_results: Option<u64>,
     /// Groups related calls (search and fetch) under one session.
     pub session_id: Option<String>,
+    /// What the search is for; the API logs it and does not change results.
+    pub objective: Option<String>,
 }
 
 impl SearchOptions {
@@ -80,6 +82,14 @@ impl SearchOptions {
         }
         if let Some(id) = &self.session_id {
             map.insert("session_id".into(), json!(id));
+        }
+        if let Some(objective) = self
+            .objective
+            .as_deref()
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+        {
+            map.insert("objective".into(), json!(objective));
         }
         Value::Object(map)
     }
@@ -862,11 +872,34 @@ mod tests {
     }
 
     #[test]
+    fn search_options_send_a_trimmed_objective_only_when_it_has_text() {
+        let with = SearchOptions {
+            objective: Some("  Find the 2024 CBP count for NAICS 812112.  ".into()),
+            ..Default::default()
+        }
+        .to_json();
+        assert_eq!(
+            with,
+            json!({"objective": "Find the 2024 CBP count for NAICS 812112."})
+        );
+
+        for blank in [None, Some(String::new()), Some("   ".to_string())] {
+            let without = SearchOptions {
+                objective: blank,
+                ..Default::default()
+            }
+            .to_json();
+            assert!(without.as_object().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn search_options_include_session() {
         let v = SearchOptions {
             snippet_max_length: Some(500),
             max_results: Some(5),
             session_id: Some("sess-1".into()),
+            ..Default::default()
         }
         .to_json();
         assert_eq!(
@@ -1253,6 +1286,7 @@ mod tests {
             snippet_max_length: Some(500),
             max_results: Some(20),
             session_id: None,
+            objective: None,
         };
         let body = build_search_body("rust async", Some("pro"), &f, &options);
         assert_eq!(
