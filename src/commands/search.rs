@@ -94,13 +94,56 @@ fn resolve_api_key(override_key: Option<&str>) -> Option<String> {
     config::get_api_key()
 }
 
+/// What the --api-key flag and the KEENABLE_API_KEY env var ask for.
+#[derive(Debug, PartialEq)]
+enum KeyOverride {
+    /// Use this key; bypasses the daemon (whose cached auth state may differ).
+    Key(String),
+    /// Neither is set: the stored key, or the public endpoints.
+    Unset,
+    /// KEENABLE_API_KEY is set but blank: ignored, with a warning.
+    BlankEnv,
+    /// --api-key was passed a blank value: an error, never a silent fallback
+    /// to another key or to anonymous requests.
+    BlankFlag,
+}
+
 /// Effective key override: --api-key flag, then the KEENABLE_API_KEY env var.
-/// Either bypasses the daemon (whose cached auth state may differ).
-fn key_override(flag: Option<&str>) -> Option<String> {
-    flag.map(str::to_string)
-        .or_else(|| std::env::var("KEENABLE_API_KEY").ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+fn key_override(flag: Option<&str>, env: Option<&str>) -> KeyOverride {
+    let key = |s: &str| Some(s.trim()).filter(|s| !s.is_empty()).map(str::to_string);
+    match (flag, env) {
+        (Some(flag), _) => key(flag).map_or(KeyOverride::BlankFlag, KeyOverride::Key),
+        (None, Some(env)) => key(env).map_or(KeyOverride::BlankEnv, KeyOverride::Key),
+        (None, None) => KeyOverride::Unset,
+    }
+}
+
+const BLANK_ENV_KEY_WARNING: &str = "KEENABLE_API_KEY is set but empty; ignoring it.";
+
+/// The key override for this command. A blank --api-key exits 1 in the
+/// command's own output format; a blank KEENABLE_API_KEY warns on stderr.
+fn key_override_or_exit(flag: Option<&str>, human: bool) -> Option<String> {
+    let env = std::env::var("KEENABLE_API_KEY").ok();
+    match key_override(flag, env.as_deref()) {
+        KeyOverride::Key(key) => Some(key),
+        KeyOverride::Unset => None,
+        KeyOverride::BlankEnv => {
+            ui::warning(BLANK_ENV_KEY_WARNING);
+            None
+        }
+        KeyOverride::BlankFlag => handle_api_error((blank_flag_key(), false), human),
+    }
+}
+
+fn blank_flag_key() -> ApiError {
+    ApiError {
+        error: "Empty API key".into(),
+        message: Some("--api-key was given an empty value.".into()),
+        transport_hint: Some(
+            "Pass the key itself, or leave --api-key out to use the stored key.".into(),
+        ),
+        ..Default::default()
+    }
 }
 
 fn endpoint(path: &str, authenticated: bool) -> String {
@@ -621,7 +664,7 @@ pub async fn search(
         ..Default::default()
     };
 
-    let api_key = key_override(api_key);
+    let api_key = key_override_or_exit(api_key, human);
     let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
         Ok(mut data) => {
@@ -689,7 +732,7 @@ pub async fn fetch(
         ..Default::default()
     };
 
-    let api_key = key_override(api_key);
+    let api_key = key_override_or_exit(api_key, human);
     let api_key = api_key.as_deref();
     match execute(&req, api_key).await {
         Ok(mut data) => {
@@ -1249,5 +1292,40 @@ mod tests {
                 "results": [{"url": "https://a.com", "snippet": "d"}],
             })
         );
+    }
+
+    #[test]
+    fn key_override_takes_the_flag_then_the_env() {
+        use KeyOverride::{Key, Unset};
+        assert_eq!(key_override(None, None), Unset);
+        assert_eq!(key_override(Some(" keen_f\n"), None), Key("keen_f".into()));
+        assert_eq!(key_override(None, Some(" keen_e ")), Key("keen_e".into()));
+        assert_eq!(
+            key_override(Some("keen_f"), Some("keen_e")),
+            Key("keen_f".into())
+        );
+        assert_eq!(key_override(Some("keen_f"), Some("")), Key("keen_f".into()));
+    }
+
+    #[test]
+    fn a_blank_flag_is_an_error_and_never_falls_back() {
+        use KeyOverride::{BlankEnv, BlankFlag};
+        for blank in ["", " ", "\t\n"] {
+            assert_eq!(key_override(Some(blank), None), BlankFlag, "{blank:?}");
+            // Not even to a good key in the environment.
+            assert_eq!(key_override(Some(blank), Some("keen_e")), BlankFlag);
+            assert_eq!(key_override(None, Some(blank)), BlankEnv, "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn a_blank_flag_error_is_a_local_error_with_a_hint() {
+        let err = blank_flag_key();
+        assert_eq!(err.exit_code(), 1);
+        assert_eq!(
+            err.display(),
+            "Empty API key: --api-key was given an empty value."
+        );
+        assert!(err.hint(false).unwrap().contains("leave --api-key out"));
     }
 }

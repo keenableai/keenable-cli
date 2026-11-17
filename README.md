@@ -183,6 +183,8 @@ keenable search "query"
 
 The background daemon (macOS/Linux) exits after 5 minutes idle. It restarts on its own when the proxy or certificate variables change, so there is nothing to do after changing them. Commands run with `--api-key`, `KEENABLE_API_KEY` or `-v` skip the daemon.
 
+An empty `--api-key` value (for example `--api-key "$UNSET_VAR"`) is an error with exit code 1 on `search`, `fetch` and `login`, so a missing key never silently turns into an anonymous request or replaces your saved key. An empty `KEENABLE_API_KEY` is ignored with a warning on stderr.
+
 ## Updating
 
 The CLI checks for updates automatically (once per hour). To update manually:
