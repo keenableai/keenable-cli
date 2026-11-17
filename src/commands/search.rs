@@ -132,7 +132,7 @@ const BLANK_ENV_KEY_WARNING: &str = "KEENABLE_API_KEY is set but empty; ignoring
 
 /// The key override for this command. A blank --api-key exits 1 in the
 /// command's own output format; a blank KEENABLE_API_KEY warns on stderr.
-fn key_override_or_exit(flag: Option<&str>, human: bool) -> Option<String> {
+pub(crate) fn key_override_or_exit(flag: Option<&str>, human: bool) -> Option<String> {
     let env = std::env::var("KEENABLE_API_KEY").ok();
     match key_override(flag, env.as_deref()) {
         KeyOverride::Key(key) => Some(key),
@@ -323,7 +323,7 @@ fn dates_line(item: &Value) -> Option<String> {
     (!dates.is_empty()).then(|| dates.join("  "))
 }
 
-fn print_yaml(data: &Value) {
+pub(crate) fn print_yaml(data: &Value) {
     match serde_yaml::to_string(data) {
         Ok(yaml) => ui::stdout(&yaml),
         Err(_) => ui::stdout(&format!(
@@ -403,7 +403,7 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
 
 /// The stored key belongs to another API base than the one this process
 /// talks to. Stop rather than send it there, or quietly go anonymous.
-fn stored_key_not_used(saved_for: &str) -> ApiError {
+pub(crate) fn stored_key_not_used(saved_for: &str) -> ApiError {
     let base = crate::api::api_base();
     ApiError {
         error: "Stored API key not used".into(),
@@ -537,7 +537,7 @@ fn credits_remaining_line(data: &Value) -> Option<String> {
 /// The next step comes from `ApiError::hint`, worded for the auth state the
 /// request was sent with (a structured `hint` field in YAML mode). The API's
 /// request id is shown too, so users can quote it to support.
-fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
+pub(crate) fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
     let hint = err.hint(authenticated);
 
     if human {

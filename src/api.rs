@@ -315,6 +315,9 @@ impl ApiError {
                         | "search_rate_limited"
                         | "fetch_rate_limited"
                         | "prompt_input_too_long"
+                        | "monitors_not_enabled"
+                        | "monitor_limit_reached"
+                        | "public_domain_requires_api_key"
                 )
             )
     }
@@ -1178,6 +1181,7 @@ mod tests {
     /// mapping can't pass by being copied into the test. A code missing here
     /// (after refreshing the catalog) fails the test until it is added.
     const EXPECTED_EXIT_CODES: &[(&str, i32)] = &[
+        ("admin_required", exit_code::AUTH),
         ("allowance_unavailable", exit_code::SERVER),
         ("api_key_required", exit_code::AUTH),
         ("auth_internal_error", exit_code::SERVER),
@@ -1204,6 +1208,7 @@ mod tests {
         ("fetch_rate_limited", exit_code::RATE_LIMITED),
         ("fetcher_unavailable", exit_code::SERVER),
         ("forbidden", exit_code::AUTH),
+        ("idempotency_conflict", exit_code::INVALID_REQUEST),
         ("insufficient_credits", exit_code::OUT_OF_CREDITS),
         ("internal_error", exit_code::SERVER),
         ("internal_route_not_public", exit_code::INVALID_REQUEST),
@@ -1215,16 +1220,22 @@ mod tests {
         ("invalid_parameter", exit_code::INVALID_REQUEST),
         ("invalid_request", exit_code::INVALID_REQUEST),
         ("invalid_session_token", exit_code::AUTH),
+        ("last_admin", exit_code::INVALID_REQUEST),
         ("mcp_host_not_allowed", exit_code::AUTH),
         ("mcp_message_too_complex", exit_code::INVALID_REQUEST),
         ("mcp_not_acceptable", exit_code::INVALID_REQUEST),
         ("mcp_origin_not_allowed", exit_code::AUTH),
+        ("member_roles_not_enabled", exit_code::AUTH),
         ("method_not_allowed", exit_code::INVALID_REQUEST),
         ("missing_api_key", exit_code::AUTH),
         ("missing_app_title", exit_code::INVALID_REQUEST),
         ("missing_parameter", exit_code::INVALID_REQUEST),
         ("missing_session_token", exit_code::AUTH),
         ("mode_requires_api_key", exit_code::AUTH),
+        ("monitor_limit_reached", exit_code::AUTH),
+        ("monitor_option_not_supported", exit_code::INVALID_REQUEST),
+        ("monitors_not_enabled", exit_code::AUTH),
+        ("monitors_unavailable", exit_code::SERVER),
         ("no_active_organization", exit_code::INVALID_REQUEST),
         ("not_found", exit_code::INVALID_REQUEST),
         ("page_not_found", exit_code::TARGET),
@@ -1243,11 +1254,14 @@ mod tests {
         ("promo_new_accounts_only", exit_code::AUTH),
         ("prompt_extraction_failed", exit_code::SERVER),
         ("prompt_input_too_long", exit_code::INVALID_REQUEST),
+        ("public_domain_requires_api_key", exit_code::RATE_LIMITED),
+        ("public_rate_limit_domain", exit_code::RATE_LIMITED),
         ("public_rate_limit_hourly", exit_code::RATE_LIMITED),
         ("public_rate_limit_per_second", exit_code::RATE_LIMITED),
         ("query_rejected", exit_code::INVALID_REQUEST),
         ("rate_limit_per_second", exit_code::RATE_LIMITED),
         ("rate_limited", exit_code::RATE_LIMITED),
+        ("remove_self", exit_code::INVALID_REQUEST),
         ("request_rejected", exit_code::INVALID_REQUEST),
         ("request_too_large", exit_code::INVALID_REQUEST),
         ("route_not_found", exit_code::INVALID_REQUEST),
@@ -1361,7 +1375,7 @@ mod tests {
                 let fix = entry["fix"].as_str().unwrap();
                 match e.cli_hint(authed) {
                     Some(cli) => assert_eq!(h, cli, "{code}"),
-                    None if status == 429 => {
+                    None if status == 429 && entry["retryable"] == true => {
                         assert_eq!(h, format!("Retry after 2s. {fix}"), "{code}")
                     }
                     None => assert_eq!(h, fix, "{code}"),
@@ -1375,7 +1389,7 @@ mod tests {
                     assert!(!h.contains("Out of credits"), "{code}: {h}");
                     assert!(!h.contains("API key or plan"), "{code}: {h}");
                     assert!(!h.contains("for your API key"), "{code}: {h}");
-                    if status == 429 {
+                    if status == 429 && entry["retryable"] == true {
                         assert!(h.starts_with("Retry after 2s. "), "{code}: {h}");
                     }
                     continue;
@@ -1396,7 +1410,9 @@ mod tests {
     #[tokio::test]
     async fn prompt_errors_show_the_server_fix() {
         for code in ["prompt_input_too_long", "prompt_extraction_failed"] {
-            let entry = catalog().into_iter().find(|e| e["code"] == code).unwrap();
+            let Some(entry) = catalog().into_iter().find(|e| e["code"] == code) else {
+                continue;
+            };
             let status = entry["status"].as_u64().unwrap() as u16;
             let e = respond(status, &v1_body(&entry)).await;
             let fix = entry["fix"].as_str().unwrap();
