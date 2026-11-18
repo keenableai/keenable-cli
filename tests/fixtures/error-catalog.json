@@ -1,5 +1,17 @@
 [
   {
+    "code": "admin_required",
+    "type": "permission_error",
+    "status": 403,
+    "title": "Admin required",
+    "summary": "Only an admin of this organization can do this; the caller is a member.",
+    "fix": "Only an admin of this organization can do this, and this account is a member. Ask an admin (Team page in the console) to do it or to make this account an admin. Retrying from this account returns the same 403.",
+    "retryable": false,
+    "docs_anchor": "admin-required",
+    "docs_url": "https://docs.keenable.ai/errors#admin-required",
+    "since": "2026-11"
+  },
+  {
     "code": "allowance_unavailable",
     "type": "api_error",
     "status": 503,
@@ -312,6 +324,18 @@
     "since": "2026-11"
   },
   {
+    "code": "idempotency_conflict",
+    "type": "invalid_request_error",
+    "status": 409,
+    "title": "Idempotency key reused",
+    "summary": "The Idempotency-Key was already used with a different request body.",
+    "fix": "This Idempotency-Key was already used with a different request body. Send a new key for a new request, or resend the original body to get the original result.",
+    "retryable": false,
+    "docs_anchor": "idempotency-conflict",
+    "docs_url": "https://docs.keenable.ai/errors#idempotency-conflict",
+    "since": "2026-11"
+  },
+  {
     "code": "insufficient_credits",
     "type": "billing_error",
     "status": 402,
@@ -444,6 +468,18 @@
     "since": "2026-11"
   },
   {
+    "code": "last_admin",
+    "type": "invalid_request_error",
+    "status": 409,
+    "title": "Last admin",
+    "summary": "The change would leave the organization without an admin.",
+    "fix": "An organization always keeps at least one admin, and this change would remove the last one. Make someone else an admin first, then retry.",
+    "retryable": false,
+    "docs_anchor": "last-admin",
+    "docs_url": "https://docs.keenable.ai/errors#last-admin",
+    "since": "2026-11"
+  },
+  {
     "code": "mcp_host_not_allowed",
     "type": "permission_error",
     "status": 403,
@@ -489,6 +525,18 @@
     "retryable": false,
     "docs_anchor": "mcp-origin-not-allowed",
     "docs_url": "https://docs.keenable.ai/errors#mcp-origin-not-allowed",
+    "since": "2026-11"
+  },
+  {
+    "code": "member_roles_not_enabled",
+    "type": "permission_error",
+    "status": 403,
+    "title": "Roles not enabled",
+    "summary": "Admin and member roles are not turned on for this organization.",
+    "fix": "Admin and member roles are not turned on for this organization, so everyone in it can already do everything. Contact us to turn them on.",
+    "retryable": false,
+    "docs_anchor": "member-roles-not-enabled",
+    "docs_url": "https://docs.keenable.ai/errors#member-roles-not-enabled",
     "since": "2026-11"
   },
   {
@@ -561,6 +609,54 @@
     "retryable": false,
     "docs_anchor": "mode-requires-api-key",
     "docs_url": "https://docs.keenable.ai/errors#mode-requires-api-key",
+    "since": "2026-11"
+  },
+  {
+    "code": "monitor_limit_reached",
+    "type": "permission_error",
+    "status": 403,
+    "title": "Active monitor limit reached",
+    "summary": "The organization already has the most active monitors it may have.",
+    "fix": "The organization already has the most active monitors it may have; the message gives the limit. Pause or delete a monitor (PATCH status \"paused\", or DELETE), then retry.",
+    "retryable": false,
+    "docs_anchor": "monitor-limit-reached",
+    "docs_url": "https://docs.keenable.ai/errors#monitor-limit-reached",
+    "since": "2026-11"
+  },
+  {
+    "code": "monitor_option_not_supported",
+    "type": "invalid_request_error",
+    "status": 400,
+    "title": "Monitor option not supported",
+    "summary": "The monitor request uses an option Monitors does not offer yet; the message names it.",
+    "fix": "The monitor request uses an option Monitors does not offer yet: read \"message\" for its name, remove it and retry. Retrying unchanged returns the same 400.",
+    "retryable": false,
+    "docs_anchor": "monitor-option-not-supported",
+    "docs_url": "https://docs.keenable.ai/errors#monitor-option-not-supported",
+    "since": "2026-11"
+  },
+  {
+    "code": "monitors_not_enabled",
+    "type": "permission_error",
+    "status": 403,
+    "title": "Monitors not enabled",
+    "summary": "Monitors is turned off for this organization.",
+    "fix": "Monitors is turned off for this organization. Contact support@keenable.ai to turn it on. Retrying returns the same 403.",
+    "retryable": false,
+    "docs_anchor": "monitors-not-enabled",
+    "docs_url": "https://docs.keenable.ai/errors#monitors-not-enabled",
+    "since": "2026-11"
+  },
+  {
+    "code": "monitors_unavailable",
+    "type": "api_error",
+    "status": 503,
+    "title": "Monitors temporarily unavailable",
+    "summary": "The Monitors service did not answer just now.",
+    "fix": "The Monitors service did not answer just now; the request may not have been applied. Wait a few seconds and retry; send an Idempotency-Key with creates so a retry cannot make a second monitor.",
+    "retryable": true,
+    "docs_anchor": "monitors-unavailable",
+    "docs_url": "https://docs.keenable.ai/errors#monitors-unavailable",
     "since": "2026-11"
   },
   {
@@ -756,27 +852,27 @@
     "since": "2026-11"
   },
   {
-    "code": "prompt_extraction_failed",
-    "type": "api_error",
-    "status": 502,
-    "title": "Prompt extraction failed",
-    "summary": "The page was fetched, but running the prompt over it failed on the Keenable side.",
-    "fix": "The page was fetched, but running your prompt over it failed on our side; the URL is not the cause. Retry once. If it fails again, fetch the page without prompt and read the content yourself.",
-    "retryable": true,
-    "docs_anchor": "prompt-extraction-failed",
-    "docs_url": "https://docs.keenable.ai/errors#prompt-extraction-failed",
+    "code": "public_domain_requires_api_key",
+    "type": "rate_limit_error",
+    "status": 429,
+    "title": "API key required for this site",
+    "summary": "Keyless requests that target a restricted site (PUBLIC_BLOCKED_REQUEST_DOMAINS) are not served; they need an API key.",
+    "fix": "Requests that target this site need an API key. Run `keenable login`, or create a free API key at https://app.keenable.ai/console/api-keys and call /v1/search or /v1/fetch with it in the X-API-Key header. Retrying without a key returns 429 again. No account yet? Sign up at https://app.keenable.ai/signup: the free API key includes 100,000 requests a month.",
+    "retryable": false,
+    "docs_anchor": "public-domain-requires-api-key",
+    "docs_url": "https://docs.keenable.ai/errors#public-domain-requires-api-key",
     "since": "2026-11"
   },
   {
-    "code": "prompt_input_too_long",
-    "type": "invalid_request_error",
-    "status": 422,
-    "title": "Page too long for a prompt",
-    "summary": "The page is longer than a fetch prompt can cover.",
-    "fix": "The page is longer than a fetch prompt can cover, so the same URL with a prompt fails the same way. Fetch it without prompt (max_chars caps the size), or fetch a more specific page.",
-    "retryable": false,
-    "docs_anchor": "prompt-input-too-long",
-    "docs_url": "https://docs.keenable.ai/errors#prompt-input-too-long",
+    "code": "public_rate_limit_domain",
+    "type": "rate_limit_error",
+    "status": 429,
+    "title": "Rate limit exceeded",
+    "summary": "The per-second limit for keyless requests that target a restricted site, shared by every keyless caller, was exceeded.",
+    "fix": "Send an API key (create one at https://app.keenable.ai/console/api-keys) to /v1/search or /v1/fetch: keyed requests are not under this limit. Otherwise wait for Retry-After and retry. No account yet? Sign up at https://app.keenable.ai/signup: the free API key includes 100,000 requests a month.",
+    "retryable": true,
+    "docs_anchor": "public-rate-limit-domain",
+    "docs_url": "https://docs.keenable.ai/errors#public-rate-limit-domain",
     "since": "2026-11"
   },
   {
@@ -821,7 +917,7 @@
     "status": 429,
     "title": "Rate limit exceeded",
     "summary": "The organization's requests-per-second limit, shared by all its keys, was exceeded.",
-    "fix": "Wait for Retry-After, retry, and keep under your organization's per-second limit. To raise it, top up $1,000 or more within 90 days for 25 requests per second for 90 days at https://app.keenable.ai/console/billing?tab=limits; for more, talk to the team at https://keenable.ai/contact.",
+    "fix": "Wait for Retry-After, then retry, and keep under your organization's per-second limit. For a higher limit, upgrade at https://app.keenable.ai/console/billing?tab=limits.",
     "retryable": true,
     "docs_anchor": "rate-limit-per-second",
     "docs_url": "https://docs.keenable.ai/errors#rate-limit-per-second",
@@ -837,6 +933,18 @@
     "retryable": true,
     "docs_anchor": "rate-limited",
     "docs_url": "https://docs.keenable.ai/errors#rate-limited",
+    "since": "2026-11"
+  },
+  {
+    "code": "remove_self",
+    "type": "invalid_request_error",
+    "status": 409,
+    "title": "Cannot remove yourself",
+    "summary": "An admin tried to remove their own account from the organization.",
+    "fix": "An admin cannot remove their own account. Ask another admin to remove it.",
+    "retryable": false,
+    "docs_anchor": "remove-self",
+    "docs_url": "https://docs.keenable.ai/errors#remove-self",
     "since": "2026-11"
   },
   {

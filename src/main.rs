@@ -210,6 +210,12 @@ enum Commands {
         api_key: Option<String>,
     },
 
+    /// Watch the web for new pages about a topic (outputs YAML by default, use -p for pretty output)
+    #[command(
+        after_help = "A monitor is a standing query: every newly crawled page that is news about its topic is kept as a\npage of that monitor, and sent to your webhook or returned in scheduled runs. Needs an API key\n(run `keenable login`). Monitors are free for now; an organization holds up to 100 active monitors.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d     Daily runs\n  keenable monitors create \"EU AI Act enforcement\" --webhook https://example.com/hook --event monitor.hit\n                                                                          Each page to a webhook as it is found\n  keenable monitors list -p                                               Your organization's monitors\n  keenable monitors pages mon_123 --min-importance 4 -p                   The important pages it found\n  keenable monitors pause mon_123                                         Stop it for a while\n  keenable monitors delete mon_123 --yes                                  Delete it and its pages\n\nDocs: https://docs.keenable.ai/products/monitors\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   7 network   8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
+    )]
+    Monitors(Box<MonitorsArgs>),
+
     /// Update keenable to the latest version
     #[command(
         after_help = "Downloads and installs the latest release from GitHub.\nWorks for installs made with the Keenable installer scripts.\nHomebrew installs: use `brew update && brew upgrade keenable-cli` instead.\n\nExamples:\n  keenable update       Update to the latest version\n  keenable --version    Show the current version"
@@ -219,6 +225,285 @@ enum Commands {
     /// Run the background daemon (internal, auto-started)
     #[command(hide = true)]
     Daemon,
+}
+
+#[derive(clap::Args)]
+struct MonitorsArgs {
+    #[command(subcommand)]
+    action: MonitorsAction,
+
+    /// Pretty-print output for humans instead of YAML
+    #[arg(short = 'p', long = "pretty", global = true)]
+    pretty: bool,
+
+    /// API key (overrides stored key)
+    #[arg(long = "api-key", global = true)]
+    api_key: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct ScheduleFlags {
+    /// Run at this interval, from 1h to 90d (e.g. 6h, 1d, 7d)
+    #[arg(long, value_name = "INTERVAL", conflicts_with_all = ["cron", "once"])]
+    every: Option<String>,
+
+    /// Run on this five-field cron expression, at most hourly (e.g. "0 9 * * 1-5")
+    #[arg(long, value_name = "EXPR", conflicts_with = "once")]
+    cron: Option<String>,
+
+    /// IANA time zone for --cron (default UTC)
+    #[arg(long, value_name = "TZ", requires = "cron")]
+    timezone: Option<String>,
+
+    /// Run once: "now", a delay such as 2h, or a timestamp such as 2026-12-01T12:00:00Z
+    #[arg(long, value_name = "WHEN")]
+    once: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct MonitorFlags {
+    /// A name for the monitor
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Pages a run returns at most (1-100, default 10)
+    #[arg(long = "max-results", value_parser = clap::value_parser!(u64).range(1..=100))]
+    max_results: Option<u64>,
+
+    /// Only pages on these sites. Repeatable, or a comma list
+    #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
+    include_domains: Vec<String>,
+
+    /// Never pages on these sites. Repeatable, or a comma list
+    #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
+    exclude_domains: Vec<String>,
+
+    /// Also return each page's text (first 6,000 characters, kept 3 days)
+    #[arg(long)]
+    text: bool,
+
+    #[command(flatten)]
+    schedule: ScheduleFlags,
+
+    /// Send events to this public HTTPS address
+    #[arg(long, value_name = "URL")]
+    webhook: Option<String>,
+
+    /// Webhook events to send (default: the monitor.* and monitor.run.* events; add monitor.hit for each page as it is found). Repeatable, or a comma list
+    #[arg(long = "event", value_name = "EVENT", value_delimiter = ',')]
+    events: Vec<String>,
+
+    /// Your own tag, echoed in every webhook (key=value, repeatable)
+    #[arg(long, value_name = "KEY=VALUE", value_parser = commands::monitors::parse_metadata)]
+    metadata: Vec<(String, String)>,
+}
+
+impl MonitorFlags {
+    fn fields(
+        self,
+        query: Option<String>,
+        remove_schedule: bool,
+        remove_webhook: bool,
+    ) -> commands::monitors::MonitorFields {
+        let s = self.schedule;
+        commands::monitors::MonitorFields {
+            query,
+            name: self.name,
+            max_results: self.max_results,
+            include_domains: self.include_domains,
+            exclude_domains: self.exclude_domains,
+            text: self.text,
+            schedule: commands::monitors::ScheduleArg::from_flags(
+                s.every,
+                s.cron,
+                s.timezone,
+                s.once,
+                remove_schedule,
+            ),
+            webhook: self.webhook,
+            events: self.events,
+            remove_webhook,
+            metadata: self.metadata,
+            status: None,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum MonitorsAction {
+    /// Create a monitor
+    #[command(
+        after_help = "The monitor starts empty: it matches only pages crawled after it is created.\nWithout a schedule, runs happen only with `keenable monitors trigger`.\nThe answer carries webhook.secret (whsec_...) once: store it to check signatures.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d\n  keenable monitors create \"Series A rounds in robotics\" --cron \"0 9 * * 1-5\" --timezone Europe/Paris\n  keenable monitors create \"Rust releases\" --include-domain blog.rust-lang.org --max-results 5\n  keenable monitors create \"CVE in OpenSSL\" --webhook https://example.com/hook --event monitor.hit\n  keenable monitors create \"q\" --idempotency-key run-42      Safe to retry: the same key returns the same monitor"
+    )]
+    Create {
+        /// The topic in plain words, e.g. "new open-weights LLM releases"
+        query: String,
+
+        #[command(flatten)]
+        flags: MonitorFlags,
+
+        /// Make a retry safe: within 24 hours the same key and body return the monitor the first call created
+        #[arg(long = "idempotency-key", value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+
+    /// List your organization's monitors, newest first
+    #[command(
+        after_help = "Examples:\n  keenable monitors list\n  keenable monitors list --status active -p\n  keenable monitors list --name robotics --limit 5"
+    )]
+    List {
+        /// Only monitors with this status
+        #[arg(long, value_parser = ["active", "paused", "disabled", "completed"])]
+        status: Option<String>,
+
+        /// Only monitors whose name contains this
+        #[arg(long)]
+        name: Option<String>,
+
+        /// How many to return (1-100, default 50)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=100))]
+        limit: Option<u64>,
+
+        /// next_cursor of the previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+
+    /// Show one monitor
+    #[command(after_help = "Example:\n  keenable monitors get mon_123 -p")]
+    Get {
+        /// The monitor's id (mon_...)
+        id: String,
+    },
+
+    /// Change a monitor's name, query, schedule, sites or webhook
+    #[command(
+        after_help = "Only the flags you pass change; the rest stays.\n\nExamples:\n  keenable monitors update mon_123 --query \"open-weights LLM releases and benchmarks\"\n  keenable monitors update mon_123 --every 6h\n  keenable monitors update mon_123 --no-schedule            Run only when triggered\n  keenable monitors update mon_123 --no-webhook             Stop sending events"
+    )]
+    Update {
+        /// The monitor's id (mon_...)
+        id: String,
+
+        /// A new topic
+        #[arg(long)]
+        query: Option<String>,
+
+        #[command(flatten)]
+        flags: MonitorFlags,
+
+        /// Remove the schedule: runs happen only with `keenable monitors trigger`
+        #[arg(long = "no-schedule", conflicts_with_all = ["every", "cron", "once"])]
+        no_schedule: bool,
+
+        /// Remove the webhook
+        #[arg(long = "no-webhook", conflicts_with_all = ["webhook", "events"])]
+        no_webhook: bool,
+    },
+
+    /// Pause a monitor: it stops matching pages until resumed
+    #[command(after_help = "Example:\n  keenable monitors pause mon_123")]
+    Pause {
+        /// The monitor's id (mon_...)
+        id: String,
+    },
+
+    /// Resume a paused monitor
+    #[command(after_help = "Example:\n  keenable monitors resume mon_123")]
+    Resume {
+        /// The monitor's id (mon_...)
+        id: String,
+    },
+
+    /// Delete a monitor and every page it found (cannot be undone)
+    #[command(
+        after_help = "Asks first; without a terminal it needs --yes. To stop a monitor for a while, pause it instead.\n\nExamples:\n  keenable monitors delete mon_123\n  keenable monitors delete mon_123 --yes"
+    )]
+    Delete {
+        /// The monitor's id (mon_...)
+        id: String,
+
+        /// Delete without asking
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Start a run now, outside the schedule
+    #[command(
+        after_help = "The run collects the pages matched since the previous run. Check it with `keenable monitors run <id> <run_id>`.\n\nExample:\n  keenable monitors trigger mon_123"
+    )]
+    Trigger {
+        /// The monitor's id (mon_...)
+        id: String,
+    },
+
+    /// List a monitor's runs, newest first
+    #[command(
+        after_help = "Examples:\n  keenable monitors runs mon_123 -p\n  keenable monitors runs mon_123 --limit 1"
+    )]
+    Runs {
+        /// The monitor's id (mon_...)
+        id: String,
+
+        /// How many to return (1-100, default 50)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=100))]
+        limit: Option<u64>,
+
+        /// next_cursor of the previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+
+    /// Show one run and its pages
+    #[command(after_help = "Example:\n  keenable monitors run mon_123 run_456 -p")]
+    Run {
+        /// The monitor's id (mon_...)
+        id: String,
+
+        /// The run's id
+        run_id: String,
+    },
+
+    /// List the pages a monitor found, newest first (its last 500)
+    #[command(
+        after_help = "One page per story: same_story counts the copies left out.\n\nExamples:\n  keenable monitors pages mon_123 -p\n  keenable monitors pages mon_123 --min-importance 4      Only the pages not to be missed"
+    )]
+    Pages {
+        /// The monitor's id (mon_...)
+        id: String,
+
+        /// How many to return (1-100, default 50)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=100))]
+        limit: Option<u64>,
+
+        /// next_cursor of the previous page
+        #[arg(long)]
+        cursor: Option<String>,
+
+        /// Only pages rated at least this important to the topic (1-5)
+        #[arg(long = "min-importance", value_parser = clap::value_parser!(u8).range(1..=5))]
+        min_importance: Option<u8>,
+    },
+
+    /// List a monitor's webhook deliveries of the last 7 days
+    #[command(
+        after_help = "The place to look when a webhook seems quiet.\n\nExample:\n  keenable monitors deliveries mon_123 -p"
+    )]
+    Deliveries {
+        /// The monitor's id (mon_...)
+        id: String,
+
+        /// How many to return (1-100, default 50)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=100))]
+        limit: Option<u64>,
+
+        /// next_cursor of the previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+
+    /// Count your organization's monitors by status and schedule
+    #[command(after_help = "Example:\n  keenable monitors stats -p")]
+    Stats,
 }
 
 #[derive(clap::Args)]
@@ -324,6 +609,86 @@ fn collect_client_flags(
         .collect()
 }
 
+async fn run_monitors(action: MonitorsAction, human: bool, api_key: Option<&str>) {
+    use commands::monitors::{self as m, View};
+    let (call, view) = match action {
+        MonitorsAction::Create {
+            query,
+            flags,
+            idempotency_key,
+        } => {
+            m::create(
+                flags.fields(Some(query), false, false),
+                idempotency_key,
+                human,
+                api_key,
+            )
+            .await;
+            return;
+        }
+        MonitorsAction::Delete { id, yes } => {
+            m::delete(&id, yes, human, api_key).await;
+            return;
+        }
+        MonitorsAction::List {
+            status,
+            name,
+            limit,
+            cursor,
+        } => (m::list_call(status, name, limit, cursor), View::Monitors),
+        MonitorsAction::Get { id } => (m::get_call(&id), View::Monitor),
+        MonitorsAction::Update {
+            id,
+            query,
+            flags,
+            no_schedule,
+            no_webhook,
+        } => {
+            let fields = flags.fields(query, no_schedule, no_webhook);
+            if m::monitor_body(&fields, false)
+                .as_object()
+                .is_some_and(|b| b.is_empty())
+            {
+                use clap::CommandFactory;
+                let mut cli = Cli::command();
+                cli.build();
+                let update = cli
+                    .find_subcommand_mut("monitors")
+                    .and_then(|c| c.find_subcommand_mut("update"))
+                    .expect("monitors update is a subcommand");
+                update
+                    .error(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "nothing to change: pass at least one flag (see `keenable monitors update --help`)",
+                    )
+                    .exit();
+            }
+            (m::update_call(&id, &fields), View::Monitor)
+        }
+        MonitorsAction::Pause { id } => (m::status_call(&id, "paused"), View::Monitor),
+        MonitorsAction::Resume { id } => (m::status_call(&id, "active"), View::Monitor),
+        MonitorsAction::Trigger { id } => (m::trigger_call(&id), View::Run),
+        MonitorsAction::Runs { id, limit, cursor } => {
+            (m::runs_call(&id, limit, cursor), View::Runs)
+        }
+        MonitorsAction::Run { id, run_id } => (m::run_call(&id, &run_id), View::Run),
+        MonitorsAction::Pages {
+            id,
+            limit,
+            cursor,
+            min_importance,
+        } => (
+            m::pages_call(&id, limit, cursor, min_importance),
+            View::Pages,
+        ),
+        MonitorsAction::Deliveries { id, limit, cursor } => {
+            (m::deliveries_call(&id, limit, cursor), View::Deliveries)
+        }
+        MonitorsAction::Stats => (m::stats_call(), View::Plain),
+    };
+    m::run(call, view, human, api_key).await;
+}
+
 /// Fail fast on an invalid `KEENABLE_API_URL` before any command talks to
 /// the API. Agent-facing output (search/fetch without `-p`) also gets the
 /// error as YAML on stdout, like API errors.
@@ -331,6 +696,7 @@ fn check_api_base(command: &Commands) {
     let yaml = match command {
         Commands::Search(args) => !args.pretty,
         Commands::Fetch { pretty, .. } => !*pretty,
+        Commands::Monitors(args) => !args.pretty,
         Commands::Login { .. } | Commands::ConfigureMcp { .. } | Commands::Daemon => false,
         _ => return,
     };
@@ -367,6 +733,7 @@ async fn run() {
     let wants_update_check = match &cli.command {
         Commands::Search(args) => args.pretty,
         Commands::Fetch { pretty, .. } => *pretty,
+        Commands::Monitors(args) => args.pretty,
         Commands::Daemon | Commands::Update => false,
         _ => true,
     };
@@ -451,6 +818,14 @@ async fn run() {
                 api_key.as_deref(),
             )
             .await;
+        }
+        Commands::Monitors(args) => {
+            let MonitorsArgs {
+                action,
+                pretty,
+                api_key,
+            } = *args;
+            run_monitors(action, pretty, api_key.as_deref()).await;
         }
         Commands::Update => {
             commands::update_cmd::update().await;
@@ -591,6 +966,127 @@ mod tests {
                 "published_before": "2025-01-01",
                 "query_time": "2026-05-01T00:00:00Z",
             })
+        );
+    }
+
+    fn monitors_action(args: &[&str]) -> MonitorsAction {
+        let argv = ["keenable", "monitors"].iter().chain(args);
+        let Commands::Monitors(parsed) = Cli::try_parse_from(argv).expect("args parse").command
+        else {
+            panic!("expected the monitors subcommand");
+        };
+        parsed.action
+    }
+
+    #[test]
+    fn monitors_create_flags_become_the_v1_body() {
+        let MonitorsAction::Create {
+            query,
+            flags,
+            idempotency_key,
+        } = monitors_action(&[
+            "create",
+            "open-weights LLM releases",
+            "--every",
+            "1d",
+            "--max-results",
+            "5",
+            "--exclude-domain",
+            "a.com,b.com",
+            "--webhook",
+            "https://example.com/h",
+            "--event",
+            "monitor.hit",
+            "--idempotency-key",
+            "k1",
+        ])
+        else {
+            panic!("expected create");
+        };
+        assert_eq!(idempotency_key.as_deref(), Some("k1"));
+        let body = commands::monitors::monitor_body(&flags.fields(Some(query), false, false), true);
+        assert_eq!(
+            body,
+            json!({
+                "search": {"query": "open-weights LLM releases", "max_results": 5, "exclude_domains": ["a.com", "b.com"]},
+                "schedule": {"type": "interval", "value": "1d"},
+                "webhook": {"url": "https://example.com/h", "events": ["monitor.hit"]}
+            })
+        );
+    }
+
+    #[test]
+    fn monitors_schedule_flags_exclude_each_other() {
+        let argv = [
+            "keenable",
+            "monitors",
+            "create",
+            "q",
+            "--every",
+            "1d",
+            "--cron",
+            "0 9 * * *",
+        ];
+        assert!(Cli::try_parse_from(argv).is_err());
+        let argv = [
+            "keenable",
+            "monitors",
+            "create",
+            "q",
+            "--timezone",
+            "Europe/Paris",
+        ];
+        assert!(
+            Cli::try_parse_from(argv).is_err(),
+            "--timezone needs --cron"
+        );
+        let argv = [
+            "keenable",
+            "monitors",
+            "update",
+            "mon_1",
+            "--no-schedule",
+            "--every",
+            "1d",
+        ];
+        assert!(Cli::try_parse_from(argv).is_err());
+    }
+
+    #[test]
+    fn monitors_global_flags_go_after_the_subcommand() {
+        let argv = ["keenable", "monitors", "list", "-p", "--api-key", "keen_x"];
+        let Commands::Monitors(args) = Cli::try_parse_from(argv).unwrap().command else {
+            panic!("expected monitors");
+        };
+        assert!(args.pretty);
+        assert_eq!(args.api_key.as_deref(), Some("keen_x"));
+    }
+
+    #[test]
+    fn monitors_limits_are_checked_locally() {
+        assert!(
+            Cli::try_parse_from([
+                "keenable",
+                "monitors",
+                "pages",
+                "m",
+                "--min-importance",
+                "6"
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["keenable", "monitors", "list", "--limit", "0"]).is_err());
+        assert!(Cli::try_parse_from(["keenable", "monitors", "list", "--status", "gone"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "keenable",
+                "monitors",
+                "create",
+                "q",
+                "--metadata",
+                "novalue"
+            ])
+            .is_err()
         );
     }
 }

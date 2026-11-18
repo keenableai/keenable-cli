@@ -41,6 +41,7 @@ src/
     configure_mcp.rs   # Client detection, MCP configuration, interactive setup
     reset.rs           # Remove Keenable MCP and restore defaults
     search.rs          # search, fetch commands
+    monitors.rs        # monitors subcommands (/v1/monitors), direct HTTP, never through the daemon
     update_cmd.rs      # Self-update via axoupdater (needs the installer's receipt)
 assets/
   login_success.html   # Styled OAuth callback success page
@@ -70,6 +71,17 @@ keenable search "query" --api-key keen_***_*****    # Use specific API key
 ```
 
 Management commands (`login`, `logout`, `configure-mcp`, `config`) always output human-readable text.
+
+### Monitors Command (`src/commands/monitors.rs`)
+
+`keenable monitors <create|list|get|update|pause|resume|delete|trigger|runs|run|pages|deliveries|stats>` calls the Monitors API at `/v1/monitors` (backend-ts forwards it to keenable-monitors). Like search/fetch: YAML on stdout by default, `-p` for a readable view on stderr, `--api-key` / `KEENABLE_API_KEY` override, the same `handle_api_error` output and exit codes. Unlike them:
+
+- **A key is required.** There is no public endpoint: without a key (or with only another base's stored key) the command stops before any request with an `authentication_error` (exit 3) and a `keenable login` hint.
+- **Never through the daemon.** The daemon's failure path retries a request directly, which `execute` allows because search and fetch are reads; a create, update or delete sent twice would act twice. Monitor calls are rare, so connection reuse buys nothing.
+- **Flags map to the v1 body** in `monitor_body`: `--every` / `--cron` (+ `--timezone`) / `--once` are `schedule`, `--no-schedule` and `--no-webhook` send `null`, `update` sends only the flags given. Ids are percent-encoded so they stay one path segment.
+- **`delete` confirms** with a prompt; without a terminal on stdin and stderr, or when the prompt fails, it refuses (exit 1) unless `--yes`. Only an answered "no" exits 0.
+- **`update` with no flags** is a usage error (exit 2), not an empty PATCH.
+- `pages` is the API's `/hits`.
 
 ### Config Command (`src/commands/config_cmd.rs`)
 
@@ -193,7 +205,7 @@ Build every HTTP client through `net::client_builder()` (or the `api::api_key_cl
 - In YAML mode, errors are output as structured YAML to stdout, plus a one-line `error: ...` summary on stderr (`ui::error_line`: never wrapped, never styled) so scripts that only watch stderr see the failure. The YAML keys: `error`, `type`, `code`, `message`, `fix`, `retry_after`, `rate_limit_reset` (the API's `X-RateLimit-Reset` on a 429), `docs_url`, `request_id` (the API's `X-Request-Id`, for support), `cause` (transport errors only), and a `hint` with the next step. `type`/`code`/`fix`/`docs_url` appear only when the server sent them; the legacy keys never change
 - In pretty mode, errors use `ui::error()` + `ui::hint()` to stderr, plus `Docs: …` and `Request ID: …` hints when the API sent them
 - The vendored backend catalog (`tests/fixtures/error-catalog.json`, a copy of the backend's `docs/error-catalog.json`) drives the error tests in `api.rs`; refresh it by copying the backend file over it
-- Hints come from `ApiError::hint(authenticated)`. The CLI's own hint, by status, comes first (it names CLI commands such as `keenable login`); the server's `fix` fills in only for statuses the CLI has no hint for, and replaces the CLI hint for codes whose cause the status hint gets wrong (`ApiError::status_hint_misleads`: any `target_error`, `private_url_not_allowed`, `payment_required`, `payment_settlement_failed`, the Keenable-side 429s `search_rate_limited` and `fetch_rate_limited`, and `prompt_input_too_long`, a 422 caused by the page's length rather than the request) when the server sent a `fix`. A 429 that takes the server `fix` leads with the retry time ("Retry after 2s. …"). `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
+- Hints come from `ApiError::hint(authenticated)`. The CLI's own hint, by status, comes first (it names CLI commands such as `keenable login`); the server's `fix` fills in only for statuses the CLI has no hint for, and replaces the CLI hint for codes whose cause the status hint gets wrong (`ApiError::status_hint_misleads`: any `target_error`, `private_url_not_allowed`, `payment_required`, `payment_settlement_failed`, the Keenable-side 429s `search_rate_limited` and `fetch_rate_limited`, and `prompt_input_too_long`, a 422 caused by the page's length rather than the request, `public_domain_requires_api_key`, a 429 that only a key fixes, and the Monitors 403s `monitors_not_enabled` and `monitor_limit_reached`, which are not the key's or plan's fault) when the server sent a `fix`. A 429 that takes the server `fix` leads with the retry time ("Retry after 2s. …"). `authenticated` is whether the failed request was sent with a key, captured at send time (the direct path knows which key it used; the daemon adds `authenticated` to forwarded errors), never re-read from config afterwards (except for daemons too old to report it), so a concurrent login/logout can't flip the hint:
   - 401 / 400 "Authentication failed" → `keenable login`
   - 400 / 422 → fix the request (the message says what was rejected); retrying unchanged fails
   - 402 → out of credits, add credits at https://keenable.ai/console
