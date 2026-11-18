@@ -380,37 +380,45 @@ pub fn stats_call() -> Call {
     Call::new(Method::GET, "/v1/monitors/stats".into())
 }
 
+/// The refusal for a delete that could not be confirmed.
+fn confirmation_required(id: &str) -> ApiError {
+    ApiError {
+        error: "Confirmation required".into(),
+        message: Some(format!(
+            "Deleting {} removes the monitor and every page it found.",
+            ui::one_line(id)
+        )),
+        transport_hint: Some(
+            "Pass --yes to delete without asking, or pause it instead: keenable monitors pause <id>."
+                .into(),
+        ),
+        ..Default::default()
+    }
+}
+
 /// Run `delete`, after a confirmation unless `yes`. Without a terminal to
-/// ask on, it stops instead of deleting.
+/// ask on (stdin and stderr), or when the prompt fails, it stops with exit 1
+/// instead of deleting; only an answered "no" exits 0.
 pub async fn delete(id: &str, yes: bool, human: bool, api_key: Option<&str>) {
     if !yes {
         use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            let err = ApiError {
-                error: "Confirmation required".into(),
-                message: Some(format!(
-                    "Deleting {} removes the monitor and every page it found.",
-                    ui::one_line(id)
-                )),
-                transport_hint: Some(
-                    "Pass --yes to delete without asking, or pause it instead: keenable monitors pause <id>."
-                        .into(),
-                ),
-                ..Default::default()
-            };
-            handle_api_error((err, true), human);
+        if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+            handle_api_error((confirmation_required(id), true), human);
         }
-        let asked = dialoguer::Confirm::new()
+        let answer = dialoguer::Confirm::new()
             .with_prompt(format!(
                 "Delete {} and every page it found? This cannot be undone",
                 ui::one_line(id)
             ))
             .default(false)
-            .interact()
-            .unwrap_or(false);
-        if !asked {
-            ui::info("Nothing deleted.");
-            return;
+            .interact();
+        match answer {
+            Ok(true) => {}
+            Ok(false) => {
+                ui::info("Nothing deleted.");
+                return;
+            }
+            Err(_) => handle_api_error((confirmation_required(id), true), human),
         }
     }
     run(delete_call(id), View::Monitor, human, api_key).await;
@@ -450,9 +458,44 @@ fn print_monitor(m: &Value) {
     if let Some(next) = m["next_run_at"].as_str() {
         eprintln!("      Next run: {}", ui::one_line(next));
     }
+    let search = &m["search"];
+    let mut options = Vec::new();
+    if let Some(n) = search["max_results"].as_u64() {
+        options.push(format!("max {n} pages a run"));
+    }
+    if search["content"]["text"] == true {
+        options.push("with page text".into());
+    }
+    if !options.is_empty() {
+        eprintln!("      Options: {}", ui::one_line(&options.join(", ")));
+    }
+    for (label, key) in [
+        ("Only sites", "include_domains"),
+        ("Never sites", "exclude_domains"),
+    ] {
+        if let Some(list) = joined(&search[key]) {
+            eprintln!("      {label}: {}", ui::one_line(&list));
+        }
+    }
     if let Some(url) = m["webhook"]["url"].as_str() {
         eprintln!("      Webhook: {}", ui::one_line(url));
+        if let Some(events) = joined(&m["webhook"]["events"]) {
+            eprintln!("      Events: {}", ui::one_line(&events));
+        }
     }
+    if let Some(meta) = m["metadata"].as_object().filter(|o| !o.is_empty()) {
+        let pairs: Vec<String> = meta
+            .iter()
+            .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+            .collect();
+        eprintln!("      Metadata: {}", ui::one_line(&pairs.join(", ")));
+    }
+}
+
+/// A JSON list of strings as "a, b", or None when it is missing or empty.
+fn joined(list: &Value) -> Option<String> {
+    let items: Vec<&str> = list.as_array()?.iter().filter_map(Value::as_str).collect();
+    (!items.is_empty()).then(|| items.join(", "))
 }
 
 fn print_page(p: &Value) {
@@ -743,5 +786,15 @@ mod tests {
             "cron 0 9 * * * (UTC)"
         );
         assert_eq!(schedule_line(&Value::Null), "only when triggered");
+    }
+
+    #[test]
+    fn lists_join_or_stay_out() {
+        assert_eq!(
+            joined(&json!(["a.com", "b.com"])).as_deref(),
+            Some("a.com, b.com")
+        );
+        assert_eq!(joined(&json!([])), None);
+        assert_eq!(joined(&Value::Null), None);
     }
 }

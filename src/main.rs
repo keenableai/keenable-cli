@@ -643,10 +643,28 @@ async fn run_monitors(action: MonitorsAction, human: bool, api_key: Option<&str>
             flags,
             no_schedule,
             no_webhook,
-        } => (
-            m::update_call(&id, &flags.fields(query, no_schedule, no_webhook)),
-            View::Monitor,
-        ),
+        } => {
+            let fields = flags.fields(query, no_schedule, no_webhook);
+            if m::monitor_body(&fields, false)
+                .as_object()
+                .is_some_and(|b| b.is_empty())
+            {
+                use clap::CommandFactory;
+                let mut cli = Cli::command();
+                cli.build();
+                let update = cli
+                    .find_subcommand_mut("monitors")
+                    .and_then(|c| c.find_subcommand_mut("update"))
+                    .expect("monitors update is a subcommand");
+                update
+                    .error(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "nothing to change: pass at least one flag (see `keenable monitors update --help`)",
+                    )
+                    .exit();
+            }
+            (m::update_call(&id, &fields), View::Monitor)
+        }
         MonitorsAction::Pause { id } => (m::status_call(&id, "paused"), View::Monitor),
         MonitorsAction::Resume { id } => (m::status_call(&id, "active"), View::Monitor),
         MonitorsAction::Trigger { id } => (m::trigger_call(&id), View::Run),

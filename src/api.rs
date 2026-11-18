@@ -1409,18 +1409,19 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_errors_show_the_server_fix() {
-        for code in ["prompt_input_too_long", "prompt_extraction_failed"] {
-            let Some(entry) = catalog().into_iter().find(|e| e["code"] == code) else {
-                continue;
-            };
-            let status = entry["status"].as_u64().unwrap() as u16;
-            let e = respond(status, &v1_body(&entry)).await;
-            let fix = entry["fix"].as_str().unwrap();
-            for authed in [true, false] {
-                let h = e.hint(authed).unwrap();
-                assert_eq!(h, fix, "{code}");
-                assert!(!h.contains("retrying unchanged fails"), "{code}: {h}");
-            }
+        let fix = "The page is too long for the prompt: send a shorter page or drop the prompt.";
+        let body = serde_json::json!({
+            "error": "Unprocessable entity",
+            "type": "invalid_request_error",
+            "code": "prompt_input_too_long",
+            "message": "The page is too long for the prompt.",
+            "fix": fix,
+        });
+        let e = respond(422, &body).await;
+        for authed in [true, false] {
+            let h = e.hint(authed).unwrap();
+            assert_eq!(h, fix);
+            assert!(!h.contains("retrying unchanged fails"), "{h}");
         }
     }
 

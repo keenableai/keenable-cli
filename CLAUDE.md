@@ -79,7 +79,8 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 - **A key is required.** There is no public endpoint: without a key (or with only another base's stored key) the command stops before any request with an `authentication_error` (exit 3) and a `keenable login` hint.
 - **Never through the daemon.** The daemon's failure path retries a request directly, which `execute` allows because search and fetch are reads; a create, update or delete sent twice would act twice. Monitor calls are rare, so connection reuse buys nothing.
 - **Flags map to the v1 body** in `monitor_body`: `--every` / `--cron` (+ `--timezone`) / `--once` are `schedule`, `--no-schedule` and `--no-webhook` send `null`, `update` sends only the flags given. Ids are percent-encoded so they stay one path segment.
-- **`delete` confirms** with a prompt; without a terminal it refuses (exit 1) unless `--yes`.
+- **`delete` confirms** with a prompt; without a terminal on stdin and stderr, or when the prompt fails, it refuses (exit 1) unless `--yes`. Only an answered "no" exits 0.
+- **`update` with no flags** is a usage error (exit 2), not an empty PATCH.
 - `pages` is the API's `/hits`.
 
 ### Config Command (`src/commands/config_cmd.rs`)
