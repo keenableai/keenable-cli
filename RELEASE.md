@@ -12,7 +12,7 @@ It runs the **Cut release** workflow (bumps `Cargo.toml` + `Cargo.lock` on a `re
 
 Without the script: Actions -> **Cut release** -> Run workflow, then open the PR from the `release/vX.Y.Z` branch yourself and merge it. The workflow doesn't open the PR itself: a PR authored by `github-actions[bot]` can't be approved by the approval bridge, which also runs as that bot.
 
-No tokens: the workflow uses the default `GITHUB_TOKEN`, so `release.yml` has a hand-added `workflow_dispatch` trigger (`allow-dirty = ["ci"]` in `dist-workspace.toml`); re-add it if you ever run `dist generate`.
+No tokens: the workflow uses the default `GITHUB_TOKEN`, so `release.yml` has a hand-added `workflow_dispatch` trigger (`allow-dirty = ["ci"]` in `dist-workspace.toml`); it takes a required `tag` input and a `Resolve release tag` step in the `plan` job feeds every `--tag` (a dispatch from `main` is rejected); re-add both if you ever run `dist generate`. To re-run a release by hand: `gh workflow run release.yml --ref v0.5.1 -f tag=v0.5.1`.
 
 ## Cutting a release (manual)
 

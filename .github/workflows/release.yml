@@ -43,7 +43,15 @@ on:
   # Hand-added (dist-workspace.toml allow-dirty = ["ci"]): cut-release.yml
   # tags with the default GITHUB_TOKEN, whose tag pushes trigger no workflow,
   # so it dispatches this one on the tag instead. Re-add after `dist generate`.
+  # `tag` is required: a manual run has no release tag in github.ref_name
+  # (dispatching from main would make it "main"). Dispatch on the tag ref:
+  #   gh workflow run release.yml --ref v0.5.1 -f tag=v0.5.1
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.5.1
+        required: true
+        type: string
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
@@ -54,8 +62,11 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ !github.event.pull_request && github.ref_name || '' }}
-      tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
+      # Resolved once in the `tag` step: the dispatch input for manual runs,
+      # the pushed tag for tag pushes, empty for pull requests. Never
+      # github.ref_name directly, which is a branch name on a dispatch.
+      tag: ${{ steps.tag.outputs.tag }}
+      tag-flag: ${{ steps.tag.outputs.tag != '' && format('--tag={0}', steps.tag.outputs.tag) || '' }}
       publishing: ${{ !github.event.pull_request }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,6 +75,35 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      # Hand-added (allow-dirty = ["ci"]), re-add after `dist generate`.
+      - id: tag
+        name: Resolve release tag
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          re='^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'
+          case "$EVENT_NAME" in
+            pull_request) tag="" ;;
+            workflow_dispatch)
+              if ! [[ "$INPUT_TAG" =~ $re ]]; then
+                echo "::error::workflow_dispatch requires a valid release tag (got '$INPUT_TAG')"
+                exit 1
+              fi
+              # The build checks out the dispatched ref, so it must be the tag.
+              if [ "$REF_TYPE" != "tag" ] || [ "$REF_NAME" != "$INPUT_TAG" ]; then
+                echo "::error::dispatch on the tag ref: gh workflow run release.yml --ref $INPUT_TAG -f tag=$INPUT_TAG (got $REF_TYPE '$REF_NAME')"
+                exit 1
+              fi
+              echo "Using release tag $INPUT_TAG"
+              tag="$INPUT_TAG" ;;
+            *) tag="$REF_NAME" ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -81,7 +121,7 @@ jobs:
       # but also really annoying to build CI around when it needs secrets to work right.)
       - id: plan
         run: |
-          dist ${{ (!github.event.pull_request && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          dist ${{ (steps.tag.outputs.tag != '' && format('host --steps=create --tag={0}', steps.tag.outputs.tag)) || 'plan' }} --output-format=json > plan-dist-manifest.json
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
