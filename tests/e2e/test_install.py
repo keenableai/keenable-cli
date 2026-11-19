@@ -2,7 +2,7 @@
 run it under a clean HOME, and smoke-test the binary it installs.
 
 Tests the latest release by default; pin a version via
-KEENABLE_INSTALLER_URL (the CI workflow sets it when given a version input).
+KEENABLE_INSTALLER_URL (the CI workflow sets it on legs that test a release).
 """
 
 import os

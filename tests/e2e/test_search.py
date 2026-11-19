@@ -7,7 +7,6 @@ import pytest
 
 from conftest import (
     SEARCH_QUERY,
-    exit_code,
     host_of,
     host_under,
     parse_ts,
@@ -73,7 +72,7 @@ def test_snippet_max_length(kn):
 
 def test_snippet_max_length_out_of_range(kn):
     res = kn("search", SEARCH_QUERY, "--snippet-max-length", "50")
-    assert res.code == exit_code(8)  # invalid request
+    assert res.code == 8  # invalid request
     data = res.yaml()
     assert data["error"] == "Invalid parameter"
     assert "snippet_max_length" in data["message"]
@@ -89,7 +88,7 @@ def test_max_results(kn):
 
 def test_max_results_out_of_range(kn):
     res = kn("search", SEARCH_QUERY, "--max-results", "51")
-    assert res.code == exit_code(8)
+    assert res.code == 8
     data = res.yaml()
     assert data["error"] == "Invalid parameter"
     assert "max_results" in data["message"]
@@ -192,30 +191,23 @@ def test_combined_filters(kn):
         assert parse_ts(r["acquired_at"]) >= utc(2025, 1, 1), r["url"]
 
 
-@pytest.fixture(scope="module")
-def domain_flags(kn):
-    res = kn("search", "--help", key=False)
-    if "--exclude-domain" not in res.out + res.err:
-        pytest.skip("binary predates --exclude-domain")
-
-
 def _assert_invalid_filter(message, entry):
     assert "Unknown parameter" not in message, f"server lacks domain filters: {message}"
     assert message.startswith(f'Invalid exclude_domains value "{entry}"'), message
 
 
-def test_exclude_domains_blocklist(kn, domain_flags):
+def test_exclude_domains_blocklist(kn):
     for r in _non_empty_results(kn, "rust async", "--exclude-domain", "docs.rs"):
         assert not host_under(host_of(r["url"]), "docs.rs"), r["url"]
 
 
-def test_exclude_domains_covers_subdomains(kn, domain_flags):
+def test_exclude_domains_covers_subdomains(kn):
     for r in _non_empty_results(kn, "rust std library", "--exclude-domain", "rust-lang.org"):
         assert not host_under(host_of(r["url"]), "rust-lang.org"), r["url"]
 
 
 def _assert_filter_rejected(res, entry):
-    assert res.code == exit_code(8), res.out
+    assert res.code == 8, res.out
     data = res.yaml()
     assert data["error"] == "invalid_filter", data
     hint = data.get("hint")
@@ -224,9 +216,9 @@ def _assert_filter_rejected(res, entry):
     _assert_invalid_filter(data["message"], entry)
 
 
-def test_bad_entry_errors_in_pretty(kn, domain_flags):
+def test_bad_entry_errors_in_pretty(kn):
     res = kn("search", "x", "--exclude-domain", "docs.rs/releases", "-p")
-    assert res.code == exit_code(8)
+    assert res.code == 8
     assert res.out == ""
     err = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", res.err).split())
     assert 'Invalid exclude_domains value "docs.rs/releases"' in err, res.err
@@ -234,12 +226,12 @@ def test_bad_entry_errors_in_pretty(kn, domain_flags):
 
 
 @pytest.mark.parametrize("blank", ["", " "])
-def test_blank_exclude_flag_is_rejected(kn, domain_flags, blank):
+def test_blank_exclude_flag_is_rejected(kn, blank):
     _assert_filter_rejected(kn("search", "x", f"--exclude-domain={blank}"), "")
 
 
 @pytest.mark.parametrize("args", [["--exclude-domain=", "--exclude-domain", "a.com"], ["--exclude-domain", "a.com,"]])
-def test_blank_beside_real_entry_is_rejected(kn, domain_flags, args):
+def test_blank_beside_real_entry_is_rejected(kn, args):
     _assert_filter_rejected(kn("search", "x", *args), "")
 
 
@@ -250,19 +242,19 @@ REJECTED_ENTRIES = [
 
 
 @pytest.mark.parametrize("entry", REJECTED_ENTRIES)
-def test_bad_exclude_entry_is_rejected_as_sent(kn, domain_flags, entry):
+def test_bad_exclude_entry_is_rejected_as_sent(kn, entry):
     _assert_filter_rejected(kn("search", "x", "--exclude-domain", entry), entry)
 
 
 @pytest.mark.parametrize("host", ["github.io", "blogspot.com"])
-def test_private_suffix_host_is_accepted(kn, domain_flags, host):
+def test_private_suffix_host_is_accepted(kn, host):
     res = kn("search", "async", "--exclude-domain", host)
     assert res.code == 0, res.out + res.err
     for r in res.yaml().get("results") or []:
         assert not host_under(host_of(r["url"]), host), r["url"]
 
 
-def test_fixable_entries_are_cleaned_up(kn, domain_flags):
+def test_fixable_entries_are_cleaned_up(kn):
     res = kn("search", "rust async", "--exclude-domain", "HTTPS://WWW.Docs.RS:443/?a=1")
     assert res.code == 0, res.out + res.err
     for r in res.yaml().get("results") or []:
@@ -273,21 +265,21 @@ def _hosts(start, stop):
     return ",".join(f"d{i}.example.com" for i in range(start, stop))
 
 
-def test_1000_exclude_hosts_are_accepted(kn, domain_flags):
+def test_1000_exclude_hosts_are_accepted(kn):
     res = kn("search", "x", "--exclude-domain", _hosts(0, 1000))
     assert res.code == 0, res.out + res.err
 
 
-def test_more_than_1000_exclude_hosts_is_rejected(kn, domain_flags):
+def test_more_than_1000_exclude_hosts_is_rejected(kn):
     res = kn("search", "x", "--exclude-domain", _hosts(0, 1001))
-    assert res.code == exit_code(8), res.out
+    assert res.code == 8, res.out
     data = res.yaml()
     assert data["error"] == "invalid_filter", data
     assert data["message"].startswith("Invalid exclude_domains value"), data
     assert "1000" in data["message"].replace(",", ""), data
 
 
-def test_limit_counts_hosts_after_cleanup(kn, domain_flags):
+def test_limit_counts_hosts_after_cleanup(kn):
     hosts = _hosts(0, 1000) + ",WWW.D0.example.com,https://d1.example.com/"
     res = kn("search", "x", "--exclude-domain", hosts)
     assert res.code == 0, res.out + res.err
@@ -295,7 +287,7 @@ def test_limit_counts_hosts_after_cleanup(kn, domain_flags):
 
 def test_malformed_date(kn):
     res = kn("search", "x", "--acquired-after", "notadate")
-    assert res.code == exit_code(8)
+    assert res.code == 8
     data = res.yaml()
     # server wording drifted from "Invalid parameter" to "Bad request" (2026-06)
     assert data["error"] in ("Invalid parameter", "Bad request")
@@ -318,7 +310,7 @@ def test_missing_query_arg(kn):
 
 def test_empty_query(kn):
     res = kn("search", "")
-    assert res.code == exit_code(8)
+    assert res.code == 8
     data = res.yaml()
     assert data["error"] == "Missing required parameter"
     assert '"query" is required' in data["message"]
@@ -326,13 +318,11 @@ def test_empty_query(kn):
 
 def test_invalid_api_key(kn):
     res = kn("search", "x", "--api-key", "keen_bad_key", key=False)
-    assert res.code == exit_code(3)  # authentication
+    assert res.code == 3  # authentication
     data = res.yaml()
     assert data["error"] == "Authentication failed"
-    # YAML stays on stdout; a one-line summary goes to stderr too (on
-    # binaries with per-kind exit codes, which shipped together with it).
-    if exit_code(3) == 3:
-        assert "Authentication failed" in res.err
+    # YAML stays on stdout; a one-line summary goes to stderr too.
+    assert "Authentication failed" in res.err
     assert data["message"] == "Invalid API key"
     assert "keenable login" in data["hint"]
 

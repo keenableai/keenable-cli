@@ -18,9 +18,17 @@ export KEENABLE_BIN=./target/release/keenable    # default: `keenable` on PATH
 uv run --project tests/e2e pytest tests/e2e -v
 ```
 
-Markers: `-m "not latency"` / `-m "not semantic"` / `-m "not install"` to skip the slow/live-index/download groups. CI (`.github/workflows/e2e.yml`) installs the latest released binary via the installer script and runs the full suite nightly and on manual dispatch (with an optional version input). Requires the `KEENABLE_API_KEY` repo secret.
+Markers: `-m "not latency"` / `-m "not semantic"` / `-m "not install"` to skip the slow/live-index/download groups. Requires the `KEENABLE_API_KEY` repo secret in CI.
 
-The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Config & path resolution" below). CI runs the matrix across **Linux, macOS, and Windows**. Unix installs the binary via the shell installer; Windows via the PowerShell installer (`keenable-cli-installer.ps1`). The Unix-only daemon tests and the shell-installer test self-skip on Windows (`os.name != "posix"`), so the same `pytest tests/e2e` invocation works on every platform.
+CI (`.github/workflows/e2e.yml`, nightly + manual dispatch) always runs a binary with the tests written for it:
+- **source legs**: the CLI built from the checked-out commit (`main` on the nightly) with that commit's tests, on **Linux, macOS, and Windows**. The live backend is tested with the newest CLI before it is released.
+- **release legs**: the latest patch of each of the last 3 minor releases (`COMPAT_MINORS`), installed via its own installer, with the tests checked out from its own tag, on Linux. The live backend must not break CLIs people already have.
+- A manual dispatch with a `version` runs only that release, on all three OSes, with its tag's tests (use it after a release). A dispatch on a branch builds that branch.
+- Semantic/latency checks run once, on the primary Linux leg. Legs run one at a time (shared key, rate limit).
+
+So main's tests describe main's binary: never add a "skip on a binary that predates X" gate for a merged but unreleased feature.
+
+The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Config & path resolution" below). Release legs install via the shell installer on Unix and the PowerShell installer (`keenable-cli-installer.ps1`) on Windows. The Unix-only daemon tests and the shell-installer test self-skip on Windows (`os.name != "posix"`), so the same `pytest tests/e2e` invocation works on every platform.
 
 ## Project Structure
 
