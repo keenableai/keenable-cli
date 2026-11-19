@@ -1,18 +1,27 @@
-# End-to-end suite: downloads a released keenable binary (the same installer
-# users run) and exercises every subcommand against the live API, plus
-# semantic-relevance and latency checks. See tests/e2e/.
+# End-to-end suite against the live API (see tests/e2e/). Two kinds of legs:
 #
-# Runs across Linux, macOS, and Windows so the released binary is exercised on
-# every platform dist builds for. Unix installs via the shell installer;
-# Windows installs via the PowerShell installer. The suite isolates each run
-# under a temp dir via KEENABLE_HOME (HOME alone does not isolate on Windows,
-# where dirs::home_dir() queries the real profile). The background daemon is
-# Unix-only, so its tests self-skip on Windows; the shell-installer test does
-# too (Windows installs via .ps1 in the matching CI step below).
+# - source: the CLI built from the checked-out commit (main on the nightly),
+#   with that commit's tests, on Linux, macOS and Windows. The backend gets
+#   tested with the newest CLI before that CLI is released.
+# - release: a published release, installed with its own installer, with the
+#   tests from its own tag. The nightly takes the latest patch of each of the
+#   last COMPAT_MINORS minor versions, on Linux: the backend must not break
+#   CLIs people already have.
 #
-# Not triggered by `release: published` — releases are created with
-# GITHUB_TOKEN, which never triggers other workflows. Run it manually after a
-# release, or wait for the nightly schedule.
+# Tests always match the binary they run against, so a merged but unreleased
+# feature never needs a "skip until released" gate in the tests. The semantic
+# and latency checks measure the backend, not the CLI, so they run once: on
+# the Linux leg of the primary target (the source build, or the version given
+# to a manual run).
+#
+# The suite isolates each run under a temp dir via KEENABLE_HOME (HOME alone
+# does not isolate on Windows, where dirs::home_dir() queries the real
+# profile). The daemon is Unix-only, so its tests self-skip on Windows; the
+# shell-installer test does too.
+#
+# Not triggered by `release: published`: releases are created with
+# GITHUB_TOKEN, which never triggers other workflows. To check a fresh release
+# on every platform, run this manually with its version.
 
 name: E2E
 
@@ -20,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "CLI version to test (e.g. 0.1.16). Empty = latest release."
+        description: "Release to test on every OS with its own tag's tests (e.g. 0.5.1). Empty = the nightly set: this branch built from source + recent releases."
         required: false
         default: ""
       test_alert:
@@ -34,31 +43,88 @@ on:
 permissions:
   contents: read
 
+# All legs share one KEENABLE_API_KEY; a manual run overlapping the nightly
+# would trip the API's rate limit. Queue instead of running side by side.
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Pick the legs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # Via env, never interpolated into the script: a crafted dispatch
+          # input must not be able to execute in this workflow.
+          VERSION: ${{ inputs.version }}
+          # How many minor versions back the nightly checks (latest patch of each).
+          COMPAT_MINORS: "3"
+        run: |
+          set -euo pipefail
+          # The semantic/latency checks run on one leg only (see the header).
+          light="not semantic and not latency"
+          oses="$(jq -cn --arg light "$light" '[
+            {os: "ubuntu-latest", markers: ""},
+            {os: "macos-latest", markers: $light},
+            {os: "windows-latest", markers: $light}]')"
+
+          if [ -n "$VERSION" ]; then
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be plain semver (e.g. 0.5.1), got: $VERSION"
+              exit 1
+            fi
+            if ! gh release view "v$VERSION" --repo "$REPO" >/dev/null; then
+              echo "::error::v$VERSION is not a published release"
+              exit 1
+            fi
+            matrix="$(jq -c --arg v "$VERSION" '
+              map(. + {name: "v\($v) · \(.os)", source: "release", version: $v, ref: "v\($v)"})
+              | {include: .}' <<<"$oses")"
+          else
+            # Published (no drafts, no prereleases) plain-semver releases: the
+            # latest patch of each minor, newest COMPAT_MINORS minors first.
+            tags="$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases \
+              --limit 200 --json tagName --jq '[.[].tagName]')"
+            versions="$(jq -c --argjson n "$COMPAT_MINORS" '
+              map(select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v"))
+              | group_by(split(".")[0:2] | map(tonumber))
+              | map(max_by(split(".") | map(tonumber)))
+              | sort_by(split(".") | map(tonumber)) | reverse | .[:$n]' <<<"$tags")"
+            echo "Releases under test: $versions"
+            matrix="$(jq -c --argjson versions "$versions" --arg light "$light" '
+              map(. + {name: "source · \(.os)", source: "source", version: "", ref: ""})
+              + ($versions | map({name: "v\(.) · ubuntu-latest", os: "ubuntu-latest",
+                                  markers: $light, source: "release", version: ., ref: "v\(.)"}))
+              | {include: .}' <<<"$oses")"
+          fi
+          jq . <<<"$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   e2e:
-    name: e2e (${{ matrix.os }})
+    name: e2e (${{ matrix.name }})
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # Run one OS at a time: all legs share a single KEENABLE_API_KEY, and
-      # three jobs hammering the live API in parallel trips its rate limit.
+      # One leg at a time: all legs share a single KEENABLE_API_KEY, and legs
+      # hammering the live API in parallel trip its rate limit.
       max-parallel: 1
-      matrix:
-        include:
-          # Linux runs the whole suite, including the semantic-relevance and
-          # latency checks against the live index.
-          - os: ubuntu-latest
-          # macOS and Windows verify the binary on their platform; the
-          # semantic/latency checks are OS-independent, so skip them here
-          # rather than hammering the live index on every matrix leg.
-          - os: macos-latest
-            markers: "not semantic and not latency"
-          - os: windows-latest
-            markers: "not semantic and not latency"
-    timeout-minutes: 30
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # Source legs build the CLI first (several minutes on macOS/Windows).
+    timeout-minutes: 45
     steps:
+      # A release leg checks out its own tag, so its tests describe exactly
+      # that binary. A source leg checks out the triggering commit (ref "").
       - uses: actions/checkout@v7
         with:
+          ref: ${{ matrix.ref }}
           persist-credentials: false
 
       - name: Check API key secret
@@ -69,53 +135,46 @@ jobs:
             exit 1
           fi
 
+      # The Rust toolchain is preinstalled on GitHub runners (see ci.yml).
+      # No cargo cache on purpose: a cold build takes 2-3 minutes per OS, and
+      # a cache saved by a scheduled run (default-branch scope) after checking
+      # out a non-default ref is a cache-poisoning path (CodeQL).
+      - name: Build keenable CLI from source
+        if: matrix.source == 'source'
+        shell: bash
+        run: |
+          cargo build --release --locked
+          exe=keenable
+          [ "$RUNNER_OS" = Windows ] && exe=keenable.exe
+          echo "KEENABLE_BIN=$GITHUB_WORKSPACE/target/release/$exe" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"
+
       - name: Install keenable CLI from GitHub Releases (Unix)
-        if: runner.os != 'Windows'
+        if: matrix.source == 'release' && runner.os != 'Windows'
         shell: bash
         env:
-          # Via env, never interpolated into the script — a crafted dispatch
-          # input must not be able to execute in a job that holds the API key.
-          VERSION: ${{ inputs.version }}
+          # From the plan job, which only emits plain semver. Via env, never
+          # interpolated into the script.
+          VERSION: ${{ matrix.version }}
         run: |
-          BASE="https://github.com/keenableai/keenable-cli/releases"
-          if [ -n "$VERSION" ]; then
-            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::version must be plain semver (e.g. 0.1.16), got: $VERSION"
-              exit 1
-            fi
-            URL="$BASE/download/v${VERSION}/keenable-cli-installer.sh"
-            # Point the in-suite installer test at the same version under test.
-            echo "KEENABLE_INSTALLER_URL=$URL" >> "$GITHUB_ENV"
-          else
-            URL="$BASE/latest/download/keenable-cli-installer.sh"
-          fi
+          URL="https://github.com/keenableai/keenable-cli/releases/download/v${VERSION}/keenable-cli-installer.sh"
+          # Point the in-suite installer test at the same version under test.
+          echo "KEENABLE_INSTALLER_URL=$URL" >> "$GITHUB_ENV"
           curl --proto '=https' --tlsv1.2 -LsSf --retry 3 "$URL" | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install keenable CLI from GitHub Releases (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.source == 'release' && runner.os == 'Windows'
         shell: pwsh
         env:
-          # Via env, never interpolated into the script — a crafted dispatch
-          # input must not be able to execute in a job that holds the API key.
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ matrix.version }}
         run: |
           $ErrorActionPreference = "Stop"
-          $base = "https://github.com/keenableai/keenable-cli/releases"
-          if ($env:VERSION) {
-            if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
-              Write-Output "::error::version must be plain semver (e.g. 0.1.16), got: $env:VERSION"
-              exit 1
-            }
-            $url = "$base/download/v$($env:VERSION)/keenable-cli-installer.ps1"
-          } else {
-            $url = "$base/latest/download/keenable-cli-installer.ps1"
-          }
-          irm $url | iex
+          irm "https://github.com/keenableai/keenable-cli/releases/download/v$($env:VERSION)/keenable-cli-installer.ps1" | iex
           # install-path = CARGO_HOME, so the binary lands in ~\.cargo\bin.
           "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Verify installed binary
+      - name: Verify binary under test
         run: keenable --version
 
       - name: Install uv
@@ -130,8 +189,8 @@ jobs:
           # calls can be told apart from real CLI users (app_title=keenable-cli)
           # in Grafana. The CLI reads KEENABLE_APP_TITLE; the daemon inherits it.
           KEENABLE_APP_TITLE: keenable-cli-e2e
-          # Empty on Linux (full suite); "not semantic and not latency" on the
-          # macOS/Windows legs so the OS-independent live-index checks run once.
+          # Empty on the primary Linux leg (full suite); "not semantic and not
+          # latency" elsewhere, so the OS-independent live-index checks run once.
           MARKERS: ${{ matrix.markers }}
         run: |
           # The shell-installer test and daemon tests self-skip on Windows via
@@ -144,14 +203,14 @@ jobs:
   # schedule (manual dispatch is interactive, so the operator already sees the
   # result) — or on a manual run started with test_alert=true, to verify the
   # notify path on demand without waiting for the cron. `result != 'success'`
-  # covers both failures and cancellations (the 30-min job timeout cancels
-  # rather than fails), so timed-out nightly runs still alert. Needs the
-  # SLACK_WEBHOOK_URL repo secret (a Slack Incoming Webhook URL; the target
-  # channel is fixed by the webhook). Self-skips if the secret is unset.
+  # covers failures and cancellations (the job timeout cancels rather than
+  # fails), so timed-out nightly runs still alert, and a failed plan job too.
+  # Needs the SLACK_WEBHOOK_URL repo secret (a Slack Incoming Webhook URL; the
+  # target channel is fixed by the webhook). Self-skips if the secret is unset.
   notify:
     name: notify-slack-on-failure
-    needs: e2e
-    if: ${{ always() && needs.e2e.result != 'success' && (github.event_name == 'schedule' || inputs.test_alert) }}
+    needs: [plan, e2e]
+    if: ${{ always() && (needs.plan.result != 'success' || needs.e2e.result != 'success') && (github.event_name == 'schedule' || inputs.test_alert) }}
     runs-on: ubuntu-latest
     steps:
       - name: Post failure to Slack

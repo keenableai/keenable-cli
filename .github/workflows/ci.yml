@@ -1,6 +1,6 @@
 # Fast per-PR gate: format, lint, build, unit tests, and a dependency CVE
-# scan on every push/PR. Complements the slow nightly e2e (which runs the
-# *released* binary against the live API) by validating the *source under
+# scan on every push/PR. Complements the slow nightly e2e (which runs main and
+# recent releases against the live API) by validating the *source under
 # review* before it merges. Kept fast — no network/API, no live index.
 #
 # Uses only first-party actions/* plus the Rust toolchain preinstalled on
@@ -60,7 +60,7 @@ jobs:
 
   # Windows is the only target with its own cfg branch (the daemon stub lives
   # under #[cfg(not(unix))]); macOS shares the unix path with Linux above, and
-  # the nightly e2e exercises the released macOS/Linux binaries at runtime.
+  # the nightly e2e builds and runs main on all three OSes.
   windows-build:
     name: clippy (windows)
     runs-on: windows-latest
