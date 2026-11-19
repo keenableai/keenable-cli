@@ -25,6 +25,8 @@ CI (`.github/workflows/e2e.yml`, nightly + manual dispatch) always runs a binary
 - **release legs**: the latest patch of each of the last 3 minor releases (`COMPAT_MINORS`), installed via its own installer, with the tests checked out from its own tag, on Linux. The live backend must not break CLIs people already have.
 - A manual dispatch with a `version` runs only that release, on all three OSes, with its tag's tests (use it after a release). A dispatch on a branch builds that branch.
 - Semantic/latency checks run once, on the primary Linux leg. Legs run one at a time (shared key, rate limit).
+- A failed nightly posts to Slack (`SLACK_WEBHOOK_URL`) with the failed legs and what a failed source vs release leg means. `.github/workflows/release-reminder.yml` posts there too when a Release run has waited over an hour for approval in the `release` environment (weekdays 07:00 and 13:00 UTC).
+- `test_monitors.py` creates one monitor per run (name prefix `keenable-cli-e2e-`, no schedule, no webhook) and deletes it; leftovers from an interrupted run are deleted before the next create.
 
 So main's tests describe main's binary: never add a "skip on a binary that predates X" gate for a merged but unreleased feature.
 

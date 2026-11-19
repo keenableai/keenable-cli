@@ -185,6 +185,15 @@ def test_query_time(kn):
         assert parse_ts(r["acquired_at"]) <= utc(2026, 5, 1), r["url"]
 
 
+def test_objective_is_accepted(kn):
+    # The server rejects parameters it doesn't know ("Unknown parameter"), so
+    # a clean answer means the live API takes `objective`.
+    res = kn("search", "rust async runtime", "--objective",
+             "Compare tokio and async-std for building a web server.")
+    assert res.code == 0, res.out + res.err
+    assert results_of(res.yaml()), "no results with --objective"
+
+
 def test_combined_filters(kn):
     for r in _non_empty_results(kn, "async", "--site", "docs.rs", "--acquired-after", "2025-01-01"):
         assert host_under(host_of(r["url"]), "docs.rs"), r["url"]
