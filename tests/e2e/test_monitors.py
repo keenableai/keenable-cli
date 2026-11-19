@@ -10,7 +10,6 @@ and are deleted before the next create.
 
 import uuid
 
-import pytest
 
 # Every monitor this suite creates is named with this prefix.
 E2E_PREFIX = "keenable-cli-e2e-"
@@ -70,8 +69,12 @@ def test_monitor_lifecycle(kn):
     name = E2E_PREFIX + uuid.uuid4().hex[:12]
     res = kn("monitors", "create", "new Rust compiler releases", "--name", name,
              "--max-results", "3")
-    if res.code != 0 and "monitor_limit_reached" in res.out:
-        pytest.skip("the CI organization is at its active-monitor limit")
+    # A full organization fails loudly instead of skipping: a silent skip would
+    # hide that the lifecycle stopped being tested. Free some monitors (pause or
+    # delete leftovers) in the organization that owns KEENABLE_API_KEY.
+    assert "monitor_limit_reached" not in res.out, (
+        "the organization behind KEENABLE_API_KEY is at its active-monitor limit "
+        "(100); pause or delete unused monitors there")
     assert res.code == 0, (res.out, res.err)
     created = res.yaml()
     mon_id = created["id"]
