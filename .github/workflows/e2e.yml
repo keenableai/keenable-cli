@@ -135,17 +135,10 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/cache@v6
-        if: matrix.source == 'source'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: e2e-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: e2e-cargo-${{ runner.os }}-
-
       # The Rust toolchain is preinstalled on GitHub runners (see ci.yml).
+      # No cargo cache on purpose: a cold build takes 2-3 minutes per OS, and
+      # a cache saved by a scheduled run (default-branch scope) after checking
+      # out a non-default ref is a cache-poisoning path (CodeQL).
       - name: Build keenable CLI from source
         if: matrix.source == 'source'
         shell: bash
