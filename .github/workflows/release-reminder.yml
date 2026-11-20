@@ -1,0 +1,65 @@
+# Reminds Slack about a Release run waiting for approval in the `release`
+# environment (KEE-1554). Without it a release can sit unapproved for a day
+# while main moves on (v0.6.0 waited 19 hours). Checks on weekday mornings
+# and early afternoons (UTC) and posts once per check while a run is still
+# waiting for more than an hour. Read-only: it never approves anything.
+#
+# Needs the SLACK_WEBHOOK_URL repo secret (the same webhook the nightly e2e
+# alert uses). Self-skips if the secret is unset.
+
+name: Release reminder
+
+on:
+  schedule:
+    - cron: "0 7,13 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+
+jobs:
+  remind:
+    name: remind-pending-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post waiting releases to Slack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          # Only runs waiting at least this long (a fresh one is being looked at).
+          MIN_WAIT_HOURS: "1"
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$REPO/actions/workflows/release.yml/runs?status=waiting&per_page=20" \
+            | jq --argjson h "$MIN_WAIT_HOURS" '[.workflow_runs[]
+              | ((now - (.created_at | fromdateiso8601)) / 3600) as $age
+              | select($age >= $h)
+              | {id, tag: .head_branch, url: .html_url, hours: ($age | floor)}]')"
+          count="$(jq length <<<"$runs")"
+          echo "Release runs waiting >= ${MIN_WAIT_HOURS}h: $count"
+          if [ "$count" -eq 0 ]; then
+            exit 0
+          fi
+
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL not set — skipping Slack reminder"
+            exit 0
+          fi
+
+          lines=""
+          for id in $(jq -r '.[].id' <<<"$runs"); do
+            run="$(jq -c --argjson id "$id" '.[] | select(.id == $id)' <<<"$runs")"
+            # Who can approve, and in which environment.
+            pending="$(gh api "repos/$REPO/actions/runs/$id/pending_deployments" \
+              | jq -r '[.[] | "\(.environment.name) (approvers: \([.reviewers[].reviewer | .login // .name] | join(", ")))"] | join("; ")')"
+            lines+="$(jq -r --arg p "$pending" '"• \(.tag): waiting \(.hours)h in \($p) — <\(.url)|Review deployment>"' <<<"$run")"$'\n'
+          done
+
+          # jq builds the JSON so every value is escaped.
+          payload="$(jq -n --arg repo "$REPO" --arg lines "$lines" \
+            '{text: ("⏳ Release waiting for approval in *" + $repo + "*\n" + $lines)}')"
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 \
+            -X POST -H 'Content-Type: application/json' \
+            -d "$payload" "$SLACK_WEBHOOK_URL"
