@@ -364,7 +364,7 @@ pub fn pages_call(
     cursor: Option<String>,
     min_importance: Option<u8>,
 ) -> Call {
-    Call::new(Method::GET, monitor_path(id, "/hits"))
+    Call::new(Method::GET, monitor_path(id, "/pages"))
         .param("limit", limit)
         .param("cursor", cursor)
         .param("min_importance", min_importance)
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn ids_stay_one_path_segment() {
-        assert_eq!(monitor_path("mon_1", "/hits"), "/v1/monitors/mon_1/hits");
+        assert_eq!(monitor_path("mon_1", "/pages"), "/v1/monitors/mon_1/pages");
         assert_eq!(monitor_path("../stats", ""), "/v1/monitors/..%2Fstats");
         assert_eq!(monitor_path("a b", ""), "/v1/monitors/a%20b");
     }
@@ -743,7 +743,7 @@ mod tests {
     fn calls_put_only_set_options_in_the_query() {
         let c = pages_call("mon_1", Some(5), None, Some(4));
         assert_eq!(c.method, Method::GET);
-        assert_eq!(c.path, "/v1/monitors/mon_1/hits");
+        assert_eq!(c.path, "/v1/monitors/mon_1/pages");
         assert_eq!(
             c.query,
             vec![
