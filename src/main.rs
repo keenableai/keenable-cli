@@ -289,7 +289,7 @@ struct MonitorFlags {
     #[arg(long, value_name = "URL")]
     webhook: Option<String>,
 
-    /// Webhook events to send (default: the monitor.* and monitor.run.* events plus monitor.result.found and monitor.result.changed). Repeatable, or a comma list
+    /// Webhook events to send (default: the monitor.* and monitor.run.* events, monitor.result.found and monitor.result.changed, and monitor.page.changed once a page is attached; listing events sends only those). Repeatable, or a comma list
     #[arg(long = "event", value_name = "EVENT", value_delimiter = ',')]
     events: Vec<String>,
 
@@ -333,7 +333,7 @@ impl MonitorFlags {
 enum MonitorsAction {
     /// Create a monitor
     #[command(
-        after_help = "The monitor starts empty: it matches only pages crawled after it is created.\nWithout a schedule, runs happen only with `keenable monitors trigger`.\nThe answer carries webhook.secret (whsec_...) once: store it to check signatures.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d\n  keenable monitors create \"Series A rounds in robotics\" --cron \"0 9 * * 1-5\" --timezone Europe/Paris\n  keenable monitors create \"Rust releases\" --include-domain blog.rust-lang.org --max-results 5\n  keenable monitors create \"CVE in OpenSSL\" --webhook https://example.com/hook --event monitor.result.found\n  keenable monitors create \"q\" --idempotency-key run-42      Safe to retry: the same key returns the same monitor"
+        after_help = "The monitor starts empty: it matches only pages crawled after it is created.\nWithout a schedule, runs happen only with `keenable monitors trigger`.\nThe answer carries webhook.secret (whsec_...) once: store it to check signatures.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d\n  keenable monitors create \"Series A rounds in robotics\" --cron \"0 9 * * 1-5\" --timezone Europe/Paris\n  keenable monitors create \"Rust releases\" --include-domain blog.rust-lang.org --max-results 5\n  keenable monitors create \"CVE in OpenSSL\" --webhook https://example.com/hook      Each result as it is found\n  keenable monitors create \"q\" --idempotency-key run-42      Safe to retry: the same key returns the same monitor"
     )]
     Create {
         /// The topic in plain words, e.g. "new open-weights LLM releases"

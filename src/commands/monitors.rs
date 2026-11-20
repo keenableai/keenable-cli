@@ -573,7 +573,7 @@ fn print_pretty(view: View, data: &Value) {
             let items = list_of(data);
             if items.is_empty() {
                 ui::info(
-                    "No results yet. A new monitor only sees pages crawled after it was created.",
+                    "No results yet. A search monitor only sees pages crawled after it was created.",
                 );
             }
             for p in items {

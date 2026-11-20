@@ -120,7 +120,7 @@ keenable monitors pause mon_123                                         # Stop i
 keenable monitors delete mon_123 --yes                                  # Delete it and its results
 ```
 
-`create` prints `webhook.secret` (`whsec_...`) once when you pass `--webhook`: store it to check signatures. By default a webhook gets the lifecycle and run events plus `monitor.result.found` and `monitor.result.changed`; `--event` picks the events yourself. `--idempotency-key` makes a retried create return the same monitor. Output is YAML by default and readable with `-p`; errors and exit codes are the same as for search and fetch. `delete` asks first, and without a terminal it needs `--yes`.
+`create` prints `webhook.secret` (`whsec_...`) once when you pass `--webhook`: store it to check signatures. By default a webhook gets the lifecycle and run events plus `monitor.result.found` and `monitor.result.changed`, and `monitor.page.changed` once a page is attached; `--event` sends only the events you list. `--idempotency-key` makes a retried create return the same monitor. Output is YAML by default and readable with `-p`; errors and exit codes are the same as for search and fetch. `delete` asks first, and without a terminal it needs `--yes`.
 
 ### Errors and exit codes in scripts
 
