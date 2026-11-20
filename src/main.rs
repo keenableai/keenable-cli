@@ -210,9 +210,9 @@ enum Commands {
         api_key: Option<String>,
     },
 
-    /// Watch the web for new pages about a topic (outputs YAML by default, use -p for pretty output)
+    /// Watch the web for news about a topic (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "A monitor is a standing query: every newly crawled page that is news about its topic is kept as a\npage of that monitor, and sent to your webhook or returned in scheduled runs. Needs an API key\n(run `keenable login`). Monitors are free for now; an organization holds up to 100 active monitors.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d     Daily runs\n  keenable monitors create \"EU AI Act enforcement\" --webhook https://example.com/hook --event monitor.hit\n                                                                          Each page to a webhook as it is found\n  keenable monitors list -p                                               Your organization's monitors\n  keenable monitors pages mon_123 --min-importance 4 -p                   The important pages it found\n  keenable monitors pause mon_123                                         Stop it for a while\n  keenable monitors delete mon_123 --yes                                  Delete it and its pages\n\nDocs: https://docs.keenable.ai/products/monitors\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   7 network   8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
+        after_help = "A monitor is a standing query: every newly crawled page that is news about its topic is kept as a\nresult of that monitor, and sent to your webhook or returned in scheduled runs. Needs an API key\n(run `keenable login`). Monitors are free for now; an organization holds up to 100 active monitors.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d     Daily runs\n  keenable monitors create \"EU AI Act enforcement\" --webhook https://example.com/hook\n                                                                          Each result to a webhook as it is found\n  keenable monitors list -p                                               Your organization's monitors\n  keenable monitors results mon_123 --min-importance 4 -p                 The important results it found\n  keenable monitors pause mon_123                                         Stop it for a while\n  keenable monitors delete mon_123 --yes                                  Delete it and its results\n\nDocs: https://docs.keenable.ai/products/monitors\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   7 network   8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
     )]
     Monitors(Box<MonitorsArgs>),
 
@@ -266,19 +266,19 @@ struct MonitorFlags {
     #[arg(long)]
     name: Option<String>,
 
-    /// Pages a run returns at most (1-100, default 10)
+    /// Results a run returns at most (1-100, default 10)
     #[arg(long = "max-results", value_parser = clap::value_parser!(u64).range(1..=100))]
     max_results: Option<u64>,
 
-    /// Only pages on these sites. Repeatable, or a comma list
+    /// Only results on these sites. Repeatable, or a comma list
     #[arg(long = "include-domain", value_name = "DOMAIN", value_delimiter = ',')]
     include_domains: Vec<String>,
 
-    /// Never pages on these sites. Repeatable, or a comma list
+    /// Never results on these sites. Repeatable, or a comma list
     #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
     exclude_domains: Vec<String>,
 
-    /// Also return each page's text (first 6,000 characters, kept 3 days)
+    /// Also return each result's page text (first 6,000 characters, kept 3 days)
     #[arg(long)]
     text: bool,
 
@@ -289,7 +289,7 @@ struct MonitorFlags {
     #[arg(long, value_name = "URL")]
     webhook: Option<String>,
 
-    /// Webhook events to send (default: the monitor.* and monitor.run.* events; add monitor.hit for each page as it is found). Repeatable, or a comma list
+    /// Webhook events to send (default: the monitor.* and monitor.run.* events, monitor.result.found and monitor.result.changed, and monitor.page.changed once a page is attached; listing events sends only those). Repeatable, or a comma list
     #[arg(long = "event", value_name = "EVENT", value_delimiter = ',')]
     events: Vec<String>,
 
@@ -333,7 +333,7 @@ impl MonitorFlags {
 enum MonitorsAction {
     /// Create a monitor
     #[command(
-        after_help = "The monitor starts empty: it matches only pages crawled after it is created.\nWithout a schedule, runs happen only with `keenable monitors trigger`.\nThe answer carries webhook.secret (whsec_...) once: store it to check signatures.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d\n  keenable monitors create \"Series A rounds in robotics\" --cron \"0 9 * * 1-5\" --timezone Europe/Paris\n  keenable monitors create \"Rust releases\" --include-domain blog.rust-lang.org --max-results 5\n  keenable monitors create \"CVE in OpenSSL\" --webhook https://example.com/hook --event monitor.hit\n  keenable monitors create \"q\" --idempotency-key run-42      Safe to retry: the same key returns the same monitor"
+        after_help = "The monitor starts empty: it matches only pages crawled after it is created.\nWithout a schedule, runs happen only with `keenable monitors trigger`.\nThe answer carries webhook.secret (whsec_...) once: store it to check signatures.\n\nExamples:\n  keenable monitors create \"new open-weights LLM releases\" --every 1d\n  keenable monitors create \"Series A rounds in robotics\" --cron \"0 9 * * 1-5\" --timezone Europe/Paris\n  keenable monitors create \"Rust releases\" --include-domain blog.rust-lang.org --max-results 5\n  keenable monitors create \"CVE in OpenSSL\" --webhook https://example.com/hook      Each result as it is found\n  keenable monitors create \"q\" --idempotency-key run-42      Safe to retry: the same key returns the same monitor"
     )]
     Create {
         /// The topic in plain words, e.g. "new open-weights LLM releases"
@@ -400,7 +400,7 @@ enum MonitorsAction {
         no_webhook: bool,
     },
 
-    /// Pause a monitor: it stops matching pages until resumed
+    /// Pause a monitor: it stops finding results until resumed
     #[command(after_help = "Example:\n  keenable monitors pause mon_123")]
     Pause {
         /// The monitor's id (mon_...)
@@ -414,7 +414,7 @@ enum MonitorsAction {
         id: String,
     },
 
-    /// Delete a monitor and every page it found (cannot be undone)
+    /// Delete a monitor and every result it found (cannot be undone)
     #[command(
         after_help = "Asks first; without a terminal it needs --yes. To stop a monitor for a while, pause it instead.\n\nExamples:\n  keenable monitors delete mon_123\n  keenable monitors delete mon_123 --yes"
     )]
@@ -429,7 +429,7 @@ enum MonitorsAction {
 
     /// Start a run now, outside the schedule
     #[command(
-        after_help = "The run collects the pages matched since the previous run. Check it with `keenable monitors run <id> <run_id>`.\n\nExample:\n  keenable monitors trigger mon_123"
+        after_help = "The run collects the results found since the previous run. Check it with `keenable monitors run <id> <run_id>`.\n\nExample:\n  keenable monitors trigger mon_123"
     )]
     Trigger {
         /// The monitor's id (mon_...)
@@ -453,7 +453,7 @@ enum MonitorsAction {
         cursor: Option<String>,
     },
 
-    /// Show one run and its pages
+    /// Show one run and its results
     #[command(after_help = "Example:\n  keenable monitors run mon_123 run_456 -p")]
     Run {
         /// The monitor's id (mon_...)
@@ -463,11 +463,11 @@ enum MonitorsAction {
         run_id: String,
     },
 
-    /// List the pages a monitor found, newest first (its last 500)
+    /// List the results a monitor found, newest first (its last 500)
     #[command(
-        after_help = "One page per story: same_story counts the copies left out.\n\nExamples:\n  keenable monitors pages mon_123 -p\n  keenable monitors pages mon_123 --min-importance 4      Only the pages not to be missed"
+        after_help = "One result per story: same_story counts the copies left out.\n\nExamples:\n  keenable monitors results mon_123 -p\n  keenable monitors results mon_123 --min-importance 4    Only the results not to be missed"
     )]
-    Pages {
+    Results {
         /// The monitor's id (mon_...)
         id: String,
 
@@ -479,7 +479,7 @@ enum MonitorsAction {
         #[arg(long)]
         cursor: Option<String>,
 
-        /// Only pages rated at least this important to the topic (1-5)
+        /// Only results rated at least this important to the topic (1-5)
         #[arg(long = "min-importance", value_parser = clap::value_parser!(u8).range(1..=5))]
         min_importance: Option<u8>,
     },
@@ -672,14 +672,14 @@ async fn run_monitors(action: MonitorsAction, human: bool, api_key: Option<&str>
             (m::runs_call(&id, limit, cursor), View::Runs)
         }
         MonitorsAction::Run { id, run_id } => (m::run_call(&id, &run_id), View::Run),
-        MonitorsAction::Pages {
+        MonitorsAction::Results {
             id,
             limit,
             cursor,
             min_importance,
         } => (
-            m::pages_call(&id, limit, cursor, min_importance),
-            View::Pages,
+            m::results_call(&id, limit, cursor, min_importance),
+            View::Results,
         ),
         MonitorsAction::Deliveries { id, limit, cursor } => {
             (m::deliveries_call(&id, limit, cursor), View::Deliveries)
@@ -996,7 +996,7 @@ mod tests {
             "--webhook",
             "https://example.com/h",
             "--event",
-            "monitor.hit",
+            "monitor.result.found",
             "--idempotency-key",
             "k1",
         ])
@@ -1010,7 +1010,7 @@ mod tests {
             json!({
                 "search": {"query": "open-weights LLM releases", "max_results": 5, "exclude_domains": ["a.com", "b.com"]},
                 "schedule": {"type": "interval", "value": "1d"},
-                "webhook": {"url": "https://example.com/h", "events": ["monitor.hit"]}
+                "webhook": {"url": "https://example.com/h", "events": ["monitor.result.found"]}
             })
         );
     }
@@ -1068,7 +1068,7 @@ mod tests {
             Cli::try_parse_from([
                 "keenable",
                 "monitors",
-                "pages",
+                "results",
                 "m",
                 "--min-importance",
                 "6"
