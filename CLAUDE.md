@@ -84,14 +84,15 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 
 ### Monitors Command (`src/commands/monitors.rs`)
 
-`keenable monitors <create|list|get|update|pause|resume|delete|trigger|runs|run|pages|deliveries|stats>` calls the Monitors API at `/v1/monitors` (backend-ts forwards it to keenable-monitors). Like search/fetch: YAML on stdout by default, `-p` for a readable view on stderr, `--api-key` / `KEENABLE_API_KEY` override, the same `handle_api_error` output and exit codes. Unlike them:
+`keenable monitors <create|list|get|update|pause|resume|delete|trigger|runs|run|results|deliveries|stats>` calls the Monitors API at `/v1/monitors` (backend-ts forwards it to keenable-monitors). Like search/fetch: YAML on stdout by default, `-p` for a readable view on stderr, `--api-key` / `KEENABLE_API_KEY` override, the same `handle_api_error` output and exit codes. Unlike them:
 
 - **A key is required.** There is no public endpoint: without a key (or with only another base's stored key) the command stops before any request with an `authentication_error` (exit 3) and a `keenable login` hint.
 - **Never through the daemon.** The daemon's failure path retries a request directly, which `execute` allows because search and fetch are reads; a create, update or delete sent twice would act twice. Monitor calls are rare, so connection reuse buys nothing.
 - **Flags map to the v1 body** in `monitor_body`: `--every` / `--cron` (+ `--timezone`) / `--once` are `schedule`, `--no-schedule` and `--no-webhook` send `null`, `update` sends only the flags given. Ids are percent-encoded so they stay one path segment.
 - **`delete` confirms** with a prompt; without a terminal on stdin and stderr, or when the prompt fails, it refuses (exit 1) unless `--yes`. Only an answered "no" exits 0.
 - **`update` with no flags** is a usage error (exit 2), not an empty PATCH.
-- `pages` is the API's `/hits`.
+- `results` is the API's `/v1/monitors/{id}/results`: what a search monitor finds is a result. "Page" only means a watched URL (a page monitor, or a page attached to a search monitor).
+- Output passes the API's fields through as sent; the CLI never adds fields the v1 API dropped.
 
 ### Config Command (`src/commands/config_cmd.rs`)
 

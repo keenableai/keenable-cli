@@ -1,7 +1,7 @@
 """monitors — the Monitors API (/v1/monitors) through the CLI, against the live API.
 
 Read-only calls (list, stats, an unknown id), the keyless refusal, and one
-full lifecycle: create → get → pause → resume → delete. The lifecycle monitor
+full lifecycle: create → get → results → pause → resume → delete. The lifecycle monitor
 has no schedule and no webhook, so it never runs or sends anything, and it is
 deleted at the end (monitors are free; an organization holds up to 100 active
 ones). Monitors left behind by an interrupted run carry the same name prefix
@@ -89,6 +89,15 @@ def test_monitor_lifecycle(kn):
         got = kn("monitors", "get", mon_id)
         assert got.code == 0, got.err
         assert got.yaml()["id"] == mon_id
+        for gone_field in ("agent_run_id", "backfill", "memory_scope",
+                           "estimated_cost_usd", "cost_this_month_usd"):
+            assert gone_field not in got.yaml(), gone_field
+
+        # A new monitor has no results yet; the list shape is still there.
+        results = kn("monitors", "results", mon_id)
+        assert results.code == 0, (results.out, results.err)
+        assert results.yaml()["data"] == []
+        assert results.yaml()["has_more"] is False
 
         paused = kn("monitors", "pause", mon_id)
         assert paused.code == 0, paused.err

@@ -273,7 +273,7 @@ async fn send(call: &Call, key: &str) -> Result<Value, Box<ApiError>> {
 pub enum View {
     Monitor,
     Monitors,
-    Pages,
+    Results,
     Run,
     Runs,
     Deliveries,
@@ -358,13 +358,13 @@ pub fn run_call(id: &str, run_id: &str) -> Call {
     )
 }
 
-pub fn pages_call(
+pub fn results_call(
     id: &str,
     limit: Option<u64>,
     cursor: Option<String>,
     min_importance: Option<u8>,
 ) -> Call {
-    Call::new(Method::GET, monitor_path(id, "/pages"))
+    Call::new(Method::GET, monitor_path(id, "/results"))
         .param("limit", limit)
         .param("cursor", cursor)
         .param("min_importance", min_importance)
@@ -385,7 +385,7 @@ fn confirmation_required(id: &str) -> ApiError {
     ApiError {
         error: "Confirmation required".into(),
         message: Some(format!(
-            "Deleting {} removes the monitor and every page it found.",
+            "Deleting {} removes the monitor and every result it found.",
             ui::one_line(id)
         )),
         transport_hint: Some(
@@ -407,7 +407,7 @@ pub async fn delete(id: &str, yes: bool, human: bool, api_key: Option<&str>) {
         }
         let answer = dialoguer::Confirm::new()
             .with_prompt(format!(
-                "Delete {} and every page it found? This cannot be undone",
+                "Delete {} and every result it found? This cannot be undone",
                 ui::one_line(id)
             ))
             .default(false)
@@ -461,7 +461,7 @@ fn print_monitor(m: &Value) {
     let search = &m["search"];
     let mut options = Vec::new();
     if let Some(n) = search["max_results"].as_u64() {
-        options.push(format!("max {n} pages a run"));
+        options.push(format!("max {n} results a run"));
     }
     if search["content"]["text"] == true {
         options.push("with page text".into());
@@ -498,7 +498,7 @@ fn joined(list: &Value) -> Option<String> {
     (!items.is_empty()).then(|| items.join(", "))
 }
 
-fn print_page(p: &Value) {
+fn print_result(p: &Value) {
     let title = p["title"].as_str().unwrap_or("Untitled");
     eprintln!("   {}", ui::one_line(title).bold());
     eprintln!("      {}", ui::one_line(text(p, "url")).cyan());
@@ -527,7 +527,7 @@ fn print_run(r: &Value) {
         ui::one_line(text(r, "id")).bold(),
         ui::one_line(text(r, "status")).cyan(),
         ui::one_line(r["created_at"].as_str().unwrap_or("")).dimmed(),
-        count.map(|n| format!("  {n} pages")).unwrap_or_default()
+        count.map(|n| format!("  {n} results")).unwrap_or_default()
     );
     if let Some(msg) = r["error"]["message"].as_str() {
         eprintln!("      {}", ui::one_line(msg).red());
@@ -569,22 +569,22 @@ fn print_pretty(view: View, data: &Value) {
             }
             more_hint(data);
         }
-        View::Pages => {
+        View::Results => {
             let items = list_of(data);
             if items.is_empty() {
                 ui::info(
-                    "No pages yet. A new monitor only sees pages crawled after it was created.",
+                    "No results yet. A new monitor only sees pages crawled after it was created.",
                 );
             }
             for p in items {
-                print_page(p);
+                print_result(p);
             }
             more_hint(data);
         }
         View::Run => {
             print_run(data);
             for p in data["results"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
-                print_page(p);
+                print_result(p);
             }
         }
         View::Runs => {
@@ -657,7 +657,7 @@ mod tests {
                 timezone: Some("Europe/Paris".into()),
             },
             webhook: Some("https://example.com/hook".into()),
-            events: vec!["monitor.hit".into()],
+            events: vec!["monitor.result.found".into()],
             metadata: vec![("team".into(), "research".into())],
             ..Default::default()
         };
@@ -673,7 +673,7 @@ mod tests {
                     "content": {"text": true}
                 },
                 "schedule": {"type": "cron", "value": "0 9 * * 1-5", "timezone": "Europe/Paris"},
-                "webhook": {"url": "https://example.com/hook", "events": ["monitor.hit"]},
+                "webhook": {"url": "https://example.com/hook", "events": ["monitor.result.found"]},
                 "metadata": {"team": "research"}
             })
         );
@@ -734,16 +734,16 @@ mod tests {
 
     #[test]
     fn ids_stay_one_path_segment() {
-        assert_eq!(monitor_path("mon_1", "/pages"), "/v1/monitors/mon_1/pages");
+        assert_eq!(monitor_path("mon_1", "/runs"), "/v1/monitors/mon_1/runs");
         assert_eq!(monitor_path("../stats", ""), "/v1/monitors/..%2Fstats");
         assert_eq!(monitor_path("a b", ""), "/v1/monitors/a%20b");
     }
 
     #[test]
     fn calls_put_only_set_options_in_the_query() {
-        let c = pages_call("mon_1", Some(5), None, Some(4));
+        let c = results_call("mon_1", Some(5), None, Some(4));
         assert_eq!(c.method, Method::GET);
-        assert_eq!(c.path, "/v1/monitors/mon_1/pages");
+        assert_eq!(c.path, "/v1/monitors/mon_1/results");
         assert_eq!(
             c.query,
             vec![

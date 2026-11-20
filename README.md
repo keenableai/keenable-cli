@@ -105,22 +105,22 @@ When content is cut at the character cap, it ends with the API's truncation note
 
 ### Monitors
 
-A monitor watches the web for new pages about a topic: every newly crawled page that is news about it is kept as a page of that monitor, and sent to your webhook or returned in scheduled runs. Monitors need an API key (`keenable login`); they are free for now, with up to 100 active monitors per organization. See [Monitors](https://docs.keenable.ai/products/monitors).
+A monitor watches the web for news about a topic: every newly crawled page that is news about it is kept as a result of that monitor, and sent to your webhook or returned in scheduled runs. Monitors need an API key (`keenable login`); they are free for now, with up to 100 active monitors per organization. See [Monitors](https://docs.keenable.ai/products/monitors).
 
 ```bash
 keenable monitors create "new open-weights LLM releases" --every 1d     # Daily runs
 keenable monitors create "Series A rounds in robotics" --cron "0 9 * * 1-5" --timezone Europe/Paris
-keenable monitors create "CVE in OpenSSL" --webhook https://example.com/hook --event monitor.hit
+keenable monitors create "CVE in OpenSSL" --webhook https://example.com/hook   # Each result to a webhook as it is found
 keenable monitors list -p                                               # Your organization's monitors
-keenable monitors pages mon_123 --min-importance 4 -p                   # The important pages it found
+keenable monitors results mon_123 --min-importance 4 -p                 # The important results it found
 keenable monitors update mon_123 --every 6h                             # Change only what you pass
 keenable monitors trigger mon_123                                       # Run now
 keenable monitors runs mon_123 --limit 1                                # The latest run
 keenable monitors pause mon_123                                         # Stop it for a while (resume to restart)
-keenable monitors delete mon_123 --yes                                  # Delete it and its pages
+keenable monitors delete mon_123 --yes                                  # Delete it and its results
 ```
 
-`create` prints `webhook.secret` (`whsec_...`) once when you pass `--webhook`: store it to check signatures. `--idempotency-key` makes a retried create return the same monitor. Output is YAML by default and readable with `-p`; errors and exit codes are the same as for search and fetch. `delete` asks first, and without a terminal it needs `--yes`.
+`create` prints `webhook.secret` (`whsec_...`) once when you pass `--webhook`: store it to check signatures. By default a webhook gets the lifecycle and run events plus `monitor.result.found` and `monitor.result.changed`; `--event` picks the events yourself. `--idempotency-key` makes a retried create return the same monitor. Output is YAML by default and readable with `-p`; errors and exit codes are the same as for search and fetch. `delete` asks first, and without a terminal it needs `--yes`.
 
 ### Errors and exit codes in scripts
 
