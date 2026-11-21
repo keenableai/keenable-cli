@@ -6,16 +6,18 @@ pub struct DaemonRequest {
     pub command: String,
     #[serde(default)]
     pub urls: Option<Vec<String>>,
+    /// Search: the POST /v1/search body. Fetch: the POST /v1/fetch body;
+    /// without it, fetch is the keyless GET of `urls`.
     #[serde(default)]
     pub body: Option<Value>,
-    /// Fetch only: request live content instead of the cached copy.
+    /// Keyless fetch only: read the live page instead of the stored copy.
     #[serde(default)]
     pub live: bool,
-    /// Fetch only: LLM extraction instruction — the response content is the
+    /// Keyless fetch only: LLM extraction instruction — the response content is the
     /// instruction's output instead of the full page.
     #[serde(default)]
     pub prompt: Option<String>,
-    /// Fetch only: content-length cap; the API defaults to 50000 when unset.
+    /// Keyless fetch only: content-length cap; the API defaults to 50000 when unset.
     #[serde(default)]
     pub max_chars: Option<u64>,
     /// Fetch only: groups the call with related searches and fetches.
@@ -41,7 +43,36 @@ pub struct DaemonRequest {
     pub net_env: Option<String>,
 }
 
+pub const SESSION_ID_HEADER: &str = "X-Keenable-Session-Id";
+
 impl DaemonRequest {
+    /// The fetch call on `base`, shared by the daemon and the direct HTTP
+    /// path: POST /v1/fetch with `body`, else the GET of `urls` (on
+    /// /v1/fetch/public without a key). None when both are missing.
+    pub fn fetch_request(
+        &self,
+        client: &reqwest::Client,
+        base: &str,
+        authenticated: bool,
+    ) -> Option<reqwest::RequestBuilder> {
+        if let Some(body) = &self.body {
+            let request = client
+                .post(crate::api::api_url_at(base, "/v1/fetch"))
+                .json(body);
+            return Some(match &self.session_id {
+                Some(id) => request.header(SESSION_ID_HEADER, id),
+                None => request,
+            });
+        }
+        let path = if authenticated {
+            "/v1/fetch"
+        } else {
+            "/v1/fetch/public"
+        };
+        let query = self.fetch_query()?;
+        Some(client.get(crate::api::api_url_at(base, path)).query(&query))
+    }
+
     /// Query params for GET /v1/fetch, shared by the daemon and the direct
     /// HTTP path so fetch params can't drift between them. None when `urls`
     /// is missing.
@@ -585,19 +616,10 @@ mod platform {
                 )
                 .await
             }
-            "fetch" => {
-                let query = match req.fetch_query() {
-                    Some(q) => q,
-                    None => return err_response("Missing urls"),
-                };
-                send_api(
-                    client
-                        .get(endpoint(base, "/v1/fetch", authenticated))
-                        .query(&query),
-                    authenticated,
-                )
-                .await
-            }
+            "fetch" => match req.fetch_request(client, base, authenticated) {
+                Some(request) => send_api(request, authenticated).await,
+                None => err_response("Missing urls"),
+            },
             "ping" => DaemonResponse {
                 ok: true,
                 data: None,
@@ -1008,5 +1030,58 @@ mod tests {
         // An older CLI always means the default base.
         assert!(!refuses_base(None, DEFAULT_API_BASE_URL));
         assert!(refuses_base(None, "http://127.0.0.1:8080"));
+    }
+
+    #[test]
+    fn fetch_with_a_body_is_a_post_with_the_session_header() {
+        let client = reqwest::Client::new();
+        let req = DaemonRequest {
+            command: "fetch".into(),
+            body: Some(serde_json::json!({"urls": ["https://example.com"]})),
+            session_id: Some("sess-1".into()),
+            ..Default::default()
+        };
+        for authenticated in [true, false] {
+            let built = req
+                .fetch_request(&client, "https://api.example", authenticated)
+                .unwrap()
+                .build()
+                .unwrap();
+            assert_eq!(built.method(), reqwest::Method::POST);
+            assert_eq!(built.url().as_str(), "https://api.example/v1/fetch");
+            assert_eq!(built.headers()[SESSION_ID_HEADER], "sess-1");
+            let body: Value =
+                serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+            assert_eq!(body, serde_json::json!({"urls": ["https://example.com"]}));
+        }
+    }
+
+    #[test]
+    fn fetch_without_a_body_is_the_get_public_without_a_key() {
+        let client = reqwest::Client::new();
+        let req = DaemonRequest {
+            command: "fetch".into(),
+            urls: Some(vec!["https://example.com".into()]),
+            live: true,
+            ..Default::default()
+        };
+        let get = |authenticated| {
+            req.fetch_request(&client, "https://api.example", authenticated)
+                .unwrap()
+                .build()
+                .unwrap()
+        };
+        let public = get(false);
+        assert_eq!(public.method(), reqwest::Method::GET);
+        assert_eq!(
+            public.url().as_str(),
+            "https://api.example/v1/fetch/public?url=https%3A%2F%2Fexample.com&live=true"
+        );
+        assert_eq!(get(true).url().path(), "/v1/fetch");
+        assert!(
+            DaemonRequest::default()
+                .fetch_request(&client, "https://api.example", false)
+                .is_none()
+        );
     }
 }

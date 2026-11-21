@@ -24,8 +24,10 @@ def test_subcommand_help(kn):
         assert flag in res.out, f"search --help missing {flag}"
     res = kn("fetch", "--help", key=False)
     assert res.code == 0
-    for flag in ("--live", "--prompt", "--max-chars", "--session-id", "--pretty", "--api-key"):
+    for flag in ("--max-age-hours", "--prompt", "--max-chars", "--schema", "--links", "--images",
+                 "--session-id", "--pretty", "--api-key"):
         assert flag in res.out, f"fetch --help missing {flag}"
+    assert "--live" not in res.out
 
 
 def test_unknown_subcommand(kn):

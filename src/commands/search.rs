@@ -444,14 +444,10 @@ async fn send_direct(
             handle_response(resp).await
         }
         "fetch" => {
-            let query = req.fetch_query().ok_or_else(|| missing("urls"))?;
-            let resp = client
-                .get(endpoint("/v1/fetch", authenticated))
-                .query(&query)
-                .send()
-                .await
-                .map_err(send_err)?;
-            handle_response(resp).await
+            let request = req
+                .fetch_request(client, crate::api::api_base(), authenticated)
+                .ok_or_else(|| missing("urls"))?;
+            handle_response(request.send().await.map_err(send_err)?).await
         }
         _ => Err(Box::new(ApiError {
             error: format!("Unknown command: {}", req.command),
@@ -538,6 +534,11 @@ fn credits_remaining_line(data: &Value) -> Option<String> {
 /// request was sent with (a structured `hint` field in YAML mode). The API's
 /// request id is shown too, so users can quote it to support.
 pub(crate) fn handle_api_error((err, authenticated): (ApiError, bool), human: bool) -> ! {
+    report_api_error(&err, authenticated, human);
+    std::process::exit(err.exit_code());
+}
+
+fn report_api_error(err: &ApiError, authenticated: bool, human: bool) {
     let hint = err.hint(authenticated);
 
     if human {
@@ -576,7 +577,6 @@ pub(crate) fn handle_api_error((err, authenticated): (ApiError, bool), human: bo
         // only checks it) sees the failure; the exit code says which kind.
         ui::error_line(&err.display());
     }
-    std::process::exit(err.exit_code());
 }
 
 /// Read a mode from config, ignoring (with a warning) hand-edited invalid
@@ -723,61 +723,359 @@ pub async fn search(
     }
 }
 
-pub async fn fetch(
-    url: &str,
-    live: bool,
-    prompt: Option<String>,
-    max_chars: Option<u64>,
-    session_id: Option<String>,
-    human: bool,
-    api_key: Option<&str>,
-) {
-    let req = DaemonRequest {
-        command: "fetch".to_string(),
-        urls: Some(vec![url.to_string()]),
-        live,
-        prompt,
-        max_chars,
-        session_id,
-        ..Default::default()
-    };
+pub const MAX_FETCH_URLS: usize = 20;
+const MAX_AGE_HOURS_LIMIT: f64 = 720.0;
 
-    let api_key = key_override_or_exit(api_key, human);
-    let api_key = api_key.as_deref();
-    match execute(&req, api_key).await {
-        Ok(mut data) => {
-            if let Some(obj) = data.as_object_mut() {
-                obj.remove("description");
+/// `--max-age-hours`: a finite number of hours from 0 to 720, fractions allowed.
+pub fn parse_max_age_hours(raw: &str) -> Result<f64, String> {
+    let hours: f64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("`{raw}` is not a number of hours"))?;
+    if !hours.is_finite() || !(0.0..=MAX_AGE_HOURS_LIMIT).contains(&hours) {
+        return Err(format!("must be from 0 to {MAX_AGE_HOURS_LIMIT}"));
+    }
+    Ok(hours)
+}
+
+/// `--schema`: a JSON object given inline, or `@path` to read it from a file.
+pub fn parse_schema(raw: &str) -> Result<Value, String> {
+    let text = match raw.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read schema file `{path}`: {e}"))?,
+        None => raw.to_string(),
+    };
+    let schema: Value = serde_json::from_str(&text).map_err(|e| format!("not valid JSON: {e}"))?;
+    if !schema.is_object() {
+        return Err("must be a JSON object (a JSON Schema whose root is an object)".into());
+    }
+    Ok(schema)
+}
+
+/// `keenable fetch` options. Unset ones are left to the server default.
+#[derive(Default)]
+pub struct FetchOptions {
+    pub max_chars: Option<u64>,
+    pub prompt: Option<String>,
+    pub max_age_hours: Option<f64>,
+    pub schema: Option<Value>,
+    pub links: Option<u64>,
+    pub images: Option<u64>,
+    pub session_id: Option<String>,
+}
+
+fn hours_json(hours: f64) -> Value {
+    if hours.fract() == 0.0 {
+        json!(hours as u64)
+    } else {
+        json!(hours)
+    }
+}
+
+impl FetchOptions {
+    fn post_body(&self, urls: &[String]) -> Value {
+        let mut content = serde_json::Map::new();
+        if let Some(n) = self.max_chars {
+            content.insert("max_chars".into(), json!(n));
+        }
+        if let Some(p) = &self.prompt {
+            content.insert("prompt".into(), json!(p));
+        }
+        if let Some(s) = &self.schema {
+            content.insert("schema".into(), s.clone());
+        }
+        if let Some(n) = self.links {
+            content.insert("links".into(), json!(n));
+        }
+        if let Some(n) = self.images {
+            content.insert("images".into(), json!(n));
+        }
+        let mut body = serde_json::Map::new();
+        body.insert("urls".into(), json!(urls));
+        if !content.is_empty() {
+            body.insert("content".into(), Value::Object(content));
+        }
+        if let Some(h) = self.max_age_hours {
+            body.insert("retrieval".into(), json!({"max_age_hours": hours_json(h)}));
+        }
+        Value::Object(body)
+    }
+
+    /// What this call asks for that the keyless GET route can't do.
+    fn needs_key(&self, urls: &[String]) -> Vec<&'static str> {
+        let mut needs = Vec::new();
+        if urls.len() > 1 {
+            needs.push("more than one URL");
+        }
+        if self.max_age_hours.is_some_and(|h| h != 0.0) {
+            needs.push("--max-age-hours above 0");
+        }
+        if self.schema.is_some() {
+            needs.push("--schema");
+        }
+        if self.links.is_some() {
+            needs.push("--links");
+        }
+        if self.images.is_some() {
+            needs.push("--images");
+        }
+        needs
+    }
+
+    fn keyless_request(self, url: &str) -> DaemonRequest {
+        DaemonRequest {
+            command: "fetch".to_string(),
+            urls: Some(vec![url.to_string()]),
+            live: self.max_age_hours == Some(0.0),
+            prompt: self.prompt,
+            max_chars: self.max_chars,
+            session_id: self.session_id,
+            ..Default::default()
+        }
+    }
+
+    fn keyed_request(self, urls: &[String]) -> DaemonRequest {
+        DaemonRequest {
+            command: "fetch".to_string(),
+            body: Some(self.post_body(urls)),
+            session_id: self.session_id,
+            ..Default::default()
+        }
+    }
+}
+
+fn key_required(needs: &[&str]) -> ApiError {
+    ApiError {
+        error: "API key required".into(),
+        message: Some(format!("Not available without a key: {}.", needs.join(", "))),
+        transport_hint: Some(
+            "Log in with `keenable login`, or pass --api-key. Without a key, fetch takes one URL with --max-chars, --prompt and --max-age-hours 0."
+                .into(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// The CLI's usage error code, as clap uses for invalid arguments.
+const EXIT_INVALID_ARGUMENTS: i32 = 2;
+
+fn normalize_page(page: &mut Value) {
+    if let Some(obj) = page.as_object_mut() {
+        obj.remove("description");
+    }
+    normalize_fetch_dates(page);
+    mark_truncated(page);
+}
+
+fn is_page_error(entry: &Value) -> bool {
+    entry.get("error").is_some_and(Value::is_object)
+}
+
+/// A failed page from a POST /v1/fetch result, as the error that URL
+/// alone would have returned.
+fn page_error(entry: &Value) -> ApiError {
+    let body = &entry["error"];
+    let text = |key: &str| body[key].as_str().map(str::to_string);
+    ApiError {
+        status: body["status"].as_u64().unwrap_or(0) as u16,
+        error: text("error").unwrap_or_else(|| "Request failed".into()),
+        message: text("message"),
+        retry_after: body["retry_after_seconds"]
+            .as_u64()
+            .or_else(|| body["retryAfter"].as_u64()),
+        ..Default::default()
+    }
+    .with_v1_fields(body)
+}
+
+/// The exit code most failed pages share; the first one seen on a tie.
+fn dominant_exit_code(errors: &[ApiError]) -> i32 {
+    let codes: Vec<i32> = errors.iter().map(ApiError::exit_code).collect();
+    let count = |c: i32| codes.iter().filter(|&&x| x == c).count();
+    codes
+        .iter()
+        .copied()
+        .fold(None, |best: Option<i32>, c| match best {
+            Some(b) if count(b) >= count(c) => Some(b),
+            _ => Some(c),
+        })
+        .unwrap_or(crate::api::exit_code::ERROR)
+}
+
+/// Pretty-mode credits line for a batch: the lowest balance any page reported.
+fn lowest_credits_line(pages: &[Value]) -> Option<String> {
+    pages
+        .iter()
+        .filter(|p| p["usage"]["credits_remaining"].is_number())
+        .min_by(|a, b| {
+            let left = |v: &Value| v["usage"]["credits_remaining"].as_f64().unwrap_or(0.0);
+            left(a).total_cmp(&left(b))
+        })
+        .and_then(credits_remaining_line)
+}
+
+fn print_page(page: &Value) {
+    let title = ui::one_line(page["title"].as_str().unwrap_or("Untitled"));
+    let url = ui::one_line(page["url"].as_str().unwrap_or(""));
+    let content = ui::printable(page["content"].as_str().unwrap_or(""));
+    eprintln!("   {} {}", title.bold(), url.cyan());
+    if let Some(dates) = dates_line(page) {
+        eprintln!("   {}", ui::one_line(&dates).dimmed());
+    }
+    for (key, label) in [("image", "image"), ("favicon", "favicon")] {
+        if let Some(url) = page[key].as_str().filter(|u| !u.is_empty()) {
+            eprintln!("   {}", format!("{label}: {}", ui::one_line(url)).dimmed());
+        }
+    }
+    if page["stale"].as_bool() == Some(true) {
+        ui::warning("Older stored copy: a fresh read failed.");
+    }
+    eprintln!("   {}", "─".repeat(60).dimmed());
+    for line in content.lines() {
+        eprintln!("   {}", line);
+    }
+    eprintln!();
+    if let Some(structured) = page.get("structured").filter(|v| !v.is_null()) {
+        eprintln!("   {}", "Structured".bold());
+        let text = serde_json::to_string_pretty(structured).unwrap_or_default();
+        for line in ui::printable(&text).lines() {
+            eprintln!("   {}", line);
+        }
+        eprintln!();
+    }
+    if let Some(err) = page.get("answer_error").filter(|v| v.is_object()) {
+        let message = err["message"].as_str().unwrap_or("no answer");
+        let code = err["code"].as_str().unwrap_or("");
+        ui::warning(&ui::one_line(&format!(
+            "No structured answer: {message} ({code})"
+        )));
+        eprintln!();
+    }
+    for (key, label, text_key) in [("links", "Links", "text"), ("images", "Images", "alt")] {
+        let Some(items) = page[key].as_array().filter(|a| !a.is_empty()) else {
+            continue;
+        };
+        eprintln!("   {}", format!("{label} ({})", items.len()).bold());
+        for item in items {
+            let url = ui::one_line(item["url"].as_str().unwrap_or(""));
+            match item[text_key]
+                .as_str()
+                .map(ui::one_line)
+                .filter(|t| !t.is_empty())
+            {
+                Some(text) => eprintln!("   {}  {}", url.cyan(), text.dimmed()),
+                None => eprintln!("   {}", url.cyan()),
             }
-            normalize_fetch_dates(&mut data);
-            mark_truncated(&mut data);
-            if human {
-                ui::header("keenable fetch");
-                let title = ui::one_line(data["title"].as_str().unwrap_or("Untitled"));
-                let url = ui::one_line(data["url"].as_str().unwrap_or(""));
-                let content = ui::printable(data["content"].as_str().unwrap_or(""));
-                eprintln!("   {} {}", title.bold(), url.cyan());
-                if let Some(dates) = dates_line(&data) {
-                    eprintln!("   {}", ui::one_line(&dates).dimmed());
-                }
-                eprintln!("   {}", "─".repeat(60).dimmed());
-                for line in content.lines() {
-                    eprintln!("   {}", line);
+        }
+        eprintln!();
+    }
+    if page["truncated"].as_bool() == Some(true) {
+        ui::hint("Content was truncated; pass a larger --max-chars for more.");
+        eprintln!();
+    }
+}
+
+fn print_single_page(page: &Value, human: bool) {
+    if !human {
+        print_yaml(page);
+        return;
+    }
+    ui::header("keenable fetch");
+    print_page(page);
+    if let Some(line) = credits_remaining_line(page) {
+        ui::hint(&line);
+        eprintln!();
+    }
+}
+
+pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key: Option<&str>) {
+    let api_key = key_override_or_exit(api_key, human);
+    let keyed = api_key.is_some() || !matches!(config::stored_key(), config::StoredKey::None);
+    let api_key = api_key.as_deref();
+
+    if !keyed {
+        let needs = options.needs_key(urls);
+        if !needs.is_empty() {
+            report_api_error(&key_required(&needs), false, human);
+            std::process::exit(EXIT_INVALID_ARGUMENTS);
+        }
+        let Some(url) = urls.first() else {
+            return;
+        };
+        match execute(&options.keyless_request(url), api_key).await {
+            Ok(mut page) => {
+                normalize_page(&mut page);
+                print_single_page(&page, human);
+            }
+            Err(e) => handle_api_error(*e, human),
+        }
+        return;
+    }
+
+    let mut data = match execute(&options.keyed_request(urls), api_key).await {
+        Ok(data) => data,
+        Err(e) => handle_api_error(*e, human),
+    };
+    let Some(results) = data.get_mut("results").and_then(Value::as_array_mut) else {
+        let err = ApiError {
+            error: "Failed to parse response".into(),
+            message: Some("The response has no `results` list.".into()),
+            ..Default::default()
+        };
+        handle_api_error((err, true), human);
+    };
+    for entry in results.iter_mut().filter(|e| !is_page_error(e)) {
+        normalize_page(entry);
+    }
+    let results = data["results"].as_array().map_or(&[][..], Vec::as_slice);
+
+    if let [only] = results {
+        if is_page_error(only) {
+            handle_api_error((page_error(only), true), human);
+        }
+        print_single_page(only, human);
+        return;
+    }
+
+    let errors: Vec<ApiError> = results
+        .iter()
+        .filter(|e| is_page_error(e))
+        .map(page_error)
+        .collect();
+    let all_failed = !results.is_empty() && errors.len() == results.len();
+
+    if human {
+        ui::header(&format!("keenable fetch ({} URLs)", results.len()));
+        for (i, entry) in results.iter().enumerate() {
+            eprintln!("   {}", format!("[{}/{}]", i + 1, results.len()).dimmed());
+            if is_page_error(entry) {
+                let err = page_error(entry);
+                let url = ui::one_line(entry["url"].as_str().unwrap_or(""));
+                ui::error(&format!("{url}: {}", err.display()));
+                if let Some(hint) = err.hint(true) {
+                    ui::hint(&ui::printable(&hint));
                 }
                 eprintln!();
-                if data["truncated"].as_bool() == Some(true) {
-                    ui::hint("Content was truncated; pass a larger --max-chars for more.");
-                    eprintln!();
-                }
-                if let Some(line) = credits_remaining_line(&data) {
-                    ui::hint(&line);
-                    eprintln!();
-                }
-                return;
+            } else {
+                print_page(entry);
             }
-            print_yaml(&data);
         }
-        Err(e) => handle_api_error(*e, human),
+        if let Some(line) = lowest_credits_line(results) {
+            ui::hint(&line);
+            eprintln!();
+        }
+        if all_failed {
+            ui::error(&format!("All {} URLs failed.", results.len()));
+            eprintln!();
+        }
+    } else {
+        print_yaml(&data);
+        if all_failed {
+            ui::error_line(&format!("all {} URLs failed", errors.len()));
+        }
+    }
+    if all_failed {
+        std::process::exit(dominant_exit_code(&errors));
     }
 }
 
@@ -1361,5 +1659,222 @@ mod tests {
             "Empty API key: --api-key was given an empty value."
         );
         assert!(err.hint(false).unwrap().contains("leave --api-key out"));
+    }
+
+    fn urls(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("https://example.com/{i}")).collect()
+    }
+
+    #[test]
+    fn max_age_hours_takes_0_to_720_with_fractions() {
+        assert_eq!(parse_max_age_hours("0"), Ok(0.0));
+        assert_eq!(parse_max_age_hours("1.5"), Ok(1.5));
+        assert_eq!(parse_max_age_hours("720"), Ok(720.0));
+        for bad in ["-1", "720.5", "NaN", "inf", "soon", ""] {
+            assert!(parse_max_age_hours(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn schema_is_a_json_object_inline_or_from_a_file() {
+        let inline = parse_schema(r#"{"type": "object"}"#).unwrap();
+        assert_eq!(inline, json!({"type": "object"}));
+
+        let dir = std::env::temp_dir().join(format!("keenable-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("schema.json");
+        std::fs::write(&file, r#"{"type": "object", "properties": {}}"#).unwrap();
+        let from_file = parse_schema(&format!("@{}", file.display())).unwrap();
+        assert_eq!(from_file["properties"], json!({}));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(parse_schema("[1]").unwrap_err().contains("JSON object"));
+        assert!(
+            parse_schema("{nope")
+                .unwrap_err()
+                .contains("not valid JSON")
+        );
+        assert!(
+            parse_schema("@/no/such/schema.json")
+                .unwrap_err()
+                .contains("cannot read")
+        );
+    }
+
+    #[test]
+    fn post_body_sends_only_the_urls_by_default() {
+        let body = FetchOptions::default().post_body(&urls(2));
+        assert_eq!(
+            body,
+            json!({"urls": ["https://example.com/0", "https://example.com/1"]})
+        );
+    }
+
+    #[test]
+    fn post_body_maps_every_flag() {
+        let options = FetchOptions {
+            max_chars: Some(500),
+            prompt: Some("List the plans".into()),
+            max_age_hours: Some(24.0),
+            schema: Some(json!({"type": "object"})),
+            links: Some(10),
+            images: Some(0),
+            session_id: Some("sess-1".into()),
+        };
+        assert_eq!(
+            options.post_body(&urls(1)),
+            json!({
+                "urls": ["https://example.com/0"],
+                "content": {
+                    "max_chars": 500,
+                    "prompt": "List the plans",
+                    "schema": {"type": "object"},
+                    "links": 10,
+                    "images": 0,
+                },
+                "retrieval": {"max_age_hours": 24},
+            })
+        );
+        let half = FetchOptions {
+            max_age_hours: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(half.post_body(&urls(1))["retrieval"]["max_age_hours"], 0.5);
+    }
+
+    #[test]
+    fn keyed_fetch_posts_the_body_and_keeps_the_session() {
+        let req = FetchOptions {
+            session_id: Some("sess-1".into()),
+            max_age_hours: Some(0.0),
+            ..Default::default()
+        }
+        .keyed_request(&urls(1));
+        assert_eq!(req.command, "fetch");
+        assert_eq!(req.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(req.body.unwrap()["retrieval"]["max_age_hours"], 0);
+        assert!(!req.live && req.urls.is_none());
+    }
+
+    #[test]
+    fn keyless_fetch_needs_one_url_and_get_only_flags() {
+        let plain = FetchOptions {
+            max_chars: Some(10),
+            prompt: Some("p".into()),
+            max_age_hours: Some(0.0),
+            session_id: Some("s".into()),
+            ..Default::default()
+        };
+        assert!(plain.needs_key(&urls(1)).is_empty());
+        assert_eq!(plain.needs_key(&urls(2)), ["more than one URL"]);
+
+        let post_only = FetchOptions {
+            max_age_hours: Some(1.0),
+            schema: Some(json!({"type": "object"})),
+            links: Some(1),
+            images: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            post_only.needs_key(&urls(1)),
+            ["--max-age-hours above 0", "--schema", "--links", "--images"]
+        );
+    }
+
+    #[test]
+    fn keyless_fetch_sends_max_age_0_as_live() {
+        let req = FetchOptions {
+            max_age_hours: Some(0.0),
+            max_chars: Some(10),
+            prompt: Some("p".into()),
+            ..Default::default()
+        }
+        .keyless_request("https://example.com");
+        assert!(req.live);
+        assert!(req.body.is_none());
+        let q = req.fetch_query().unwrap();
+        assert!(q.contains(&("live", "true".to_string())), "{q:?}");
+        assert!(q.contains(&("max_chars", "10".to_string())), "{q:?}");
+        assert!(
+            !FetchOptions::default()
+                .keyless_request("https://example.com")
+                .live
+        );
+    }
+
+    #[test]
+    fn key_required_names_what_needs_a_key() {
+        let err = key_required(&["more than one URL", "--schema"]);
+        assert_eq!(
+            err.display(),
+            "API key required: Not available without a key: more than one URL, --schema."
+        );
+        assert!(err.hint(false).unwrap().contains("--api-key"));
+    }
+
+    #[test]
+    fn a_failed_page_becomes_that_urls_error() {
+        let entry = json!({"url": "https://dead.example", "error": {
+            "status": 404, "error": "Not found", "message": "gone",
+            "type": "target_error", "code": "page_not_found",
+        }});
+        assert!(is_page_error(&entry));
+        let err = page_error(&entry);
+        assert_eq!(err.status, 404);
+        assert_eq!(err.display(), "Not found: gone");
+        assert_eq!(err.code.as_deref(), Some("page_not_found"));
+        assert_eq!(err.exit_code(), crate::api::exit_code::TARGET);
+
+        let limited = page_error(&json!({"url": "u", "error": {
+            "status": 429, "error": "Too many requests", "retry_after_seconds": 3,
+        }}));
+        assert_eq!(limited.retry_after, Some(3));
+        assert_eq!(limited.exit_code(), crate::api::exit_code::RATE_LIMITED);
+
+        assert!(!is_page_error(&json!({"url": "u", "content": "c"})));
+    }
+
+    #[test]
+    fn the_most_common_page_error_picks_the_exit_code() {
+        let err = |status: u16| ApiError {
+            status,
+            ..Default::default()
+        };
+        use crate::api::exit_code::{ERROR, RATE_LIMITED, TARGET};
+        assert_eq!(dominant_exit_code(&[err(404), err(429), err(404)]), TARGET);
+        assert_eq!(dominant_exit_code(&[err(429), err(404)]), RATE_LIMITED);
+        assert_eq!(
+            dominant_exit_code(&[err(404), err(429), err(429)]),
+            RATE_LIMITED
+        );
+        assert_eq!(dominant_exit_code(&[]), ERROR);
+    }
+
+    #[test]
+    fn batch_credits_show_the_lowest_balance() {
+        let pages = [
+            json!({"usage": {"credits_remaining": 9}}),
+            json!({"url": "u", "error": {"status": 404}}),
+            json!({"usage": {"credits_remaining": 7}}),
+        ];
+        assert_eq!(
+            lowest_credits_line(&pages).as_deref(),
+            Some("Credits left: 7 (https://keenable.ai/console)")
+        );
+        assert_eq!(lowest_credits_line(&[json!({"url": "u"})]), None);
+    }
+
+    #[test]
+    fn normalize_page_cleans_a_fetched_page() {
+        let mut page = json!({
+            "url": "u",
+            "description": "d",
+            "published_at": 1792695600,
+            "content": format!("x{NOTE}"),
+        });
+        normalize_page(&mut page);
+        assert!(page.get("description").is_none());
+        assert_eq!(page["published_at"], "2026-10-22T19:00:00Z");
+        assert_eq!(page["truncated"], true);
     }
 }

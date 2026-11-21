@@ -408,13 +408,83 @@ async fn path_prefix_base_is_kept() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     let seen = log.lock().unwrap().clone();
     assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].method, "POST");
+    assert_eq!(seen[0].path, "/gateway/keenable/v1/fetch", "{seen:?}");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
+async fn keyless_fetch_is_one_get_and_refuses_what_needs_a_key() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("keyless-fetch");
+    let base = format!("http://127.0.0.1:{port}");
+
+    let out = keenable(
+        &home,
+        &base,
+        &["fetch", "https://example.org", "--max-age-hours", "0", "-v"],
+    )
+    .await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    for args in [
+        &["fetch", "https://example.org", "https://example.com"][..],
+        &["fetch", "https://example.org", "--max-age-hours", "1"][..],
+        &[
+            "fetch",
+            "https://example.org",
+            "--schema",
+            r#"{"type":"object"}"#,
+        ][..],
+        &["fetch", "https://example.org", "--links", "5"][..],
+        &["fetch", "https://example.org", "--images", "0"][..],
+    ] {
+        let out = keenable(&home, &base, args).await;
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        let stdout = text(&out.stdout);
+        assert!(stdout.contains("error: API key required"), "{stdout}");
+        assert!(stdout.contains("--api-key"), "{stdout}");
+    }
+
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
     assert_eq!(seen[0].method, "GET");
-    assert!(
-        seen[0]
-            .path
-            .starts_with("/gateway/keenable/v1/fetch?url=https%3A%2F%2Fexample.org"),
-        "{seen:?}"
+    assert_eq!(
+        seen[0].path,
+        "/v1/fetch/public?url=https%3A%2F%2Fexample.org&live=true"
     );
+    assert_eq!(seen[0].api_key, None);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[tokio::test]
+async fn keyed_fetch_posts_every_url_in_one_call() {
+    let (port, log) = spawn_stub().await;
+    let home = temp_home("keyed-fetch");
+    let out = keenable(
+        &home,
+        &format!("http://127.0.0.1:{port}"),
+        &[
+            "fetch",
+            "https://example.org",
+            "https://example.com",
+            "--links",
+            "5",
+            "--api-key",
+            "keen_test",
+        ],
+    )
+    .await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout).contains("title: stub"),
+        "{}",
+        text(&out.stdout)
+    );
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].method, "POST");
+    assert_eq!(seen[0].path, "/v1/fetch");
+    assert_eq!(seen[0].api_key.as_deref(), Some("keen_test"));
     std::fs::remove_dir_all(&home).ok();
 }
 

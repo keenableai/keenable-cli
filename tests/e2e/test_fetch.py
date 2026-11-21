@@ -1,4 +1,4 @@
-"""T-23..T-29 — fetch. Single-URL by design since 0.1.16 (clap rejects extras)."""
+"""T-23..T-29 — fetch. With a key (as here), every call is one POST /v1/fetch of 1 to 20 URLs."""
 
 import pytest
 
@@ -20,7 +20,7 @@ def test_fetch_single_url(kn):
 
 
 def test_fetch_live(kn):
-    res = kn("fetch", "https://example.com", "--live")
+    res = kn("fetch", "https://example.com", "--max-age-hours", "0")
     assert res.code == 0
     data = res.yaml()
     assert data["title"] == "Example Domain"
@@ -81,12 +81,74 @@ def test_pretty_fetch(kn):
     assert "Example Domain" in res.err
 
 
-def test_multiple_urls_rejected(kn):
-    # 0.1.15 documented multi-URL but broke at the API; 0.1.16 made fetch
-    # single-URL by design. Extra URLs are a clap parse error.
-    res = kn("fetch", "https://example.com", "https://example.org")
+def test_live_flag_is_gone(kn):
+    res = kn("fetch", "https://example.com", "--live")
     assert res.code == 2
     assert "unexpected argument" in res.err
+
+
+def test_multiple_urls(kn):
+    res = kn("fetch", "https://example.com", "https://www.iana.org/nonexistent-xyz-12345")
+    # One page read, one failed: the call succeeds and lists both, in order.
+    assert res.code == 0
+    results = res.yaml()["results"]
+    assert len(results) == 2
+    assert results[0]["title"] == "Example Domain"
+    assert EXAMPLE_BODY in results[0]["content"]
+    assert results[1]["url"] == "https://www.iana.org/nonexistent-xyz-12345"
+    assert results[1]["error"]["status"] == 404
+
+
+def test_multiple_urls_pretty(kn):
+    res = kn("fetch", "https://example.com", "https://example.org", "-p")
+    assert res.code == 0
+    assert res.out == ""
+    assert "[1/2]" in res.err and "[2/2]" in res.err
+
+
+def test_every_url_failed(kn):
+    res = kn("fetch", "https://www.iana.org/nonexistent-xyz-1", "https://www.iana.org/nonexistent-xyz-2")
+    assert res.code == 6  # the most common page error: not found
+    results = res.yaml()["results"]
+    assert [r["error"]["status"] for r in results] == [404, 404]
+    assert "all 2 URLs failed" in res.err
+
+
+def test_more_than_20_urls_rejected(kn):
+    urls = [f"https://example.com/{i}" for i in range(21)]
+    res = kn("fetch", *urls)
+    assert res.code == 2
+
+
+def test_duplicate_urls_rejected(kn):
+    res = kn("fetch", "https://example.com", "https://example.com")
+    assert res.code == 8  # invalid request
+    assert "send each URL once" in res.yaml()["message"]
+
+
+def test_fetch_links_and_max_age(kn):
+    res = kn("fetch", "https://www.iana.org/", "--links", "5", "--max-age-hours", "24")
+    assert res.code == 0
+    data = res.yaml()
+    assert 0 < len(data["links"]) <= 5
+    assert all("url" in link for link in data["links"])
+    assert isinstance(data["stale"], bool)
+
+
+@pytest.mark.semantic  # asserts live LLM structured output
+def test_fetch_schema(kn, tmp_path):
+    schema = tmp_path / "schema.json"
+    schema.write_text('{"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}')
+    res = kn("fetch", "https://example.com", "--schema", f"@{schema}")
+    assert res.code == 0
+    data = res.yaml()
+    assert "example" in data["structured"]["title"].lower(), data
+
+
+def test_fetch_schema_must_be_an_object(kn):
+    res = kn("fetch", "https://example.com", "--schema", "[1]")
+    assert res.code == 2
+    assert "JSON object" in res.err
 
 
 def test_unparseable_url(kn):
