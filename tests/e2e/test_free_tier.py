@@ -21,6 +21,8 @@ assert against that error explicitly.
 import json
 from pathlib import Path
 
+import pytest
+
 from conftest import Runner, requires_posix, results_of
 
 
@@ -75,6 +77,30 @@ def test_free_tier_fetch_hits_public_endpoint(kn_fresh):
         assert "error" in data
         assert data["error"] != "Missing app identifier", data
         assert "keenable login" in data.get("hint", "")
+
+
+def test_free_tier_fetch_live_is_max_age_zero(kn_fresh):
+    res = kn_fresh("fetch", "https://example.com", "--max-age-hours", "0", key=False)
+    if res.code == 0:
+        assert res.yaml()["title"] == "Example Domain"
+    else:
+        assert "increase your limits" in res.yaml().get("hint", ""), res.out
+
+
+@pytest.mark.parametrize("extra", [
+    ["https://example.org"],
+    ["--max-age-hours", "24"],
+    ["--schema", '{"type": "object"}'],
+    ["--links", "5"],
+    ["--images", "2"],
+])
+def test_free_tier_fetch_refuses_what_needs_a_key(kn_fresh, extra):
+    # Refused before any request, so no rate limit can get in the way.
+    res = kn_fresh("fetch", "https://example.com", *extra, key=False)
+    assert res.code == 2
+    data = res.yaml()
+    assert data["error"] == "API key required"
+    assert "keenable login" in data["hint"] and "--api-key" in data["hint"]
 
 
 @requires_posix

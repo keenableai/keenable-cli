@@ -94,6 +94,14 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 - `results` is the API's `/v1/monitors/{id}/results`: what a search monitor finds is a result. "Page" only means a watched URL (a page monitor, or a page attached to a search monitor).
 - Output passes the API's fields through as sent; the CLI never adds fields the v1 API dropped.
 
+### Fetch Command (`src/commands/search.rs`)
+
+`keenable fetch <URL>...` takes 1 to 20 URLs (clap caps the count; duplicates are left to the server).
+
+- **With a key** (override or stored, any base): one `POST /v1/fetch`. `FetchOptions::post_body` maps `--max-chars`, `--prompt`, `--schema`, `--links`, `--images` into `content` and `--max-age-hours` into `retrieval`; `--session-id` goes in the `X-Keenable-Session-Id` header, since the body rejects unknown fields. One URL prints `results[0]` as a page (a failed page goes through `handle_api_error` as that URL's error); several print the whole `results` list. Exit non-zero only when the call fails or every URL failed, with `dominant_exit_code` of the page errors.
+- **Without a key**: the keyless `GET /v1/fetch/public` of one URL, with `--max-chars`, `--prompt` and `--max-age-hours 0` (sent as `live=true`). Anything else (`FetchOptions::needs_key`) stops before any request with `API key required` and exit 2.
+- `DaemonRequest::fetch_request` builds both calls for the daemon and the direct path: `body` set means POST, else GET of `urls`.
+
 ### Config Command (`src/commands/config_cmd.rs`)
 
 `keenable config` manages CLI settings stored in `~/.keenable/config.json`.
@@ -109,7 +117,7 @@ Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`
 
 ### Unauthenticated (Free Tier) Flow
 
-All tool commands (`search`, `fetch`) work without login. When no API key is configured:
+All tool commands (`search`, `fetch`) work without login (fetch: one URL, GET-only options; see Fetch Command). When no API key is configured:
 - Requests go to `/v1/{search,fetch}/public` endpoints (IP-based rate limits)
 - The daemon starts with a bare HTTP client (no `X-API-Key` header)
 - Rate limit errors include a hint to run `keenable login` for higher limits
@@ -144,7 +152,7 @@ Bases are compared by scheme, host, port and path (`config::same_base`), so `htt
 
 Commands that bypass the daemon on purpose and go direct: `--api-key` / `KEENABLE_API_KEY` (the daemon's cached auth differs) and `--verbose` (so the proxy/CA view and full error chain it reports are the client's own, not the daemon's).
 
-The daemon captures its environment when spawned. Each request carries `net::env_fingerprint()` (the proxy and CA env vars, `KEENABLE_APP_TITLE`, and the `SSL_CERT_FILE` / `SSL_CERT_DIR` metadata); a daemon whose fingerprint differs replies `restart`, stops accepting, lets in-flight requests finish (bounded) and exits, and that request goes direct. A transport failure seen through the daemon (except a timeout) stops it and is retried directly once, which also covers OS trust-store and system-proxy changes the fingerprint can't see.
+The daemon captures its environment when spawned. Each request carries `net::env_fingerprint()` (the proxy and CA env vars, `KEENABLE_APP_TITLE`, and the `SSL_CERT_FILE` / `SSL_CERT_DIR` metadata); a daemon whose fingerprint differs replies `restart`, stops accepting, lets in-flight requests finish (bounded) and exits, and that request goes direct. A transport failure seen through the daemon (except a timeout) stops it and is retried directly once, which also covers OS trust-store and system-proxy changes the fingerprint can't see. A keyed fetch (POST /v1/fetch) is the exception: it bills every page, and the failure may come after the API billed them, so it stops the daemon and returns the error instead (`bills_every_page`).
 
 ### Terminal UI Design (`src/ui.rs`)
 
