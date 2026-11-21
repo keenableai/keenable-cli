@@ -338,11 +338,17 @@ pub(crate) fn print_yaml(data: &Value) {
 /// transport failure gets one fresh attempt. Timeouts are not retried — that
 /// would double an already long wait. A response without structured data
 /// comes from an older daemon or a malformed request; retry those too.
-fn retry_directly(resp: &daemon::DaemonResponse) -> bool {
+fn retry_directly(req: &DaemonRequest, resp: &daemon::DaemonResponse) -> bool {
     match &resp.data {
         None => true,
-        Some(d) => d["transport"] == true && d["timeout"] != true,
+        Some(d) => d["transport"] == true && d["timeout"] != true && !bills_every_page(req),
     }
+}
+
+/// A keyed POST /v1/fetch bills each of its up to 20 pages. A transport error
+/// can come after the API read and billed them, so it is never resent.
+fn bills_every_page(req: &DaemonRequest) -> bool {
+    req.command == "fetch" && req.body.is_some()
 }
 
 /// A failed request, with whether it was sent with an API key. Captured at
@@ -378,11 +384,22 @@ async fn execute(req: &DaemonRequest, api_key_override: Option<&str>) -> Result<
     if use_daemon && daemon::ensure_daemon().is_ok() {
         match daemon::daemon_request(req).await {
             Ok(resp) if resp.ok => return Ok(resp.data.unwrap_or(Value::Null)),
-            // Every command is a read, so a daemon failure is always safe to
-            // retry directly — regardless of whether it happened before or
-            // after the request may have reached the API. Stop the daemon so
-            // the next command gets one with fresh network state.
-            Ok(resp) if retry_directly(&resp) => daemon::kill_daemon(),
+            // Every command is a read, so a daemon failure is safe to retry
+            // directly, whether it happened before or after the request may
+            // have reached the API. The exception is a keyed fetch, which
+            // bills every page: see `bills_every_page`. Stop the daemon so the
+            // next command gets one with fresh network state.
+            Ok(resp) if retry_directly(req, &resp) => daemon::kill_daemon(),
+            Ok(resp)
+                if bills_every_page(req)
+                    && resp
+                        .data
+                        .as_ref()
+                        .is_some_and(|d| d["transport"] == true && d["timeout"] != true) =>
+            {
+                daemon::kill_daemon();
+                return Err(daemon_response_to_api_error(resp));
+            }
             Ok(resp) => return Err(daemon_response_to_api_error(resp)),
             Err(_) => {} // Fall through to direct
         }
@@ -1268,18 +1285,48 @@ mod tests {
 
     #[test]
     fn daemon_transport_failures_retry_directly_except_timeouts() {
-        assert!(retry_directly(&daemon_err(Some(
-            json!({"error": "Request failed", "status": 0, "transport": true, "timeout": false})
-        ))));
-        assert!(!retry_directly(&daemon_err(Some(
-            json!({"error": "Request failed", "status": 0, "transport": true, "timeout": true})
-        ))));
+        let search = DaemonRequest {
+            command: "search".into(),
+            body: Some(json!({"query": "q"})),
+            ..Default::default()
+        };
+        assert!(retry_directly(
+            &search,
+            &daemon_err(Some(
+                json!({"error": "Request failed", "status": 0, "transport": true, "timeout": false})
+            ))
+        ));
+        assert!(!retry_directly(
+            &search,
+            &daemon_err(Some(
+                json!({"error": "Request failed", "status": 0, "transport": true, "timeout": true})
+            ))
+        ));
         // API errors are answers, not network trouble.
-        assert!(!retry_directly(&daemon_err(Some(
-            json!({"error": "Too many requests", "status": 429})
-        ))));
+        assert!(!retry_directly(
+            &search,
+            &daemon_err(Some(json!({"error": "Too many requests", "status": 429})))
+        ));
         // Older daemons sent transport errors as a bare string.
-        assert!(retry_directly(&daemon_err(None)));
+        assert!(retry_directly(&search, &daemon_err(None)));
+    }
+
+    #[test]
+    fn keyed_fetch_is_not_resent_after_a_transport_error() {
+        let keyed = FetchOptions::default().keyed_request(&["https://a.example/".into()]);
+        let transport = || {
+            daemon_err(Some(
+                json!({"error": "Request failed", "status": 0, "transport": true, "timeout": false}),
+            ))
+        };
+        assert!(!retry_directly(&keyed, &transport()));
+        let keyless = DaemonRequest {
+            command: "fetch".into(),
+            urls: Some(vec!["https://a.example/".into()]),
+            ..Default::default()
+        };
+        assert!(retry_directly(&keyless, &transport()));
+        assert!(retry_directly(&keyed, &daemon_err(None)));
     }
 
     #[test]

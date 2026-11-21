@@ -152,7 +152,7 @@ Bases are compared by scheme, host, port and path (`config::same_base`), so `htt
 
 Commands that bypass the daemon on purpose and go direct: `--api-key` / `KEENABLE_API_KEY` (the daemon's cached auth differs) and `--verbose` (so the proxy/CA view and full error chain it reports are the client's own, not the daemon's).
 
-The daemon captures its environment when spawned. Each request carries `net::env_fingerprint()` (the proxy and CA env vars, `KEENABLE_APP_TITLE`, and the `SSL_CERT_FILE` / `SSL_CERT_DIR` metadata); a daemon whose fingerprint differs replies `restart`, stops accepting, lets in-flight requests finish (bounded) and exits, and that request goes direct. A transport failure seen through the daemon (except a timeout) stops it and is retried directly once, which also covers OS trust-store and system-proxy changes the fingerprint can't see.
+The daemon captures its environment when spawned. Each request carries `net::env_fingerprint()` (the proxy and CA env vars, `KEENABLE_APP_TITLE`, and the `SSL_CERT_FILE` / `SSL_CERT_DIR` metadata); a daemon whose fingerprint differs replies `restart`, stops accepting, lets in-flight requests finish (bounded) and exits, and that request goes direct. A transport failure seen through the daemon (except a timeout) stops it and is retried directly once, which also covers OS trust-store and system-proxy changes the fingerprint can't see. A keyed fetch (POST /v1/fetch) is the exception: it bills every page, and the failure may come after the API billed them, so it stops the daemon and returns the error instead (`bills_every_page`).
 
 ### Terminal UI Design (`src/ui.rs`)
 
