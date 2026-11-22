@@ -192,11 +192,33 @@ jobs:
           # Empty on the primary Linux leg (full suite); "not semantic and not
           # latency" elsewhere, so the OS-independent live-index checks run once.
           MARKERS: ${{ matrix.markers }}
+          SOURCE: ${{ matrix.source }}
+          # Tests in released tags that the backend has since outdated on
+          # purpose (a documented API change, not a regression), one pytest
+          # node id per line, relative to tests/e2e (pytest's rootdir, from its
+          # pyproject.toml; a tests/e2e/... prefix never matches). Release legs
+          # deselect them; source legs never do,
+          # since main's tests are fixed instead. This list lives here because
+          # a release leg checks out its tag, which can't be edited. Remove an
+          # entry once no release under test carries the old test.
+          #
+          # exclude_domains takes a public suffix with a leading dot (.gov,
+          # *.gov), documented 2026-11-17 and live in pro search since
+          # 2026-11-21; tags up to v0.6.0 still expect these to be rejected.
+          RELEASE_DESELECT: |
+            test_search.py::test_bad_exclude_entry_is_rejected_as_sent[.com]
+            test_search.py::test_bad_exclude_entry_is_rejected_as_sent[.gov]
+            test_search.py::test_bad_exclude_entry_is_rejected_as_sent[*.gov]
         run: |
           # The shell-installer test and daemon tests self-skip on Windows via
           # pytest skipif, so the same invocation works on every platform.
           args=(-v -ra --color=yes)
           [ -n "$MARKERS" ] && args+=(-m "$MARKERS")
+          if [ "$SOURCE" = release ]; then
+            while IFS= read -r id; do
+              [ -n "$id" ] && args+=(--deselect "$id")
+            done <<<"$RELEASE_DESELECT"
+          fi
           uv run --project tests/e2e pytest tests/e2e "${args[@]}"
 
   # Alert Slack when any e2e leg does not succeed. Fires on the nightly

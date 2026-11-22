@@ -30,6 +30,8 @@ CI (`.github/workflows/e2e.yml`, nightly + manual dispatch) always runs a binary
 
 So main's tests describe main's binary: never add a "skip on a binary that predates X" gate for a merged but unreleased feature.
 
+The reverse case, a deliberate, documented backend change that makes a released tag's test wrong, is fixed in main's tests and listed in `RELEASE_DESELECT` in `e2e.yml` (pytest node ids, with the reason), which only release legs deselect. A regression is never listed there: it gets fixed in the backend. Drop an entry once no release under test carries the old test.
+
 The suite isolates each run by pointing `KEENABLE_HOME` at a temp dir (see "Config & path resolution" below). Release legs install via the shell installer on Unix and the PowerShell installer (`keenable-cli-installer.ps1`) on Windows. The Unix-only daemon tests and the shell-installer test self-skip on Windows (`os.name != "posix"`), so the same `pytest tests/e2e` invocation works on every platform.
 
 ## Project Structure

@@ -244,15 +244,31 @@ def test_blank_beside_real_entry_is_rejected(kn, args):
     _assert_filter_rejected(kn("search", "x", *args), "")
 
 
+# A leading dot or `*.` names a public suffix (`.gov`, see below), so `.un.org`
+# and `.example` are rejected only because they are not on the Public Suffix
+# List. A bare suffix (`co.uk`, `com`) is rejected so a typo can't drop a TLD.
 REJECTED_ENTRIES = [
-    "*", ".com", ".gov", "*.gov", "*.docs.rs", "docs.rs/releases",
-    "user@docs.rs", "127.0.0.1", "doc s.rs", "localhost", "co.uk", "docs.notarealtld",
+    "*", "*.docs.rs", ".un.org", ".example", "docs.rs/releases", "user@docs.rs",
+    "127.0.0.1", "doc s.rs", "localhost", "co.uk", "com", "docs.notarealtld",
 ]
 
 
 @pytest.mark.parametrize("entry", REJECTED_ENTRIES)
 def test_bad_exclude_entry_is_rejected_as_sent(kn, entry):
     _assert_filter_rejected(kn("search", "x", "--exclude-domain", entry), entry)
+
+
+@pytest.mark.parametrize("entry", [".gov", "*.gov"])
+def test_public_suffix_entry_excludes_every_host_under_it(kn, entry):
+    # Without the filter this query is mostly irs.gov / usa.gov.
+    for r in _non_empty_results(kn, "irs tax forms 1040", "--exclude-domain", entry):
+        assert not host_under(host_of(r["url"]), "gov"), r["url"]
+
+
+@pytest.mark.parametrize("entry", [".com", ".co.uk", ".gov.uk"])
+def test_public_suffix_entry_is_accepted(kn, entry):
+    res = kn("search", "x", "--exclude-domain", entry)
+    assert res.code == 0, res.out + res.err
 
 
 @pytest.mark.parametrize("host", ["github.io", "blogspot.com"])
