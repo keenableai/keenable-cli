@@ -50,7 +50,9 @@ def test_concurrent_commands_resolve_to_one_daemon(short_home):
         with ThreadPoolExecutor(max_workers=BURST) as pool:
             results = list(pool.map(lambda _: kn("search", QUERY, key=False), range(BURST)))
 
-        bad = [(r.code, (r.err or r.out)[:120]) for r in results if not _healthy(r)]
+        # Keep stdout: in YAML mode it holds the structured error (status,
+        # code, request_id) that tells a server 5xx from a daemon race.
+        bad = [(r.code, r.err.strip()[:120], r.out[:800]) for r in results if not _healthy(r)]
         assert not bad, f"unhealthy responses from the burst: {bad}"
 
         # The race resolved to exactly one live daemon.
@@ -60,7 +62,7 @@ def test_concurrent_commands_resolve_to_one_daemon(short_home):
         # Two more serial calls reuse that same daemon — no respawn, no orphan.
         for _ in range(2):
             res = kn("search", QUERY, key=False)
-            assert _healthy(res), (res.code, (res.err or res.out)[:200])
+            assert _healthy(res), (res.code, res.err.strip()[:200], res.out[:800])
             assert (keenable_dir / "daemon.pid").read_text().strip() == pid, \
                 "pid changed — daemon respawned instead of being reused"
     finally:
