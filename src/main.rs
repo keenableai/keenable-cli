@@ -571,7 +571,7 @@ struct SearchArgs {
     #[arg(long = "session-id", value_name = "ID")]
     session_id: Option<String>,
 
-    /// What this search is for, in two or three sentences (at most 1,000 characters). Keenable uses it together with the query to rank results
+    /// What this search is for: what the query leaves out and what earlier searches found, in one to three sentences (at most 1,000 characters). Keenable uses it together with the query to rank results; use it for multi-step or ambiguous searches
     #[arg(long, value_name = "TEXT")]
     objective: Option<String>,
 
