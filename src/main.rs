@@ -535,7 +535,7 @@ struct SearchArgs {
     #[arg(long)]
     site: Option<String>,
 
-    /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct entries. A public suffix with a leading dot (.gov, .co.uk) excludes every host under it. No paths, wildcards on hosts (*.un.org) or IPs. Private-suffix hosts like github.io are accepted
+    /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct entries. A public suffix with a leading dot (.gov, .co.uk) excludes every host under it; a dot or wildcard on any other host (.un.org, *.un.org) and a bare suffix (com) are rejected, as are paths and IPs. Private-suffix hosts like github.io are accepted
     #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
     exclude_domains: Vec<String>,
 
