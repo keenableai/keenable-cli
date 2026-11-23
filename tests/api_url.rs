@@ -414,7 +414,7 @@ async fn path_prefix_base_is_kept() {
 }
 
 #[tokio::test]
-async fn keyless_fetch_is_one_get_and_refuses_what_needs_a_key() {
+async fn keyless_fetch_is_one_post_and_refuses_what_needs_a_key() {
     let (port, log) = spawn_stub().await;
     let home = temp_home("keyless-fetch");
     let base = format!("http://127.0.0.1:{port}");
@@ -447,11 +447,8 @@ async fn keyless_fetch_is_one_get_and_refuses_what_needs_a_key() {
 
     let seen = log.lock().unwrap().clone();
     assert_eq!(seen.len(), 1, "{seen:?}");
-    assert_eq!(seen[0].method, "GET");
-    assert_eq!(
-        seen[0].path,
-        "/v1/fetch/public?url=https%3A%2F%2Fexample.org&live=true"
-    );
+    assert_eq!(seen[0].method, "POST");
+    assert_eq!(seen[0].path, "/v1/fetch/public");
     assert_eq!(seen[0].api_key, None);
     std::fs::remove_dir_all(&home).ok();
 }

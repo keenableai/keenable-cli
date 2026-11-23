@@ -105,7 +105,7 @@ keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char c
 keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
 ```
 
-With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch reads one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours 0`; several URLs, `--schema`, `--links`, `--images` or `--max-age-hours` above 0 stop before any request with `API key required` and exit code 2.
+With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch sends one `POST /v1/fetch/public` for one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours 0`; several URLs, `--schema`, `--links`, `--images` or `--max-age-hours` above 0 stop before any request with `API key required` and exit code 2.
 
 One URL prints the page as before. Several URLs print `results`: one page or `{url, error}` per URL, in the order given; `-p` shows each in turn. A page can also carry `image`, `favicon`, `images`, `links`, `structured`, `answer_error` (why `structured` is missing) and `stale` (an older stored copy, because a fresh read failed). The command fails only when the call fails as a whole or every URL failed; then it exits with the code of the most common page error.
 

@@ -347,8 +347,9 @@ fn retry_directly(req: &DaemonRequest, resp: &daemon::DaemonResponse) -> bool {
 
 /// A keyed POST /v1/fetch bills each of its up to 20 pages. A transport error
 /// can come after the API read and billed them, so it is never resent.
+/// The keyless POST is free and may be.
 fn bills_every_page(req: &DaemonRequest) -> bool {
-    req.command == "fetch" && req.body.is_some()
+    req.command == "fetch" && req.body.is_some() && !req.keyless
 }
 
 /// A failed request, with whether it was sent with an API key. Captured at
@@ -818,7 +819,7 @@ impl FetchOptions {
         Value::Object(body)
     }
 
-    /// What this call asks for that the keyless GET route can't do.
+    /// What this call asks for that the keyless route does not take.
     fn needs_key(&self, urls: &[String]) -> Vec<&'static str> {
         let mut needs = Vec::new();
         if urls.len() > 1 {
@@ -840,12 +841,11 @@ impl FetchOptions {
     }
 
     fn keyless_request(self, url: &str) -> DaemonRequest {
+        let body = self.post_body(&[url.to_string()]);
         DaemonRequest {
             command: "fetch".to_string(),
-            urls: Some(vec![url.to_string()]),
-            live: self.max_age_hours == Some(0.0),
-            prompt: self.prompt,
-            max_chars: self.max_chars,
+            body: Some(body),
+            keyless: true,
             session_id: self.session_id,
             ..Default::default()
         }
@@ -1005,6 +1005,14 @@ fn print_single_page(page: &Value, human: bool) {
     }
 }
 
+fn missing_results() -> ApiError {
+    ApiError {
+        error: "Failed to parse response".into(),
+        message: Some("The response has no `results` list.".into()),
+        ..Default::default()
+    }
+}
+
 pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key: Option<&str>) {
     let api_key = key_override_or_exit(api_key, human);
     let keyed = api_key.is_some() || !matches!(config::stored_key(), config::StoredKey::None);
@@ -1019,13 +1027,22 @@ pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key:
         let Some(url) = urls.first() else {
             return;
         };
-        match execute(&options.keyless_request(url), api_key).await {
-            Ok(mut page) => {
-                normalize_page(&mut page);
-                print_single_page(&page, human);
-            }
+        let mut data = match execute(&options.keyless_request(url), api_key).await {
+            Ok(data) => data,
             Err(e) => handle_api_error(*e, human),
+        };
+        let Some(page) = data
+            .get_mut("results")
+            .and_then(Value::as_array_mut)
+            .and_then(|r| r.first_mut())
+        else {
+            handle_api_error((missing_results(), false), human);
+        };
+        if is_page_error(page) {
+            handle_api_error((page_error(page), false), human);
         }
+        normalize_page(page);
+        print_single_page(page, human);
         return;
     }
 
@@ -1034,12 +1051,7 @@ pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key:
         Err(e) => handle_api_error(*e, human),
     };
     let Some(results) = data.get_mut("results").and_then(Value::as_array_mut) else {
-        let err = ApiError {
-            error: "Failed to parse response".into(),
-            message: Some("The response has no `results` list.".into()),
-            ..Default::default()
-        };
-        handle_api_error((err, true), human);
+        handle_api_error((missing_results(), true), human);
     };
     for entry in results.iter_mut().filter(|e| !is_page_error(e)) {
         normalize_page(entry);
@@ -1228,29 +1240,6 @@ mod tests {
     }
 
     #[test]
-    fn fetch_query_carries_session_id() {
-        let req = DaemonRequest {
-            command: "fetch".into(),
-            urls: Some(vec!["https://example.com".into()]),
-            session_id: Some("sess-1".into()),
-            ..Default::default()
-        };
-        let q = req.fetch_query().unwrap();
-        assert!(q.contains(&("session_id", "sess-1".to_string())), "{q:?}");
-        let bare = DaemonRequest {
-            urls: Some(vec!["https://example.com".into()]),
-            ..Default::default()
-        };
-        assert!(
-            !bare
-                .fetch_query()
-                .unwrap()
-                .iter()
-                .any(|(k, _)| *k == "session_id")
-        );
-    }
-
-    #[test]
     fn config_mode_accepts_valid_and_legacy_standard() {
         assert_eq!(
             config_mode(&json!({"m": "pro"}), "m").as_deref(),
@@ -1322,7 +1311,8 @@ mod tests {
         assert!(!retry_directly(&keyed, &transport()));
         let keyless = DaemonRequest {
             command: "fetch".into(),
-            urls: Some(vec!["https://a.example/".into()]),
+            body: Some(json!({"urls": ["https://a.example/"]})),
+            keyless: true,
             ..Default::default()
         };
         assert!(retry_directly(&keyless, &transport()));
@@ -1800,11 +1790,11 @@ mod tests {
         assert_eq!(req.command, "fetch");
         assert_eq!(req.session_id.as_deref(), Some("sess-1"));
         assert_eq!(req.body.unwrap()["retrieval"]["max_age_hours"], 0);
-        assert!(!req.live && req.urls.is_none());
+        assert!(!req.keyless);
     }
 
     #[test]
-    fn keyless_fetch_needs_one_url_and_get_only_flags() {
+    fn keyless_fetch_needs_one_url_and_free_options() {
         let plain = FetchOptions {
             max_chars: Some(10),
             prompt: Some("p".into()),
@@ -1829,24 +1819,27 @@ mod tests {
     }
 
     #[test]
-    fn keyless_fetch_sends_max_age_0_as_live() {
+    fn keyless_fetch_posts_one_url_with_only_the_free_options() {
         let req = FetchOptions {
             max_age_hours: Some(0.0),
             max_chars: Some(10),
             prompt: Some("p".into()),
+            session_id: Some("s".into()),
             ..Default::default()
         }
         .keyless_request("https://example.com");
-        assert!(req.live);
-        assert!(req.body.is_none());
-        let q = req.fetch_query().unwrap();
-        assert!(q.contains(&("live", "true".to_string())), "{q:?}");
-        assert!(q.contains(&("max_chars", "10".to_string())), "{q:?}");
-        assert!(
-            !FetchOptions::default()
-                .keyless_request("https://example.com")
-                .live
+        assert!(req.keyless);
+        assert_eq!(req.session_id.as_deref(), Some("s"));
+        assert_eq!(
+            req.body.unwrap(),
+            json!({
+                "urls": ["https://example.com"],
+                "content": {"max_chars": 10, "prompt": "p"},
+                "retrieval": {"max_age_hours": 0},
+            })
         );
+        let bare = FetchOptions::default().keyless_request("https://example.com");
+        assert_eq!(bare.body.unwrap(), json!({"urls": ["https://example.com"]}));
     }
 
     #[test]

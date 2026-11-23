@@ -101,8 +101,8 @@ Management commands (`login`, `logout`, `configure-mcp`, `config`) always output
 `keenable fetch <URL>...` takes 1 to 20 URLs (clap caps the count; duplicates are left to the server).
 
 - **With a key** (override or stored, any base): one `POST /v1/fetch`. `FetchOptions::post_body` maps `--max-chars`, `--prompt`, `--schema`, `--links`, `--images` into `content` and `--max-age-hours` into `retrieval`; `--session-id` goes in the `X-Keenable-Session-Id` header, since the body rejects unknown fields. One URL prints `results[0]` as a page (a failed page goes through `handle_api_error` as that URL's error); several print the whole `results` list. Exit non-zero only when the call fails or every URL failed, with `dominant_exit_code` of the page errors.
-- **Without a key**: the keyless `GET /v1/fetch/public` of one URL, with `--max-chars`, `--prompt` and `--max-age-hours 0` (sent as `live=true`). Anything else (`FetchOptions::needs_key`) stops before any request with `API key required` and exit 2.
-- `DaemonRequest::fetch_request` builds both calls for the daemon and the direct path: `body` set means POST, else GET of `urls`.
+- **Without a key**: the keyless `POST /v1/fetch/public` of one URL (body `urls`, plus `content.max_chars`, `content.prompt` and `retrieval.max_age_hours: 0` when set; the answer is `results[0]`, an entry with `error` is that page's failure). Anything else (`FetchOptions::needs_key`) stops before any request with `API key required` and exit 2.
+- `DaemonRequest::fetch_request` builds the call for the daemon and the direct path: always a POST of `body`, to `/v1/fetch/public` without a key. A keyless transport error is resent (free); a keyed one never is (`bills_every_page`).
 
 ### Config Command (`src/commands/config_cmd.rs`)
 
@@ -119,7 +119,7 @@ Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`
 
 ### Unauthenticated (Free Tier) Flow
 
-All tool commands (`search`, `fetch`) work without login (fetch: one URL, GET-only options; see Fetch Command). When no API key is configured:
+All tool commands (`search`, `fetch`) work without login (fetch: one URL, no schema, links or images; see Fetch Command). When no API key is configured:
 - Requests go to `/v1/{search,fetch}/public` endpoints (IP-based rate limits)
 - The daemon starts with a bare HTTP client (no `X-API-Key` header)
 - Rate limit errors include a hint to run `keenable login` for higher limits
