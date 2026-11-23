@@ -67,7 +67,7 @@ pub struct SearchOptions {
     pub max_results: Option<u64>,
     /// Groups related calls (search and fetch) under one session.
     pub session_id: Option<String>,
-    /// What the search is for; the API logs it and does not change results.
+    /// What the search is for. The API ranks results by the query and the objective together; it logs the objective except for zero-data-retention organizations.
     pub objective: Option<String>,
 }
 
