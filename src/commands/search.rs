@@ -76,6 +76,23 @@ impl Moderation {
     }
 }
 
+/// The `--moderation` value as given: a level, or empty (`--moderation ""`),
+/// which counts as not given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModerationFlag(pub Option<Moderation>);
+
+/// Parses `--moderation`: `moderate` or `strict` (any case, surrounding
+/// spaces ignored), or an empty value for no moderation.
+pub fn parse_moderation_flag(value: &str) -> Result<ModerationFlag, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(ModerationFlag(None));
+    }
+    <Moderation as clap::ValueEnum>::from_str(trimmed, true)
+        .map(|level| ModerationFlag(Some(level)))
+        .map_err(|_| "possible values: moderate, strict, or empty for no moderation".to_string())
+}
+
 /// Messages of the response's `warnings` (deprecated parameters the request
 /// used), falling back to the code when a warning has no message.
 fn response_warnings(data: &Value) -> Vec<String> {

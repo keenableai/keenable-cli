@@ -200,6 +200,11 @@ def test_moderation_strict_is_accepted(kn):
     assert res.code == 0, res.out + res.err
 
 
+def test_empty_moderation_counts_as_not_given(kn):
+    res = kn("search", "rust async runtime", "--moderation", "")
+    assert res.code == 0, res.err
+
+
 def test_invalid_moderation_is_a_usage_error(kn):
     res = kn("search", "x", "--moderation", "off")
     assert res.code == 2

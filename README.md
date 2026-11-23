@@ -64,9 +64,9 @@ Works without login (free tier). Log in for higher rate limits.
 
 `--moderation moderate` or `--moderation strict` removes results a safety model
 judges unsafe at that level; results are removed, never replaced, so a search
-can return fewer results or none. It works in the `pro` and `realtime` modes;
-the API rejects it (exit 8) for a URL query fetched as-is or with
-`--query-time`. When the API reports a deprecated request parameter, YAML output
+can return fewer results or none. An empty value (`--moderation ""`) is the same
+as leaving the flag out. It works in the `pro` and `realtime` modes; the API
+rejects it (exit 8) for a URL query fetched as-is. When the API reports a deprecated request parameter, YAML output
 carries its `warnings` list and `-p` prints each warning on stderr.
 
 #### Excluding domains

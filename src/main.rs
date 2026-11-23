@@ -575,9 +575,9 @@ struct SearchArgs {
     #[arg(long, value_name = "TEXT")]
     objective: Option<String>,
 
-    /// Remove results a safety model judges unsafe: "moderate" or "strict" (stricter). Results are removed, never replaced, so a search can return fewer or none. Without it, no moderation. Only in "pro" and "realtime" modes; not for a URL query fetched as-is or with --query-time (the API rejects those, exit 8)
-    #[arg(long, value_enum, value_name = "LEVEL")]
-    moderation: Option<commands::search::Moderation>,
+    /// Remove results a safety model judges unsafe: "moderate" or "strict" (stricter). Results are removed, never replaced, so a search can return fewer or none. Without it, or with an empty value, no moderation. Only in "pro" and "realtime" modes, and not for a URL query fetched as-is (the API rejects those, exit 8)
+    #[arg(long, value_name = "LEVEL", value_parser = commands::search::parse_moderation_flag)]
+    moderation: Option<commands::search::ModerationFlag>,
 
     /// Pretty-print output for humans instead of YAML
     #[arg(short = 'p', long = "pretty")]
@@ -811,7 +811,7 @@ async fn run() {
                     max_results: args.max_results,
                     session_id: args.session_id.clone(),
                     objective: args.objective.clone(),
-                    moderation: args.moderation,
+                    moderation: args.moderation.and_then(|flag| flag.0),
                 },
                 args.pretty,
                 args.api_key.as_deref(),
@@ -896,7 +896,7 @@ mod tests {
             panic!("expected the search subcommand");
         };
         commands::search::SearchOptions {
-            moderation: search.moderation,
+            moderation: search.moderation.and_then(|flag| flag.0),
             ..Default::default()
         }
         .to_json()
@@ -916,12 +916,31 @@ mod tests {
     }
 
     #[test]
+    fn moderation_flag_counts_an_empty_value_as_not_given() {
+        for empty in ["", "  "] {
+            assert_eq!(
+                search_options(&["--moderation", empty]),
+                json!({}),
+                "{empty:?}"
+            );
+        }
+        assert_eq!(
+            search_options(&["--moderation", " Strict "]),
+            json!({"moderation": "strict"})
+        );
+    }
+
+    #[test]
     fn moderation_flag_rejects_other_values_as_a_usage_error() {
-        for bad in ["off", "", "STRICTER"] {
+        for bad in ["off", "STRICTER", "none"] {
             let err = Cli::try_parse_from(["keenable", "search", "q", "--moderation", bad])
                 .err()
                 .expect("invalid value is rejected");
-            assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue, "{bad:?}");
+            assert_eq!(err.exit_code(), 2, "{bad:?}");
+            assert!(
+                err.to_string().contains("moderate, strict"),
+                "{bad:?}: {err}"
+            );
         }
     }
 

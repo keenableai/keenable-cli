@@ -73,7 +73,7 @@ assets/
 
 All tool commands (`search`, `fetch`) output **YAML by default** (token-efficient for agents). With a key, the response's `usage.credits_remaining` (credits left after the request) passes through to YAML, and `-p` shows it as a `Credits left: N` hint.
 Use `-p` / `--pretty` flag for pretty-printed human-readable output.
-A search response's `warnings` list (deprecated request parameters) passes through to YAML as sent; `-p` prints each entry's `message` (or `code`) with `ui::warning`. `--moderation <moderate|strict>` (clap `value_enum`, so any other value is exit 2) goes into the body only when given; the CLI never sends the deprecated `safety_mode`.
+A search response's `warnings` list (deprecated request parameters) passes through to YAML as sent; `-p` prints each entry's `message` (or `code`) with `ui::warning`. `--moderation <moderate|strict>` (`parse_moderation_flag`: case-insensitive, an empty value counts as not given, any other value is exit 2) goes into the body only when given a level; the CLI never sends the deprecated `safety_mode`.
 Use `--api-key <KEY>` (or the `KEENABLE_API_KEY` env var; flag wins) to override the stored key for one-off calls. Either override bypasses the daemon and goes direct. A blank `--api-key` value is an error (exit 1, "Empty API key"), never a fallback to the stored key or to anonymous requests; a blank `KEENABLE_API_KEY` prints a warning on stderr and is ignored. `api::api_key_client` sends no `X-API-Key` header for a blank key.
 Use the global `-v` / `--verbose` flag to print network details to stderr: the proxy in use and its source, the trusted CA sources, and the full error chain on failure. It also bypasses the daemon (see Daemon).
 
