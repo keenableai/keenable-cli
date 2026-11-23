@@ -73,14 +73,21 @@ keenable search "security council vote" --exclude-domain blogs.un.org --exclude-
 
 - Each entry is a host and covers that host and every subdomain
   (`yahoo.com` also excludes `finance.yahoo.com`). At most 1,000 distinct
-  hosts per request, 2,000 entries as sent, and 2,048 bytes per entry.
+  entries per request, 2,000 entries as sent, and 2,048 bytes per entry.
+- A public suffix with a leading dot excludes every host under it:
+  `--exclude-domain .gov` drops `irs.gov`, `www.nasa.gov` and the rest, and
+  `*.gov` means the same. The suffix must be on the
+  [Public Suffix List](https://publicsuffix.org/) (`.co.uk` works,
+  `.example` doesn't), and `.gov` doesn't cover `gov.uk`: write `.gov.uk` for
+  that. A bare `gov` or `com` is rejected, so a typo can't drop a whole TLD.
 - The server cleans up harmless noise: scheme, a leading `www.`, case, port,
   a trailing `/` or dot, a query string or `#fragment` and surrounding
   whitespace (`https://WWW.UN.org/` becomes `un.org`); international names
   become punycode.
 - Anything else is rejected with an `invalid_filter` error naming the field,
   the entry and the reason, and the command exits 8: paths (`un.org/press`),
-  suffixes (`.com`), wildcards (`*.gov`), IP addresses, `user@host` and
+  a dot or wildcard on a host that isn't a public suffix (`.un.org`,
+  `*.un.org`), a bare suffix (`com`, `co.uk`), IP addresses, `user@host` and
   invalid hosts. Private-suffix hosts such as `github.io` or `blogspot.com`
   are accepted.
 - Spaces around comma-separated entries are trimmed. A blank entry, such as
