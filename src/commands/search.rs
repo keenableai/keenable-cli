@@ -800,6 +800,9 @@ pub async fn search(
                 }
                 return;
             }
+            for warning in response_warnings(&data) {
+                ui::warning_line(&warning);
+            }
             print_yaml(&data);
         }
         Err(e) => handle_api_error(*e, human),

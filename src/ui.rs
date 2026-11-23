@@ -213,6 +213,11 @@ pub fn error_line(msg: &str) {
     eprintln!("error: {}", one_line(msg));
 }
 
+/// YAML-mode stderr warning for scripts: `warning: …`, one line, unstyled.
+pub fn warning_line(msg: &str) {
+    eprintln!("warning: {}", one_line(msg));
+}
+
 /// Print a warning line (yellow).
 pub fn warning(msg: &str) {
     print_wrapped(format!("   {}  ", "⚠".yellow()), msg, |s| s.yellow());

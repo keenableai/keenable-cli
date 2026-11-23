@@ -67,7 +67,8 @@ judges unsafe at that level; results are removed, never replaced, so a search
 can return fewer results or none. An empty value (`--moderation ""`) is the same
 as leaving the flag out. It works in the `pro` and `realtime` modes; the API
 rejects it (exit 8) for a URL query fetched as-is. When the API reports a deprecated request parameter, YAML output
-carries its `warnings` list and `-p` prints each warning on stderr.
+carries its `warnings` list and each warning also goes to stderr as a
+`warning: …` line; `-p` prints each warning on stderr.
 
 #### Excluding domains
 
