@@ -1,6 +1,7 @@
 """T-23..T-29 — fetch. With a key (as here), every call is one POST /v1/fetch of 1 to 20 URLs."""
 
 import pytest
+from urllib.parse import urlparse
 
 
 # Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
@@ -14,7 +15,9 @@ def test_fetch_single_url(kn):
     assert res.code == 0
     data = res.yaml()
     assert data["title"] == "Example Domain"
-    assert data["url"].startswith("https://example.com")
+    parsed_url = urlparse(data["url"])
+    assert parsed_url.scheme == "https"
+    assert parsed_url.hostname == "example.com"
     assert EXAMPLE_BODY in data["content"]
     assert "description" not in data
 
@@ -39,7 +42,9 @@ def test_fetch_prompt(kn):
     res = kn("fetch", "https://example.com", "--prompt", "What does the page say not to rely on it for? Answer in a few words.")
     assert res.code == 0
     data = res.yaml()
-    assert data["url"].startswith("https://example.com")
+    parsed_url = urlparse(data["url"])
+    assert parsed_url.scheme == "https"
+    assert parsed_url.hostname == "example.com"
     # LLM extraction replaces the full page with the instruction's output. The
     # last assert is the load-bearing one: a stale daemon that drops `prompt`
     # returns the full page with exit code 0.
