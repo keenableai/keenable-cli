@@ -56,10 +56,18 @@ keenable search "query" --snippet-max-length 2000          # Longer snippets (18
 keenable search "query" --query-time 2026-01-01T00:00:00Z  # Point-in-time search
 keenable search "query" --session-id agent-run-42          # Group related calls in a session
 keenable search "query" --objective "Find the tokio docs page on spawn_blocking"   # Say what the search is for (used in ranking)
+keenable search "query" --moderation strict                # Remove unsafe results (moderate or strict)
 keenable search "query" --api-key KEY                      # Use a specific API key
 ```
 
 Works without login (free tier). Log in for higher rate limits.
+
+`--moderation moderate` or `--moderation strict` removes results a safety model
+judges unsafe at that level; results are removed, never replaced, so a search
+can return fewer results or none. It works in the `pro` and `realtime` modes;
+the API rejects it (exit 8) for a URL query fetched as-is or with
+`--query-time`. When the API reports a deprecated request parameter, YAML output
+carries its `warnings` list and `-p` prints each warning on stderr.
 
 #### Excluding domains
 

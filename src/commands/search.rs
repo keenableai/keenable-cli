@@ -60,6 +60,42 @@ fn response_warning(data: &Value) -> Option<&str> {
         .filter(|w| !w.is_empty())
 }
 
+/// `--moderation`: drops results a safety model judges unsafe at this level.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Moderation {
+    Moderate,
+    Strict,
+}
+
+impl Moderation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Moderation::Moderate => "moderate",
+            Moderation::Strict => "strict",
+        }
+    }
+}
+
+/// Messages of the response's `warnings` (deprecated parameters the request
+/// used), falling back to the code when a warning has no message.
+fn response_warnings(data: &Value) -> Vec<String> {
+    data["warnings"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|w| {
+                    [&w["message"], &w["code"]]
+                        .into_iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .find(|t| !t.is_empty())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Non-filter search parameters; unset ones are left to the server default.
 #[derive(Default)]
 pub struct SearchOptions {
@@ -69,10 +105,12 @@ pub struct SearchOptions {
     pub session_id: Option<String>,
     /// What the search is for; the API logs it and does not change results.
     pub objective: Option<String>,
+    /// Sent only when given; omitted means no moderation.
+    pub moderation: Option<Moderation>,
 }
 
 impl SearchOptions {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
         if let Some(n) = self.snippet_max_length {
             map.insert("snippet_max_length".into(), json!(n));
@@ -90,6 +128,9 @@ impl SearchOptions {
             .filter(|o| !o.is_empty())
         {
             map.insert("objective".into(), json!(objective));
+        }
+        if let Some(level) = self.moderation {
+            map.insert("moderation".into(), json!(level.as_str()));
         }
         Value::Object(map)
     }
@@ -701,6 +742,13 @@ pub async fn search(
                 ui::header(&format!("keenable search \"{}\"", query));
                 if let Some(warning) = response_warning(&data) {
                     ui::warning(&ui::printable(warning));
+                    eprintln!();
+                }
+                let warnings = response_warnings(&data);
+                for warning in &warnings {
+                    ui::warning(&ui::printable(warning));
+                }
+                if !warnings.is_empty() {
                     eprintln!();
                 }
                 let results = data["results"].as_array().filter(|r| !r.is_empty());
@@ -1593,6 +1641,57 @@ mod tests {
     }
 
     #[test]
+    fn response_warnings_lists_each_message_or_code() {
+        let data = json!({"warnings": [
+            {"code": "deprecated_parameter", "path": "safety_mode", "message": "Use moderation."},
+            {"code": "deprecated_parameter", "path": "x", "message": "  "},
+            {"path": "y"},
+        ]});
+        assert_eq!(
+            response_warnings(&data),
+            vec![
+                "Use moderation.".to_string(),
+                "deprecated_parameter".to_string()
+            ]
+        );
+        assert!(response_warnings(&json!({"results": []})).is_empty());
+        assert!(response_warnings(&json!({"warnings": null})).is_empty());
+    }
+
+    #[test]
+    fn search_options_send_moderation_only_when_given() {
+        assert!(
+            SearchOptions::default()
+                .to_json()
+                .get("moderation")
+                .is_none()
+        );
+        for (level, sent) in [
+            (Moderation::Moderate, "moderate"),
+            (Moderation::Strict, "strict"),
+        ] {
+            let v = SearchOptions {
+                moderation: Some(level),
+                ..Default::default()
+            }
+            .to_json();
+            assert_eq!(v, json!({"moderation": sent}));
+        }
+    }
+
+    #[test]
+    fn build_search_body_carries_moderation_beside_the_mode() {
+        let options = SearchOptions {
+            moderation: Some(Moderation::Strict),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_search_body("q", Some("pro"), &filters(), &options),
+            json!({"query": "q", "mode": "pro", "moderation": "strict"})
+        );
+    }
+
+    #[test]
     fn trim_domain_entries_leaves_absent_flags_absent() {
         assert!(trim_domain_entries(vec![]).is_empty());
         assert_eq!(trim_domain_entries(vec!["a.com".into()]), vec!["a.com"]);
@@ -1622,6 +1721,7 @@ mod tests {
             max_results: Some(20),
             session_id: None,
             objective: None,
+            moderation: None,
         };
         let body = build_search_body("rust async", Some("pro"), &f, &options);
         assert_eq!(
