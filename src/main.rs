@@ -172,7 +172,7 @@ enum Commands {
 
     /// Search the web (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --mode realtime                       Fastest response (default mode: pro)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --exclude-domain spam.com,ads.net     Never these domains (repeatable)\n  keenable search \"tax forms\" --exclude-domain .gov               Never any host under .gov\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, w, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --session-id agent-run-42           Group related calls in a session\n  keenable search \"rust async\" --objective \"Find the tokio docs page on spawn_blocking\"   Say what the search is for (used in ranking)\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key\n  keenable search \"rust async\" -p -v                              Show proxy, trusted CAs and full errors\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
+        after_help = "Works without login (free tier). Log in for higher rate limits.\n\nExamples:\n  keenable search \"rust async\"                                    YAML output (for agents)\n  keenable search \"rust async\" -p                                 Pretty output (for humans)\n  keenable search \"AI news\" --mode realtime                       Fastest response (default mode: pro)\n  keenable search \"AI news\" --site techcrunch.com                 Restrict to site\n  keenable search \"AI news\" --exclude-domain spam.com,ads.net     Never these domains (repeatable)\n  keenable search \"tax forms\" --exclude-domain .gov               Never any host under .gov\n  keenable search \"dodgers braves\" --published-after 2026-01-01   Date filter (YYYY-MM-DD)\n  keenable search \"AI news\" --acquired-after 7d                   Relative date (min, h, d, w, mo, y)\n  keenable search \"AI news\" --acquired-after 2026-01-15T10:30:00Z ISO 8601 datetime\n  keenable search \"rust async\" --snippet-max-length 2000          Longer snippets (180-10000)\n  keenable search \"rust async\" --max-results 25                   More results (1-50, default 10)\n  keenable search \"AI news\" --query-time 2026-01-01T00:00:00Z     Point-in-time search\n  keenable search \"rust async\" --session-id agent-run-42           Group related calls in a session\n  keenable search \"rust async\" --objective \"Find the tokio docs page on spawn_blocking\"   Say what the search is for (used in ranking)\n  keenable search \"query\" --moderation strict                     Remove unsafe results (moderate or strict)\n  keenable search \"rust async\" --api-key keen_***_*****                Use a specific API key\n  keenable search \"rust async\" -p -v                              Show proxy, trusted CAs and full errors\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
     )]
     Search(Box<SearchArgs>),
 
@@ -535,7 +535,7 @@ struct SearchArgs {
     #[arg(long)]
     site: Option<String>,
 
-    /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct entries. A public suffix with a leading dot (.gov, .co.uk) excludes every host under it. No paths, wildcards on hosts (*.un.org) or IPs. Private-suffix hosts like github.io are accepted
+    /// Never return results from this host or its subdomains. Repeatable, or a comma list (a.com,b.com); at most 1,000 distinct entries. A public suffix with a leading dot (.gov, .co.uk) excludes every host under it; a dot or wildcard on any other host (.un.org, *.un.org) and a bare suffix (com) are rejected, as are paths and IPs. Private-suffix hosts like github.io are accepted
     #[arg(long = "exclude-domain", value_name = "DOMAIN", value_delimiter = ',')]
     exclude_domains: Vec<String>,
 
@@ -574,6 +574,10 @@ struct SearchArgs {
     /// What this search is for: what the query leaves out and what earlier searches found, in one to three sentences (at most 1,000 characters). Keenable uses it together with the query to rank results; use it for multi-step or ambiguous searches
     #[arg(long, value_name = "TEXT")]
     objective: Option<String>,
+
+    /// Remove results a safety model judges unsafe: "moderate" or "strict" (stricter). Results are removed, never replaced, so a search can return fewer or none. Without it, or with an empty value, no moderation. Only in "pro" and "realtime" modes, and not for a URL query fetched as-is (the API rejects those, exit 8)
+    #[arg(long, value_name = "LEVEL", value_parser = commands::search::parse_moderation_flag)]
+    moderation: Option<commands::search::ModerationFlag>,
 
     /// Pretty-print output for humans instead of YAML
     #[arg(short = 'p', long = "pretty")]
@@ -807,6 +811,7 @@ async fn run() {
                     max_results: args.max_results,
                     session_id: args.session_id.clone(),
                     objective: args.objective.clone(),
+                    moderation: args.moderation.and_then(|flag| flag.0),
                 },
                 args.pretty,
                 args.api_key.as_deref(),
@@ -882,6 +887,61 @@ mod tests {
             panic!("expected the search subcommand");
         };
         search.filters().to_json()
+    }
+
+    fn search_options(args: &[&str]) -> serde_json::Value {
+        let argv = ["keenable", "search", "q"].iter().chain(args);
+        let Commands::Search(search) = Cli::try_parse_from(argv).expect("args parse").command
+        else {
+            panic!("expected the search subcommand");
+        };
+        commands::search::SearchOptions {
+            moderation: search.moderation.and_then(|flag| flag.0),
+            ..Default::default()
+        }
+        .to_json()
+    }
+
+    #[test]
+    fn moderation_flag_takes_moderate_or_strict_and_is_absent_by_default() {
+        assert_eq!(search_options(&[]), json!({}));
+        assert_eq!(
+            search_options(&["--moderation", "moderate"]),
+            json!({"moderation": "moderate"})
+        );
+        assert_eq!(
+            search_options(&["--moderation", "strict"]),
+            json!({"moderation": "strict"})
+        );
+    }
+
+    #[test]
+    fn moderation_flag_counts_an_empty_value_as_not_given() {
+        for empty in ["", "  "] {
+            assert_eq!(
+                search_options(&["--moderation", empty]),
+                json!({}),
+                "{empty:?}"
+            );
+        }
+        assert_eq!(
+            search_options(&["--moderation", " Strict "]),
+            json!({"moderation": "strict"})
+        );
+    }
+
+    #[test]
+    fn moderation_flag_rejects_other_values_as_a_usage_error() {
+        for bad in ["off", "STRICTER", "none"] {
+            let err = Cli::try_parse_from(["keenable", "search", "q", "--moderation", bad])
+                .err()
+                .expect("invalid value is rejected");
+            assert_eq!(err.exit_code(), 2, "{bad:?}");
+            assert!(
+                err.to_string().contains("moderate, strict"),
+                "{bad:?}: {err}"
+            );
+        }
     }
 
     #[test]

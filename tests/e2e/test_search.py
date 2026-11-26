@@ -194,6 +194,23 @@ def test_objective_is_accepted(kn):
     assert results_of(res.yaml()), "no results with --objective"
 
 
+def test_moderation_strict_is_accepted(kn):
+    # Needs a backend that knows `moderation`; an unknown parameter is a 400.
+    res = kn("search", "rust async runtime", "--moderation", "strict")
+    assert res.code == 0, res.out + res.err
+
+
+def test_empty_moderation_counts_as_not_given(kn):
+    res = kn("search", "rust async runtime", "--moderation", "")
+    assert res.code == 0, res.err
+
+
+def test_invalid_moderation_is_a_usage_error(kn):
+    res = kn("search", "x", "--moderation", "off")
+    assert res.code == 2
+    assert "--moderation" in res.err
+
+
 def test_combined_filters(kn):
     for r in _non_empty_results(kn, "async", "--site", "docs.rs", "--acquired-after", "2025-01-01"):
         assert host_under(host_of(r["url"]), "docs.rs"), r["url"]

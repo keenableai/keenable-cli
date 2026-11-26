@@ -332,6 +332,11 @@ jobs:
       - plan
       - host
     runs-on: "ubuntu-22.04"
+    # Hand-added (allow-dirty = ["ci"]), re-add after `dist generate`: the
+    # write deploy key for keenableai/homebrew-tap is a secret of the `release`
+    # environment (reviewers, v* tags only), so a workflow on another branch
+    # cannot read it and push a formula to the public tap (KEE-1554).
+    environment: release
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
@@ -343,7 +348,8 @@ jobs:
         with:
           persist-credentials: true
           repository: "keenableai/homebrew-tap"
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Hand-added: a deploy key scoped to the tap, instead of a PAT.
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
       # So we have access to the formula
       - name: Fetch homebrew formulae
         uses: actions/download-artifact@v7
