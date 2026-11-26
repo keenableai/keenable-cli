@@ -426,9 +426,21 @@ async fn keyless_fetch_is_one_post_and_refuses_what_needs_a_key() {
     )
     .await;
     assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = keenable(
+        &home,
+        &base,
+        &[
+            "fetch",
+            "https://example.org",
+            "--max-age-hours",
+            "-1",
+            "-v",
+        ],
+    )
+    .await;
+    assert!(out.status.success(), "{}", text(&out.stderr));
     for args in [
         &["fetch", "https://example.org", "https://example.com"][..],
-        &["fetch", "https://example.org", "--max-age-hours", "1"][..],
         &[
             "fetch",
             "https://example.org",
@@ -446,10 +458,12 @@ async fn keyless_fetch_is_one_post_and_refuses_what_needs_a_key() {
     }
 
     let seen = log.lock().unwrap().clone();
-    assert_eq!(seen.len(), 1, "{seen:?}");
-    assert_eq!(seen[0].method, "POST");
-    assert_eq!(seen[0].path, "/v1/fetch/public");
-    assert_eq!(seen[0].api_key, None);
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    for request in &seen {
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/v1/fetch/public");
+        assert_eq!(request.api_key, None);
+    }
     std::fs::remove_dir_all(&home).ok();
 }
 

@@ -114,6 +114,7 @@ keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://a.com https://b.com   # Several pages in one call (1 to 20 URLs, each once)
 keenable fetch https://example.com --max-age-hours 0    # Read the live page
 keenable fetch https://example.com --max-age-hours 24   # Re-read the page if the stored copy is older (0 to 720, fractions allowed)
+keenable fetch https://example.com --max-age-hours -1   # Stored copy only, of any age, never the live page
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
 keenable fetch https://example.com --schema @plans.json   # Typed answer in `structured` (JSON Schema inline or @file, root type object)
 keenable fetch https://example.com --links 50 --images 5  # Links (1 to 1000) and images (0 to 25) found on the page
@@ -121,7 +122,7 @@ keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char c
 keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
 ```
 
-With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch sends one `POST /v1/fetch/public` for one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours 0`; several URLs, `--schema`, `--links`, `--images` or `--max-age-hours` above 0 stop before any request with `API key required` and exit code 2.
+With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch sends one `POST /v1/fetch/public` for one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours`; several URLs, `--schema`, `--links` or `--images` stop before any request with `API key required` and exit code 2.
 
 One URL prints the page as before. Several URLs print `results`: one page or `{url, error}` per URL, in the order given; `-p` shows each in turn. A page can also carry `image`, `favicon`, `images`, `links`, `structured`, `answer_error` (why `structured` is missing) and `stale` (an older stored copy, because a fresh read failed). The command fails only when the call fails as a whole or every URL failed; then it exits with the code of the most common page error.
 
