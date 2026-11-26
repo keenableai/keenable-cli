@@ -1,9 +1,9 @@
 """T-23..T-29 — fetch. With a key (as here), every call is one POST /v1/fetch of 1 to 20 URLs."""
 
-import uuid
-
 import pytest
 from urllib.parse import urlparse
+
+from conftest import e2e_name
 
 
 # Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
@@ -32,20 +32,9 @@ def test_fetch_live(kn):
     assert EXAMPLE_BODY in data["content"]
 
 
-def test_fetch_stored_copy_only(kn):
-    # -1 reads only Keenable's stored copy. Whether example.com has one depends
-    # on the index, so either the stored page or the not_stored error is right.
-    res = kn("fetch", "https://example.com", "--max-age-hours", "-1")
-    if res.code == 0:
-        assert res.yaml()["title"] == "Example Domain"
-    else:
-        assert res.code == 8, res.out
-        assert res.yaml()["code"] == "not_stored", res.out
-
-
 def test_fetch_stored_copy_only_never_reads_live(kn):
     # A path nobody has crawled has no stored copy, and -1 never reads it live.
-    url = f"https://example.com/keenable-cli-e2e-{uuid.uuid4().hex[:12]}"
+    url = f"https://example.com/{e2e_name()}"
     res = kn("fetch", url, "--max-age-hours", "-1")
     assert res.code == 8, res.out
     data = res.yaml()

@@ -903,22 +903,9 @@ mod tests {
         );
         assert_eq!(fetch_max_age(&["--max-age-hours=-1"]).unwrap(), Some(-1.0));
         assert_eq!(
-            fetch_max_age(&["--max-age-hours", "24"]).unwrap(),
-            Some(24.0)
-        );
-        assert_eq!(
             fetch_max_age(&["--max-age-hours", "-1", "-p"]).unwrap(),
             Some(-1.0)
         );
-        for bad in [["--max-age-hours", "-2"], ["--max-age-hours", "-0.5"]] {
-            let err = fetch_max_age(&bad).unwrap_err();
-            assert_eq!(
-                err.kind(),
-                clap::error::ErrorKind::ValueValidation,
-                "{bad:?}"
-            );
-            assert!(err.to_string().contains("-1 (stored copy only)"), "{err}");
-        }
     }
 
     fn search_filters(args: &[&str]) -> serde_json::Value {

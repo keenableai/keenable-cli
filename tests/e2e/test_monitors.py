@@ -8,11 +8,7 @@ ones). Monitors left behind by an interrupted run carry the same name prefix
 and are deleted before the next create.
 """
 
-import uuid
-
-
-# Every monitor this suite creates is named with this prefix.
-E2E_PREFIX = "keenable-cli-e2e-"
+from conftest import E2E_PREFIX, e2e_name
 
 
 def test_monitors_need_a_key(kn_fresh):
@@ -66,7 +62,7 @@ def _delete_leftovers(kn):
 def test_monitor_lifecycle(kn):
     _delete_leftovers(kn)
 
-    name = E2E_PREFIX + uuid.uuid4().hex[:12]
+    name = e2e_name()
     res = kn("monitors", "create", "new Rust compiler releases", "--name", name,
              "--max-results", "3")
     # A full organization fails loudly instead of skipping: a silent skip would

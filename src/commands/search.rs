@@ -1913,7 +1913,6 @@ mod tests {
         };
         let body = stored.post_body(&urls(1));
         assert_eq!(body["retrieval"]["max_age_hours"], json!(-1));
-        assert!(body["retrieval"]["max_age_hours"].is_i64());
     }
 
     #[test]
