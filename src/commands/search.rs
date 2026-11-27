@@ -589,11 +589,78 @@ fn daemon_error(resp: daemon::DaemonResponse) -> ApiError {
     }
 }
 
-/// Pretty-mode line with the organization's credits left after this
-/// request (`usage.credits_remaining`), when the API sent it. Keyless
+/// A Money value's `amount` as exact decimal text: a string `amount`
+/// (backend #947 on), else `amount_decimal`, else a numeric `amount` (older
+/// servers). Never parsed through f64. None for anything that isn't a plain
+/// decimal, so server text never reaches the terminal unchecked.
+fn money_amount(money: &Value) -> Option<String> {
+    let text = match (&money["amount"], &money["amount_decimal"]) {
+        (Value::String(s), _) => s.clone(),
+        (_, Value::String(s)) => s.clone(),
+        (Value::Number(n), _) => n.to_string(),
+        _ => return None,
+    };
+    let digits = text.strip_prefix('-').unwrap_or(&text);
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, "0"));
+    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    (all_digits(int) && all_digits(frac)).then_some(text)
+}
+
+/// Orders two plain decimals (as `money_amount` returns them) exactly.
+fn cmp_decimal(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    // (negative, integer digits without leading zeros, fraction without
+    // trailing zeros); zero is never negative.
+    fn parts(s: &str) -> (bool, &str, &str) {
+        let neg = s.starts_with('-');
+        let s = s.trim_start_matches('-');
+        let (int, frac) = s.split_once('.').unwrap_or((s, ""));
+        let int = int.trim_start_matches('0');
+        let frac = frac.trim_end_matches('0');
+        (neg && !(int.is_empty() && frac.is_empty()), int, frac)
+    }
+    let magnitude = |(ai, af): (&str, &str), (bi, bf): (&str, &str)| {
+        ai.len().cmp(&bi.len()).then(ai.cmp(bi)).then(af.cmp(bf))
+    };
+    let (an, ai, af) = parts(a);
+    let (bn, bi, bf) = parts(b);
+    match (an, bn) {
+        (false, true) => Ordering::Greater,
+        (true, false) => Ordering::Less,
+        (false, false) => magnitude((ai, af), (bi, bf)),
+        (true, true) => magnitude((bi, bf), (ai, af)),
+    }
+}
+
+/// A balance as shown: `$399.996` in US dollars, `-$3.5` below zero, the
+/// amount and currency code for any other currency.
+fn format_money(amount: &str, currency: Option<&str>) -> String {
+    match currency.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("usd") => match amount.strip_prefix('-') {
+            Some(abs) => format!("-${abs}"),
+            None => format!("${amount}"),
+        },
+        Some(other) if other.bytes().all(|b| b.is_ascii_alphabetic()) => {
+            format!("{amount} {}", other.to_ascii_uppercase())
+        }
+        Some(_) => amount.to_string(),
+    }
+}
+
+/// Pretty-mode line with what the organization has left after this call.
+/// Prefers `usage.balance` (dollars, printed exactly as sent) and falls back
+/// to `usage.credits_remaining` from servers before backend #951. Keyless
 /// requests carry no usage, so nothing is printed for them.
-fn credits_remaining_line(data: &Value) -> Option<String> {
-    let left = data["usage"]["credits_remaining"].as_f64()?;
+fn balance_line(data: &Value) -> Option<String> {
+    let usage = &data["usage"];
+    if let Some(amount) = money_amount(&usage["balance"]) {
+        let shown = format_money(&amount, usage["balance"]["currency"].as_str());
+        return Some(format!(
+            "Balance left: {shown} ({})",
+            crate::api::CONSOLE_URL
+        ));
+    }
+    let left = usage["credits_remaining"].as_f64()?;
     let shown = if left.fract() == 0.0 {
         format!("{}", left as i64)
     } else {
@@ -794,7 +861,7 @@ pub async fn search(
                     ui::info("No results found.");
                     eprintln!();
                 }
-                if let Some(line) = credits_remaining_line(&data) {
+                if let Some(line) = balance_line(&data) {
                     ui::hint(&line);
                     eprintln!();
                 }
@@ -992,16 +1059,30 @@ fn dominant_exit_code(errors: &[ApiError]) -> i32 {
         .unwrap_or(crate::api::exit_code::ERROR)
 }
 
-/// Pretty-mode credits line for a batch: the lowest balance any page reported.
-fn lowest_credits_line(pages: &[Value]) -> Option<String> {
-    pages
+/// Pretty-mode balance line for a batch. Servers from backend #951 on send
+/// one call-level `usage`; older ones put a `usage` on each page, so take the
+/// lowest balance any page reported (lowest credits left on the oldest).
+fn batch_balance_line(data: &Value, pages: &[Value]) -> Option<String> {
+    if let Some(line) = balance_line(data) {
+        return Some(line);
+    }
+    let lowest_balance = pages
         .iter()
-        .filter(|p| p["usage"]["credits_remaining"].is_number())
-        .min_by(|a, b| {
-            let left = |v: &Value| v["usage"]["credits_remaining"].as_f64().unwrap_or(0.0);
-            left(a).total_cmp(&left(b))
-        })
-        .and_then(credits_remaining_line)
+        .filter_map(|p| Some((money_amount(&p["usage"]["balance"])?, p)))
+        .min_by(|(a, _), (b, _)| cmp_decimal(a, b))
+        .map(|(_, p)| p);
+    let lowest_credits = || {
+        pages
+            .iter()
+            .filter(|p| p["usage"]["credits_remaining"].is_number())
+            .min_by(|a, b| {
+                let left = |v: &Value| v["usage"]["credits_remaining"].as_f64().unwrap_or(0.0);
+                left(a).total_cmp(&left(b))
+            })
+    };
+    lowest_balance
+        .or_else(lowest_credits)
+        .and_then(balance_line)
 }
 
 fn print_page(page: &Value) {
@@ -1072,10 +1153,23 @@ fn print_single_page(page: &Value, human: bool) {
     }
     ui::header("keenable fetch");
     print_page(page);
-    if let Some(line) = credits_remaining_line(page) {
+    if let Some(line) = balance_line(page) {
         ui::hint(&line);
         eprintln!();
     }
+}
+
+/// A single fetched page with the call-level `usage` (backend #951 on) in
+/// place of the per-page one older servers sent, so YAML and `-p` still show
+/// the usage when only the page is printed.
+fn with_call_usage(page: &Value, data: &Value) -> Value {
+    let mut page = page.clone();
+    let own_usage = page.get("usage").is_some();
+    let call_usage = data.get("usage").filter(|u| u.is_object());
+    if let (false, Some(usage)) = (own_usage, call_usage) {
+        page["usage"] = usage.clone();
+    }
+    page
 }
 
 fn missing_results() -> ApiError {
@@ -1135,7 +1229,7 @@ pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key:
         if is_page_error(only) {
             handle_api_error((page_error(only), true), human);
         }
-        print_single_page(only, human);
+        print_single_page(&with_call_usage(only, &data), human);
         return;
     }
 
@@ -1162,7 +1256,7 @@ pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key:
                 print_page(entry);
             }
         }
-        if let Some(line) = lowest_credits_line(results) {
+        if let Some(line) = batch_balance_line(&data, results) {
             ui::hint(&line);
             eprintln!();
         }
@@ -1185,9 +1279,11 @@ pub async fn fetch(urls: &[String], options: FetchOptions, human: bool, api_key:
 mod tests {
     use super::*;
 
+    const CONSOLE: &str = "(https://keenable.ai/console)";
+
     #[test]
-    fn credits_remaining_line_shows_the_balance_only_when_sent() {
-        let line = |v: Value| credits_remaining_line(&v);
+    fn credits_left_shows_on_servers_without_a_balance() {
+        let line = |v: Value| balance_line(&v);
         assert_eq!(
             line(json!({"usage": {"credits_remaining": 99120}})).as_deref(),
             Some("Credits left: 99120 (https://keenable.ai/console)")
@@ -1208,6 +1304,91 @@ mod tests {
             line(json!({"results": [], "usage": {"credits_remaining": 5}})).as_deref(),
             Some("Credits left: 5 (https://keenable.ai/console)")
         );
+    }
+
+    #[test]
+    fn balance_line_reads_every_usage_shape() {
+        let line = |v: Value| balance_line(&v);
+        let want = |amount: &str| Some(format!("Balance left: {amount} {CONSOLE}"));
+        // A: today's server, numeric amount with amount_decimal.
+        let a = json!({"usage": {
+            "sku": "search.pro", "amount": 1, "credits": 1, "paid": true,
+            "credits_remaining": 99999,
+            "cost": {"amount": 0.004, "amount_decimal": "0.004", "currency": "usd"},
+            "balance": {"amount": 399.996, "amount_decimal": "399.996", "currency": "usd"},
+        }});
+        assert_eq!(line(a), want("$399.996"));
+        // A numeric amount alone is still read, without amount_decimal.
+        let bare = json!({"usage": {"balance": {"amount": 12.5, "currency": "usd"}}});
+        assert_eq!(line(bare), want("$12.5"));
+        // B: backend #947, string amount, credits_remaining still sent.
+        let b = json!({"usage": {
+            "sku": "search.pro", "amount": 1, "credits": 1, "paid": true,
+            "credits_remaining": 99999,
+            "cost": {"amount": "0.004", "currency": "usd"},
+            "balance": {"amount": "399.996", "currency": "usd"},
+        }});
+        assert_eq!(line(b), want("$399.996"));
+        // C: backend #951, items/total/balance, no credits_remaining.
+        let c = json!({"usage": {
+            "items": [{"sku": "search.pro", "quantity": 1,
+                       "price": {"amount": "0.004", "currency": "usd"}}],
+            "total": {"amount": "0.004", "currency": "usd"},
+            "balance": {"amount": "396.48", "currency": "usd"},
+        }});
+        assert_eq!(line(c), want("$396.48"));
+        // Exact strings are printed as sent: no float rounding or padding.
+        let exact = json!({"usage": {"balance": {"amount": "0.1000000000000000055511151231257827", "currency": "usd"}}});
+        assert_eq!(line(exact), want("$0.1000000000000000055511151231257827"));
+        let negative = json!({"usage": {"balance": {"amount": "-3.5", "currency": "usd"}}});
+        assert_eq!(line(negative), want("-$3.5"));
+        let eur = json!({"usage": {"balance": {"amount": "7", "currency": "eur"}}});
+        assert_eq!(line(eur), want("7 EUR"));
+        // C without a balance (it couldn't be read): no line.
+        let unread =
+            json!({"usage": {"items": [], "total": {"amount": "0.004", "currency": "usd"}}});
+        assert_eq!(line(unread), None);
+        // Keyless: no usage, no line.
+        assert_eq!(line(json!({"results": []})), None);
+    }
+
+    #[test]
+    fn a_malformed_balance_falls_back_to_credits_left() {
+        for amount in [
+            json!("1e3"),
+            json!("$5"),
+            json!("5\u{1b}[31m"),
+            json!(""),
+            json!(null),
+            json!(true),
+        ] {
+            let data = json!({"usage": {
+                "balance": {"amount": amount, "currency": "usd"},
+                "credits_remaining": 4,
+            }});
+            assert_eq!(
+                balance_line(&data).as_deref(),
+                Some("Credits left: 4 (https://keenable.ai/console)"),
+                "{amount}"
+            );
+        }
+    }
+
+    #[test]
+    fn decimals_compare_exactly() {
+        use std::cmp::Ordering::*;
+        for (a, b, want) in [
+            ("1", "1.0", Equal),
+            ("0.0", "-0", Equal),
+            ("10", "9.999", Greater),
+            ("0.1", "0.09", Greater),
+            ("-1", "0", Less),
+            ("-2.5", "-2.25", Less),
+            ("007.5", "7.50", Equal),
+            ("0.30000000000000001", "0.3", Greater),
+        ] {
+            assert_eq!(cmp_decimal(a, b), want, "{a} vs {b}");
+        }
     }
 
     fn filters() -> SearchFilters {
@@ -2050,11 +2231,72 @@ mod tests {
             json!({"url": "u", "error": {"status": 404}}),
             json!({"usage": {"credits_remaining": 7}}),
         ];
+        let data = json!({"results": pages});
         assert_eq!(
-            lowest_credits_line(&pages).as_deref(),
+            batch_balance_line(&data, &pages).as_deref(),
             Some("Credits left: 7 (https://keenable.ai/console)")
         );
-        assert_eq!(lowest_credits_line(&[json!({"url": "u"})]), None);
+        let none = [json!({"url": "u"})];
+        assert_eq!(batch_balance_line(&json!({"results": none}), &none), None);
+    }
+
+    #[test]
+    fn batch_balance_reads_every_usage_shape() {
+        let want = |amount: &str| Some(format!("Balance left: {amount} {CONSOLE}"));
+        // A: per-page usage, numeric amounts; the lowest balance wins.
+        let a = [
+            json!({"usage": {"credits_remaining": 1000, "balance": {"amount": 4.0, "amount_decimal": "4", "currency": "usd"}}}),
+            json!({"url": "u", "error": {"status": 404}}),
+            json!({"usage": {"credits_remaining": 999, "balance": {"amount": 3.996, "amount_decimal": "3.996", "currency": "usd"}}}),
+        ];
+        assert_eq!(
+            batch_balance_line(&json!({"results": a}), &a),
+            want("$3.996")
+        );
+        // B: per-page usage, string amounts, compared as decimals (10 > 9.5).
+        let b = [
+            json!({"usage": {"credits_remaining": 2500, "balance": {"amount": "10", "currency": "usd"}}}),
+            json!({"usage": {"credits_remaining": 2375, "balance": {"amount": "9.5", "currency": "usd"}}}),
+        ];
+        assert_eq!(batch_balance_line(&json!({"results": b}), &b), want("$9.5"));
+        // C: one call-level usage, pages carry none.
+        let c = [
+            json!({"url": "a", "content": "x"}),
+            json!({"url": "b", "content": "y"}),
+        ];
+        let data = json!({
+            "results": c,
+            "usage": {
+                "items": [{"sku": "fetch", "quantity": 2, "price": {"amount": "0.001", "currency": "usd"}}],
+                "total": {"amount": "0.002", "currency": "usd"},
+                "balance": {"amount": "399.996", "currency": "usd"},
+            },
+        });
+        assert_eq!(batch_balance_line(&data, &c), want("$399.996"));
+        // Keyless or unbilled: no usage anywhere, no line.
+        assert_eq!(batch_balance_line(&json!({"results": c}), &c), None);
+    }
+
+    #[test]
+    fn a_single_fetched_page_takes_the_call_usage() {
+        let usage = json!({
+            "items": [{"sku": "fetch", "quantity": 1, "price": {"amount": "0.001", "currency": "usd"}}],
+            "total": {"amount": "0.001", "currency": "usd"},
+            "balance": {"amount": "399.996", "currency": "usd"},
+        });
+        let page = json!({"url": "u", "content": "x"});
+        let data = json!({"results": [page], "usage": usage});
+        let shown = with_call_usage(&page, &data);
+        assert_eq!(shown["usage"], usage);
+        assert_eq!(
+            balance_line(&shown).as_deref(),
+            Some("Balance left: $399.996 (https://keenable.ai/console)")
+        );
+        // A page's own usage (older servers) is kept as sent.
+        let own = json!({"url": "u", "usage": {"credits_remaining": 3}});
+        assert_eq!(with_call_usage(&own, &data), own);
+        // Keyless: nothing to add.
+        assert_eq!(with_call_usage(&page, &json!({"results": [page]})), page);
     }
 
     #[test]
