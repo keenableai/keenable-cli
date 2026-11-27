@@ -177,9 +177,12 @@ case $? in
 esac
 ```
 
-With an API key, each response's `usage.credits_remaining` is the
-organization's credits left after the request (an estimate that can lag a few
-seconds); `-p` shows it as `Credits left: N`.
+With an API key, each response's `usage.balance` is what the organization has
+left after the call, in US dollars (an estimate that can lag a few seconds).
+YAML output includes the `usage` object as sent, and `-p` prints the balance
+exactly as sent, as `Balance left: $399.996 (https://keenable.ai/console)`.
+A fetch of several URLs reports one `usage` for the whole call. Older servers
+send `usage.credits_remaining` instead, which `-p` shows as `Credits left: N`.
 
 ### API endpoint
 
