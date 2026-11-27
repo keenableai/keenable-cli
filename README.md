@@ -13,6 +13,8 @@ Web search, page fetch and monitors for AI agents, from your terminal or over MC
 
 Output is YAML by default, so agents and scripts can read it, and readable with `-p`. Full reference: **[docs.keenable.ai/cli](https://docs.keenable.ai/cli)**.
 
+**Contributions welcome.** Found a bug or missing a flag? [Open an issue](https://github.com/keenableai/keenable-cli/issues/new/choose). Want to fix it yourself? Pull requests are welcome; [good first issues](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22good+first+issue%22) are a place to start, and [CONTRIBUTING.md](CONTRIBUTING.md) has the setup.
+
 ## Installation
 
 **Homebrew (macOS + Linux):**
@@ -294,7 +296,13 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 
-Build, test and PR guidelines are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues and pull requests from anyone are welcome, from a typo fix to a new flag.
+
+1. Look for an open issue, or [open one](https://github.com/keenableai/keenable-cli/issues/new/choose) to talk through a bigger change first.
+2. Fork the repo, make the change on a branch, and run `cargo test`.
+3. Open a pull request. A maintainer reviews it and runs the live-API tests.
+
+Issues labelled [good first issue](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22good+first+issue%22) or [help wanted](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22help+wanted%22) are ready to pick up. Setup and conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
