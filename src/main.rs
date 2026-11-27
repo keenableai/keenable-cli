@@ -992,8 +992,10 @@ mod tests {
             let err = search_mode(bad).expect_err("invalid mode is rejected");
             assert_eq!(err.exit_code(), 2, "{bad:?}");
             let msg = err.to_string();
-            assert!(msg.contains("realtime, pro"), "{bad:?}: {msg}");
-            assert!(!msg.contains("standard"), "{bad:?}: {msg}");
+            assert!(
+                msg.contains("[possible values: realtime, pro]"),
+                "{bad:?}: {msg}"
+            );
         }
     }
 
