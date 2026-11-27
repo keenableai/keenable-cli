@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Never paste your API key. For a security problem, email security@keenable.ai instead.
+        This issue is public. Never paste an API key (`keen_...`) or a webhook signing secret (`whsec_...`, the `webhook.secret` in `monitors create` output): replace them with `***`. For a security problem, email security@keenable.ai instead.
   - type: input
     id: version
     attributes:
@@ -43,7 +43,7 @@ body:
     id: output
     attributes:
       label: What happened
-      description: The output and exit code (`echo $?`). Add `-v` for the full error chain. Include the `request_id` if the error shows one.
+      description: The output and exit code (`echo $?`). Add `-v` for the full error chain. Include the `request_id` if the error shows one. Replace any API key or `webhook.secret` (`whsec_...`) with `***`.
       render: text
     validations:
       required: true

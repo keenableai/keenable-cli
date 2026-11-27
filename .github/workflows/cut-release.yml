@@ -6,7 +6,7 @@ run-name: Cut release ${{ inputs.bump }}
 # Automates the manual steps in RELEASE.md, with the default GITHUB_TOKEN only
 # (no PAT).
 #   1. Run this workflow (Actions -> Cut release -> Run workflow, on main) with a
-#      bump. It pushes a release/vX.Y.Z branch that only touches Cargo.toml +
+#      bump. It pushes a release/vX.Y.Z branch that only touches Cargo.toml, CHANGELOG.md +
 #      Cargo.lock, and dispatches CI on it.
 #   2. A person opens the PR from that branch (tools/release.sh does steps
 #      1-3 in one command) and merges it. The push to main tags vX.Y.Z and
