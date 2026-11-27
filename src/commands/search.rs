@@ -811,15 +811,23 @@ pub async fn search(
 
 pub const MAX_FETCH_URLS: usize = 20;
 const MAX_AGE_HOURS_LIMIT: f64 = 720.0;
+/// `--max-age-hours -1`: read only Keenable's stored copy, never the live page.
+pub const STORED_COPY_ONLY: f64 = -1.0;
 
-/// `--max-age-hours`: a finite number of hours from 0 to 720, fractions allowed.
+/// `--max-age-hours`: exactly -1 (stored copy only), or a finite number of
+/// hours from 0 to 720, fractions allowed.
 pub fn parse_max_age_hours(raw: &str) -> Result<f64, String> {
     let hours: f64 = raw
         .trim()
         .parse()
         .map_err(|_| format!("`{raw}` is not a number of hours"))?;
+    if hours == STORED_COPY_ONLY {
+        return Ok(STORED_COPY_ONLY);
+    }
     if !hours.is_finite() || !(0.0..=MAX_AGE_HOURS_LIMIT).contains(&hours) {
-        return Err(format!("must be from 0 to {MAX_AGE_HOURS_LIMIT}"));
+        return Err(format!(
+            "must be -1 (stored copy only) or a number of hours from 0 to {MAX_AGE_HOURS_LIMIT}"
+        ));
     }
     Ok(hours)
 }
@@ -852,7 +860,7 @@ pub struct FetchOptions {
 
 fn hours_json(hours: f64) -> Value {
     if hours.fract() == 0.0 {
-        json!(hours as u64)
+        json!(hours as i64)
     } else {
         json!(hours)
     }
@@ -893,9 +901,6 @@ impl FetchOptions {
         if urls.len() > 1 {
             needs.push("more than one URL");
         }
-        if self.max_age_hours.is_some_and(|h| h != 0.0) {
-            needs.push("--max-age-hours above 0");
-        }
         if self.schema.is_some() {
             needs.push("--schema");
         }
@@ -934,7 +939,7 @@ fn key_required(needs: &[&str]) -> ApiError {
         error: "API key required".into(),
         message: Some(format!("Not available without a key: {}.", needs.join(", "))),
         transport_hint: Some(
-            "Log in with `keenable login`, or pass --api-key. Without a key, fetch takes one URL with --max-chars, --prompt and --max-age-hours 0."
+            "Log in with `keenable login`, or pass --api-key. Without a key, fetch takes one URL with --max-chars, --prompt and --max-age-hours."
                 .into(),
         ),
         ..Default::default()
@@ -1823,13 +1828,18 @@ mod tests {
     }
 
     #[test]
-    fn max_age_hours_takes_0_to_720_with_fractions() {
+    fn max_age_hours_takes_minus_1_or_0_to_720_with_fractions() {
         assert_eq!(parse_max_age_hours("0"), Ok(0.0));
         assert_eq!(parse_max_age_hours("1.5"), Ok(1.5));
         assert_eq!(parse_max_age_hours("720"), Ok(720.0));
-        for bad in ["-1", "720.5", "NaN", "inf", "soon", ""] {
+        assert_eq!(parse_max_age_hours("-1"), Ok(-1.0));
+        assert_eq!(parse_max_age_hours("-1.0"), Ok(-1.0));
+        for bad in [
+            "-0.5", "-2", "-720", "720.5", "NaN", "-inf", "inf", "soon", "",
+        ] {
             assert!(parse_max_age_hours(bad).is_err(), "{bad}");
         }
+        assert!(parse_max_age_hours("-2").unwrap_err().contains("-1"));
     }
 
     #[test]
@@ -1897,6 +1907,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(half.post_body(&urls(1))["retrieval"]["max_age_hours"], 0.5);
+        let stored = FetchOptions {
+            max_age_hours: Some(-1.0),
+            ..Default::default()
+        };
+        let body = stored.post_body(&urls(1));
+        assert_eq!(body["retrieval"]["max_age_hours"], json!(-1));
     }
 
     #[test]
@@ -1925,6 +1941,14 @@ mod tests {
         assert!(plain.needs_key(&urls(1)).is_empty());
         assert_eq!(plain.needs_key(&urls(2)), ["more than one URL"]);
 
+        for hours in [-1.0, 0.5, 24.0, 720.0] {
+            let aged = FetchOptions {
+                max_age_hours: Some(hours),
+                ..Default::default()
+            };
+            assert!(aged.needs_key(&urls(1)).is_empty(), "{hours}");
+        }
+
         let post_only = FetchOptions {
             max_age_hours: Some(1.0),
             schema: Some(json!({"type": "object"})),
@@ -1934,7 +1958,7 @@ mod tests {
         };
         assert_eq!(
             post_only.needs_key(&urls(1)),
-            ["--max-age-hours above 0", "--schema", "--links", "--images"]
+            ["--schema", "--links", "--images"]
         );
     }
 
@@ -1957,6 +1981,15 @@ mod tests {
                 "content": {"max_chars": 10, "prompt": "p"},
                 "retrieval": {"max_age_hours": 0},
             })
+        );
+        let stored = FetchOptions {
+            max_age_hours: Some(-1.0),
+            ..Default::default()
+        }
+        .keyless_request("https://example.com");
+        assert_eq!(
+            stored.body.unwrap(),
+            json!({"urls": ["https://example.com"], "retrieval": {"max_age_hours": -1}})
         );
         let bare = FetchOptions::default().keyless_request("https://example.com");
         assert_eq!(bare.body.unwrap(), json!({"urls": ["https://example.com"]}));

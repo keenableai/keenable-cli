@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -27,6 +28,14 @@ API_KEY = os.environ.get("KEENABLE_API_KEY", "")
 
 # Seeds basic_search
 SEARCH_QUERY = "rust async patterns"
+
+# Every monitor or URL this suite makes up is named with this prefix.
+E2E_PREFIX = "keenable-cli-e2e-"
+
+
+def e2e_name() -> str:
+    """A name no earlier run used: E2E_PREFIX plus 12 random hex digits."""
+    return E2E_PREFIX + uuid.uuid4().hex[:12]
 
 
 # Tests that rely on Unix-only behavior — the Unix-domain-socket daemon and the

@@ -3,6 +3,8 @@
 import pytest
 from urllib.parse import urlparse
 
+from conftest import e2e_name
+
 
 # Body text of example.com. The page is not frozen: in Sep 2026 it dropped its
 # <h1> and reworded this paragraph (was "...for use in illustrative examples in
@@ -28,6 +30,16 @@ def test_fetch_live(kn):
     data = res.yaml()
     assert data["title"] == "Example Domain"
     assert EXAMPLE_BODY in data["content"]
+
+
+def test_fetch_stored_copy_only_never_reads_live(kn):
+    # A path nobody has crawled has no stored copy, and -1 never reads it live.
+    url = f"https://example.com/{e2e_name()}"
+    res = kn("fetch", url, "--max-age-hours", "-1")
+    assert res.code == 8, res.out
+    data = res.yaml()
+    assert data["code"] == "not_stored", data
+    assert "max_age_hours 0" in data["hint"], data
 
 
 @pytest.mark.semantic  # asserts live LLM extraction output

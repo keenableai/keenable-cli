@@ -89,7 +89,6 @@ def test_free_tier_fetch_live_is_max_age_zero(kn_fresh):
 
 @pytest.mark.parametrize("extra", [
     ["https://example.org"],
-    ["--max-age-hours", "24"],
     ["--schema", '{"type": "object"}'],
     ["--links", "5"],
     ["--images", "2"],

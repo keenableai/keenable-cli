@@ -178,7 +178,7 @@ enum Commands {
 
     /// Fetch pages as markdown (outputs YAML by default, use -p for pretty output)
     #[command(
-        after_help = "Without a key, fetch takes one URL with --max-chars, --prompt and --max-age-hours 0 (free tier).\nSeveral URLs, --schema, --links, --images and --max-age-hours above 0 need an API key (keenable login).\nWith a key, each URL is billed as one fetch; the call counts as one request toward the rate limit.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://a.com https://b.com                 Several pages in one call (up to 20)\n  keenable fetch https://example.com --max-age-hours 0       Read the live page\n  keenable fetch https://example.com --max-age-hours 24      Re-read the page if the stored copy is older\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --schema @plans.json    Typed answer in `structured` (JSON or @file)\n  keenable fetch https://example.com --links 50 --images 5   Links and images found on the page\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key (an empty value is an error)\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors\n\nWith several URLs, YAML prints `results`: one page or `{url, error}` per URL, in order. The command\nfails only when the call fails or every URL failed (exit code of the most common error).\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
+        after_help = "Without a key, fetch takes one URL with --max-chars, --prompt and --max-age-hours (free tier).\nSeveral URLs, --schema, --links and --images need an API key (keenable login).\nWith a key, each URL is billed as one fetch; the call counts as one request toward the rate limit.\n\nExamples:\n  keenable fetch https://example.com                         YAML output\n  keenable fetch https://example.com -p                      Pretty output\n  keenable fetch https://a.com https://b.com                 Several pages in one call (up to 20)\n  keenable fetch https://example.com --max-age-hours 0       Read the live page\n  keenable fetch https://example.com --max-age-hours 24      Re-read the page if the stored copy is older\n  keenable fetch https://example.com --max-age-hours -1      Stored copy only, never the live page\n  keenable fetch https://example.com --prompt \"List all pricing tiers\"     Extract with an LLM\n  keenable fetch https://example.com --schema @plans.json    Typed answer in `structured` (JSON or @file)\n  keenable fetch https://example.com --links 50 --images 5   Links and images found on the page\n  keenable fetch https://example.com --max-chars 200000      Raise the 50000-char content cap\n  keenable fetch https://example.com --session-id agent-run-42   Group with related calls in a session\n  keenable fetch https://example.com --api-key keen_***_*****     Use a specific API key (an empty value is an error)\n  keenable fetch https://example.com -p -v                   Show proxy, trusted CAs and full errors\n\nWith several URLs, YAML prints `results`: one page or `{url, error}` per URL, in order. The command\nfails only when the call fails or every URL failed (exit code of the most common error).\n\nExit codes:\n  0 success   1 other error   2 invalid arguments   3 authentication or permission\n  4 rate limited   5 out of credits   6 the page or site failed (fetch)   7 network\n  8 invalid request   9 server error (retry later)\nOn an error, YAML mode prints the structured error on stdout and a one-line summary on stderr."
     )]
     Fetch {
         /// URLs to fetch (1 to 20, each once; more than one needs an API key)
@@ -194,9 +194,14 @@ enum Commands {
         #[arg(long)]
         prompt: Option<String>,
 
-        /// Oldest stored copy to accept, in hours (0 to 720, fractions allowed); 0 reads the live page.
-        /// Above 0 needs an API key
-        #[arg(long = "max-age-hours", value_name = "HOURS", value_parser = commands::search::parse_max_age_hours)]
+        /// Oldest stored copy to accept, in hours (0 to 720, fractions allowed); 0 reads the live page,
+        /// -1 reads only the stored copy, of any age, never the live page
+        #[arg(
+            long = "max-age-hours",
+            value_name = "HOURS",
+            allow_negative_numbers = true,
+            value_parser = commands::search::parse_max_age_hours
+        )]
         max_age_hours: Option<f64>,
 
         /// JSON Schema (root type object, inline or @file) for a typed answer in `structured`. Needs an API key
@@ -879,6 +884,29 @@ async fn run() {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn fetch_max_age(args: &[&str]) -> Result<Option<f64>, clap::Error> {
+        let argv = ["keenable", "fetch", "https://example.com"]
+            .iter()
+            .chain(args);
+        match Cli::try_parse_from(argv)?.command {
+            Commands::Fetch { max_age_hours, .. } => Ok(max_age_hours),
+            _ => panic!("expected the fetch subcommand"),
+        }
+    }
+
+    #[test]
+    fn fetch_max_age_hours_takes_minus_1_in_both_spellings() {
+        assert_eq!(
+            fetch_max_age(&["--max-age-hours", "-1"]).unwrap(),
+            Some(-1.0)
+        );
+        assert_eq!(fetch_max_age(&["--max-age-hours=-1"]).unwrap(), Some(-1.0));
+        assert_eq!(
+            fetch_max_age(&["--max-age-hours", "-1", "-p"]).unwrap(),
+            Some(-1.0)
+        );
+    }
 
     fn search_filters(args: &[&str]) -> serde_json::Value {
         let argv = ["keenable", "search", "q"].iter().chain(args);
