@@ -204,6 +204,10 @@ enum Commands {
         )]
         max_age_hours: Option<f64>,
 
+        /// Deprecated alias of `--max-age-hours 0`, kept for scripts written for 0.6.0
+        #[arg(long, hide = true)]
+        live: bool,
+
         /// JSON Schema (root type object, inline or @file) for a typed answer in `structured`. Needs an API key
         #[arg(long, value_name = "JSON|@FILE", value_parser = commands::search::parse_schema)]
         schema: Option<serde_json::Value>,
@@ -533,7 +537,7 @@ struct SearchArgs {
     /// Search mode: "pro" for deeper retrieval, or "realtime" for the fastest response.
     /// Without it, `keenable config` default_search_mode applies, then your organization's
     /// mode, then "pro". A forced_search_mode set with `keenable config` overrides this flag
-    #[arg(long)]
+    #[arg(long, value_parser = commands::search::mode_value_parser())]
     mode: Option<String>,
 
     /// Restrict results to a specific site (e.g. "docs.rs")
@@ -828,6 +832,7 @@ async fn run() {
             max_chars,
             prompt,
             max_age_hours,
+            live,
             schema,
             links,
             images,
@@ -835,6 +840,23 @@ async fn run() {
             pretty,
             api_key,
         } => {
+            let max_age_hours = match live_max_age(live, max_age_hours) {
+                Ok((hours, warning)) => {
+                    if let Some(warning) = warning {
+                        ui::warning_line(warning);
+                    }
+                    hours
+                }
+                Err(msg) => {
+                    use clap::CommandFactory;
+                    let mut cli = Cli::command();
+                    cli.build();
+                    cli.find_subcommand_mut("fetch")
+                        .expect("fetch is a subcommand")
+                        .error(clap::error::ErrorKind::ArgumentConflict, msg)
+                        .exit();
+                }
+            };
             commands::search::fetch(
                 &urls,
                 commands::search::FetchOptions {
@@ -880,10 +902,102 @@ async fn run() {
     }
 }
 
+const LIVE_DEPRECATED: &str = "--live is deprecated; use --max-age-hours 0";
+
+/// Maps the deprecated `--live` onto `--max-age-hours 0`, with the warning to print.
+fn live_max_age(
+    live: bool,
+    max_age_hours: Option<f64>,
+) -> Result<(Option<f64>, Option<&'static str>), &'static str> {
+    match (live, max_age_hours) {
+        (false, hours) => Ok((hours, None)),
+        (true, None) => Ok((Some(0.0), Some(LIVE_DEPRECATED))),
+        (true, Some(_)) => Err(
+            "--live and --max-age-hours were both given; --live is deprecated, send only --max-age-hours (0 reads the live page)",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn fetch_live(args: &[&str]) -> (bool, Option<f64>) {
+        let argv = ["keenable", "fetch", "https://example.com"]
+            .iter()
+            .chain(args);
+        match Cli::try_parse_from(argv).expect("args parse").command {
+            Commands::Fetch {
+                live,
+                max_age_hours,
+                ..
+            } => (live, max_age_hours),
+            _ => panic!("expected the fetch subcommand"),
+        }
+    }
+
+    #[test]
+    fn live_flag_maps_to_max_age_hours_0_and_warns() {
+        let (live, hours) = fetch_live(&["--live"]);
+        assert!(live);
+        assert_eq!(
+            live_max_age(live, hours),
+            Ok((
+                Some(0.0),
+                Some("--live is deprecated; use --max-age-hours 0")
+            ))
+        );
+        let (live, hours) = fetch_live(&["--max-age-hours", "24"]);
+        assert_eq!(live_max_age(live, hours), Ok((Some(24.0), None)));
+        assert_eq!(live_max_age(false, None), Ok((None, None)));
+    }
+
+    #[test]
+    fn live_flag_with_max_age_hours_is_an_error() {
+        let (live, hours) = fetch_live(&["--live", "--max-age-hours", "0"]);
+        let msg = live_max_age(live, hours).expect_err("both flags are rejected");
+        assert!(msg.contains("send only --max-age-hours"), "{msg}");
+    }
+
+    #[test]
+    fn live_flag_is_hidden_from_help() {
+        use clap::CommandFactory;
+        let mut cli = Cli::command();
+        let help = cli
+            .find_subcommand_mut("fetch")
+            .expect("fetch is a subcommand")
+            .render_long_help()
+            .to_string();
+        assert!(!help.contains("--live"), "{help}");
+    }
+
+    fn search_mode(mode: &str) -> Result<Option<String>, clap::Error> {
+        match Cli::try_parse_from(["keenable", "search", "q", "--mode", mode])?.command {
+            Commands::Search(search) => Ok(search.mode),
+            _ => panic!("expected the search subcommand"),
+        }
+    }
+
+    #[test]
+    fn mode_flag_takes_the_search_modes_and_the_legacy_alias() {
+        for mode in ["pro", "realtime", "standard"] {
+            assert_eq!(search_mode(mode).unwrap().as_deref(), Some(mode));
+        }
+    }
+
+    #[test]
+    fn mode_flag_rejects_other_values_as_a_usage_error() {
+        for bad in ["turbo", "PRO", "standard2"] {
+            let err = search_mode(bad).expect_err("invalid mode is rejected");
+            assert_eq!(err.exit_code(), 2, "{bad:?}");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("[possible values: realtime, pro]"),
+                "{bad:?}: {msg}"
+            );
+        }
+    }
 
     fn fetch_max_age(args: &[&str]) -> Result<Option<f64>, clap::Error> {
         let argv = ["keenable", "fetch", "https://example.com"]

@@ -48,6 +48,7 @@ keenable configure-mcp --all
 ```bash
 keenable search "query"                                    # YAML output (for agents)
 keenable search "query" -p                                 # Pretty output (for humans)
+keenable search "AI news" --mode realtime                  # Fastest response (pro or realtime; default: pro)
 keenable search "AI news" --site techcrunch.com            # Restrict to site
 keenable search "query" --exclude-domain spam.com          # Never these domains
 keenable search "query" --published-after 2026-01-01       # Date filter
@@ -124,6 +125,8 @@ keenable fetch https://example.com --session-id agent-run-42   # Group with rela
 
 With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch sends one `POST /v1/fetch/public` for one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours`; several URLs, `--schema`, `--links` or `--images` stop before any request with `API key required` and exit code 2.
 
+`--live` (removed in 0.6.1) is back as a deprecated alias of `--max-age-hours 0`, so scripts written for 0.6.0 keep working: it prints `warning: --live is deprecated; use --max-age-hours 0` on stderr and is left out of `--help`. Passing both `--live` and `--max-age-hours` is a usage error (exit code 2).
+
 One URL prints the page as before. Several URLs print `results`: one page or `{url, error}` per URL, in the order given; `-p` shows each in turn. A page can also carry `image`, `favicon`, `images`, `links`, `structured`, `answer_error` (why `structured` is missing) and `stale` (an older stored copy, because a fresh read failed). The command fails only when the call fails as a whole or every URL failed; then it exits with the code of the most common page error.
 
 When content is cut at the character cap, it ends with the API's truncation note and the YAML output carries `truncated: true`.
@@ -157,8 +160,8 @@ says what failed, so a script does not need to parse the output:
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Any other error: a local setup problem such as a bad `SSL_CERT_FILE`, an invalid `KEENABLE_API_URL` or an invalid `--mode` |
-| 2 | Invalid arguments (the CLI's own usage error) |
+| 1 | Any other error: a local setup problem such as a bad `SSL_CERT_FILE` or an invalid `KEENABLE_API_URL` |
+| 2 | Invalid arguments (the CLI's own usage error), such as an invalid `--mode` |
 | 3 | Authentication or permission: the key is invalid, revoked or not allowed this |
 | 4 | Rate limited: wait `retry_after` seconds (or until `rate_limit_reset`), then retry |
 | 5 | Out of credits: add credits at https://keenable.ai/console |

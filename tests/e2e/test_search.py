@@ -118,8 +118,10 @@ def test_no_mode_flag_uses_server_default(kn):
 
 def test_invalid_mode(kn):
     res = kn("search", "x", "--mode", "bogus")
-    assert res.code == 1
-    assert 'Invalid mode "bogus". Must be "realtime" or "pro".' in res.err
+    assert res.code == 2
+    assert res.out == ""
+    assert "invalid value 'bogus' for '--mode <MODE>'" in res.err
+    assert "[possible values: realtime, pro]" in res.err
 
 
 def test_mode_standard_legacy_alias(kn):
