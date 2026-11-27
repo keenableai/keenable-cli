@@ -13,7 +13,7 @@ Web search, page fetch and monitors for AI agents, from your terminal or over MC
 
 Output is YAML by default, so agents and scripts can read it, and readable with `-p`. Full reference: **[docs.keenable.ai/cli](https://docs.keenable.ai/cli)**.
 
-**Contributions welcome.** Found a bug or missing a flag? [Open an issue](https://github.com/keenableai/keenable-cli/issues/new/choose). Want to fix it yourself? Pull requests are welcome; [good first issues](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22good+first+issue%22) are a place to start, and [CONTRIBUTING.md](CONTRIBUTING.md) has the setup.
+**Contributions welcome.** Found a bug or missing a flag? [Open an issue](https://github.com/keenableai/keenable-cli/issues/new/choose). Want to fix it yourself? Pull requests are welcome; [good first issues](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22good+first+issue%22) are a place to start, and [CONTRIBUTING.md](CONTRIBUTING.md) has the setup. Follow [@KeenableAI on X](https://x.com/KeenableAI) for releases and news.
 
 ## Installation
 
@@ -293,6 +293,7 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 - Bugs and feature requests: [GitHub issues](https://github.com/keenableai/keenable-cli/issues/new/choose)
 - Account, billing or API questions: support@keenable.ai
 - Security: see [SECURITY.md](SECURITY.md)
+- News and releases: [@KeenableAI on X](https://x.com/KeenableAI)
 
 ## Contributing
 
