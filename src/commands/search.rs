@@ -81,6 +81,17 @@ impl Moderation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModerationFlag(pub Option<Moderation>);
 
+/// `--mode` values: the search modes, plus the legacy "standard" (sent as
+/// "realtime"), which is accepted but not listed in `--help`.
+pub fn mode_value_parser() -> clap::builder::PossibleValuesParser {
+    SEARCH_MODES
+        .iter()
+        .map(|m| clap::builder::PossibleValue::new(*m))
+        .chain([clap::builder::PossibleValue::new("standard").hide(true)])
+        .collect::<Vec<_>>()
+        .into()
+}
+
 /// Parses `--moderation`: `moderate` or `strict` (any case, surrounding
 /// spaces ignored), or an empty value for no moderation.
 pub fn parse_moderation_flag(value: &str) -> Result<ModerationFlag, String> {
@@ -719,20 +730,6 @@ pub async fn search(
     human: bool,
     api_key: Option<&str>,
 ) {
-    // Validate --mode flag if provided ("standard" is a legacy alias for "realtime")
-    if let Some(m) = mode
-        && !SEARCH_MODES.contains(&m)
-        && m != "standard"
-    {
-        ui::error(&format!(
-            "Invalid mode \"{}\". Must be \"{}\".",
-            m,
-            SEARCH_MODES.join("\" or \"")
-        ));
-        eprintln!();
-        std::process::exit(1);
-    }
-
     let effective_mode = resolve_mode(mode).map(|m| {
         // Graceful fallback: "standard" → "realtime"
         if m == "standard" {

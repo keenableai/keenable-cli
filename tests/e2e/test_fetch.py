@@ -98,10 +98,18 @@ def test_pretty_fetch(kn):
     assert "Example Domain" in res.err
 
 
-def test_live_flag_is_gone(kn):
+def test_live_flag_is_a_deprecated_alias(kn):
+    # Removed in 0.6.1, back as a hidden alias of --max-age-hours 0.
     res = kn("fetch", "https://example.com", "--live")
+    assert res.code == 0
+    assert "warning: --live is deprecated; use --max-age-hours 0" in res.err
+    assert res.yaml()["title"] == "Example Domain"
+
+
+def test_live_flag_with_max_age_hours_is_a_usage_error(kn):
+    res = kn("fetch", "https://example.com", "--live", "--max-age-hours", "24")
     assert res.code == 2
-    assert "unexpected argument" in res.err
+    assert "send only --max-age-hours" in res.err
 
 
 def test_multiple_urls(kn):
