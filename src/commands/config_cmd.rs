@@ -14,6 +14,18 @@ fn find_key(key: &str) -> Option<&'static (&'static str, &'static [&'static str]
     KNOWN_KEYS.iter().find(|(k, _)| *k == key)
 }
 
+/// An unknown key is a usage error, like clap's: exit 2.
+fn exit_unknown_key(key: &str) -> ! {
+    let known: Vec<&str> = KNOWN_KEYS.iter().map(|(k, _)| *k).collect();
+    ui::error(&format!(
+        "Unknown config key \"{}\". Known keys: {}",
+        key,
+        known.join(", ")
+    ));
+    eprintln!();
+    std::process::exit(2);
+}
+
 pub fn config_view() {
     ui::header("keenable config");
 
@@ -40,17 +52,7 @@ pub fn config_view() {
 
 pub fn config_get(key: &str) {
     if find_key(key).is_none() {
-        ui::error(&format!(
-            "Unknown config key \"{}\". Known keys: {}",
-            key,
-            KNOWN_KEYS
-                .iter()
-                .map(|(k, _)| *k)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        eprintln!();
-        std::process::exit(1);
+        exit_unknown_key(key);
     }
 
     let cfg = config::get_config();
@@ -62,21 +64,8 @@ pub fn config_get(key: &str) {
 }
 
 pub fn config_set(key: &str, value: &str) {
-    let entry = match find_key(key) {
-        Some(e) => e,
-        None => {
-            ui::error(&format!(
-                "Unknown config key \"{}\". Known keys: {}",
-                key,
-                KNOWN_KEYS
-                    .iter()
-                    .map(|(k, _)| *k)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-            eprintln!();
-            std::process::exit(1);
-        }
+    let Some(entry) = find_key(key) else {
+        exit_unknown_key(key);
     };
 
     let (_, allowed) = entry;
@@ -88,7 +77,8 @@ pub fn config_set(key: &str, value: &str) {
             allowed.join(", ")
         ));
         eprintln!();
-        std::process::exit(1);
+        // A usage error, like clap's: exit 2.
+        std::process::exit(2);
     }
 
     config::set_config_value(key, serde_json::Value::String(value.to_string()));
@@ -98,17 +88,7 @@ pub fn config_set(key: &str, value: &str) {
 
 pub fn config_unset(key: &str) {
     if find_key(key).is_none() {
-        ui::error(&format!(
-            "Unknown config key \"{}\". Known keys: {}",
-            key,
-            KNOWN_KEYS
-                .iter()
-                .map(|(k, _)| *k)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        eprintln!();
-        std::process::exit(1);
+        exit_unknown_key(key);
     }
 
     config::remove_config_value(key);

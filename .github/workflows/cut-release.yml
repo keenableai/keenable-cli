@@ -102,6 +102,11 @@ jobs:
           set -euo pipefail
           perl -0pi -e 's/^version = ".*"$/version = "$ENV{NEXT}"/m' Cargo.toml
           cargo update --workspace
+          # CHANGELOG.md: the "## Unreleased" notes become this version's
+          # section (dist uses it as the GitHub release notes), and a new empty
+          # "## Unreleased" goes on top.
+          grep -q '^## Unreleased$' CHANGELOG.md || { echo "::error::CHANGELOG.md has no '## Unreleased' section"; exit 1; }
+          NEXT_DATE=$(date -u +%F) perl -0pi -e 's/^## Unreleased$/## Unreleased\n\n## $ENV{NEXT} - $ENV{NEXT_DATE}/m' CHANGELOG.md
           git diff --stat
 
       - name: Push the release branch and run CI on it
@@ -120,7 +125,7 @@ jobs:
           # else (main moved on, someone pushed to it) is not ours to reuse.
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then
             git fetch --quiet --depth=2 origin "$branch"
-            extra=$(git diff --name-only HEAD FETCH_HEAD | grep -v -x -E 'Cargo\.toml|Cargo\.lock' || true)
+            extra=$(git diff --name-only HEAD FETCH_HEAD | grep -v -x -E 'Cargo\.toml|Cargo\.lock|CHANGELOG\.md' || true)
             if [ "$(git rev-parse FETCH_HEAD^)" != "$(git rev-parse HEAD)" ] ||
               [ "$(git log -1 --format=%ae FETCH_HEAD)" != "41898282+github-actions[bot]@users.noreply.github.com" ] ||
               [ -n "$extra" ]; then
@@ -130,7 +135,7 @@ jobs:
             echo "$branch already exists and is ours, resuming"
           else
             git checkout -b "$branch"
-            git add Cargo.toml Cargo.lock
+            git add Cargo.toml Cargo.lock CHANGELOG.md
             git commit -m "chore: release $NEXT"
             git push origin "$branch"
           fi

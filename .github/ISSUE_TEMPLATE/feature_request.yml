@@ -1,0 +1,16 @@
+name: Feature request
+description: Something the CLI should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, and where the CLI gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: A command or flag you'd like, with an example invocation if you have one.

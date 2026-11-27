@@ -29,9 +29,17 @@ def test_list_all(kn_fresh):
 
 def test_invalid_value(kn_fresh):
     res = kn_fresh("config", "set", "default_search_mode", "bogus", key=False)
-    assert res.code == 1
+    assert res.code == 2  # usage error, like clap's
     assert 'Invalid value "bogus"' in res.err
     assert "Allowed: realtime, pro" in res.err
+
+
+def test_unknown_key_is_usage_error(kn_fresh):
+    for args in (("set", "nonsense", "1"), ("get", "nonsense"), ("unset", "nonsense")):
+        res = kn_fresh("config", *args, key=False)
+        assert res.code == 2, args
+        assert 'Unknown config key "nonsense"' in res.err
+        assert "default_search_mode" in res.err
 
 
 def test_forced_mode_overrides_flag(kn_fresh):
