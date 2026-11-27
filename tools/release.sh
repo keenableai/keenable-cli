@@ -90,7 +90,7 @@ gh run watch "$ci" --repo "$repo" --exit-status >/dev/null || die "CI failed on 
 ci_sha=$(gh run view "$ci" --repo "$repo" --json headSha --jq .headSha)
 
 me=$(gh api user --jq .login)
-allowed='^(Cargo\.toml|Cargo\.lock)$'
+allowed='^(Cargo\.toml|Cargo\.lock|CHANGELOG\.md)$'
 pr=$(gh pr list --repo "$repo" --head "$branch" --state open --json number --jq '.[0].number // empty')
 if [ -n "$pr" ]; then
   # Someone else's PR on our branch name is not ours to merge.

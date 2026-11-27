@@ -1,6 +1,6 @@
 # Keenable CLI
 
-Rust CLI for Keenable — authenticate, manage API keys, configure MCP, and search the web.
+Rust CLI for Keenable: web search, page fetch and monitors for AI agents, from the terminal or over MCP.
 
 ## Build
 
@@ -80,7 +80,7 @@ Use the global `-v` / `--verbose` flag to print network details to stderr: the p
 ```bash
 keenable search "query"                        # YAML output (for agents)
 keenable search "query" -p                     # Pretty output (for humans)
-keenable search "query" --api-key keen_***_*****    # Use specific API key
+KEENABLE_API_KEY="$KEY" keenable search "query"  # Use a specific API key (or --api-key)
 ```
 
 Management commands (`login`, `logout`, `configure-mcp`, `config`) always output human-readable text.
@@ -116,7 +116,7 @@ keenable config get <key>                # Get a single value
 keenable config unset <key>              # Remove a setting
 ```
 
-Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`. Adding a new config key only requires adding an entry there.
+Supported keys and allowed values are defined in `KNOWN_KEYS` in `config_cmd.rs`. Adding a new config key only requires adding an entry there. An unknown key or a value that isn't allowed is a usage error (exit 2, like clap's).
 
 ### Unauthenticated (Free Tier) Flow
 
@@ -342,6 +342,7 @@ The API surface is the Keenable HTTP API the SDKs wrap: endpoints, request param
 
 When it is unclear whether a change is user-facing or touches the API surface, treat it as if it does and ask the user (or the PR reviewer) to confirm.
 
+- **Changelog:** add a line under `## Unreleased` in `CHANGELOG.md` (mark a change that can break a script **Breaking**). The Cut release workflow renames that heading to the version, and dist uses the section as the GitHub release notes.
 - **Docs:** update [keenable-external-docs](https://github.com/keenableai/keenable-external-docs) in the same change set: open a docs PR alongside this one and link it in the description.
 - **SDK:** if the change touches the API surface, also update [keenable-sdk](https://github.com/keenableai/keenable-sdk) (Python, TypeScript and Go), or open an issue there when it can't land in the same change set.
 - **Docs reference the SDKs.** Code examples use the official SDKs, with the HTTP API (curl) shown next to them. If the docs describe something the SDK can't do, that's an SDK gap: fix it or file an issue.

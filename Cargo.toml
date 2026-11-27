@@ -2,7 +2,10 @@
 name = "keenable-cli"
 version = "0.6.1"
 edition = "2024"
-description = "Keenable CLI — authenticate, manage API keys, configure MCP, and search the web"
+description = "Keenable CLI: web search, page fetch and monitors for AI agents, from your terminal or over MCP"
+license = "MIT"
+readme = "README.md"
+documentation = "https://docs.keenable.ai/cli"
 authors = ["KGKallasmaa <karl@keenable.ai>"]
 repository = "https://github.com/keenableai/keenable-cli"
 homepage = "https://keenable.ai"

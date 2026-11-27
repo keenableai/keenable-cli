@@ -1,6 +1,19 @@
 # Keenable CLI
 
-CLI for [Keenable](https://keenable.ai) — authenticate, manage API keys, configure MCP, and search the web.
+[![Latest release](https://img.shields.io/github/v/release/keenableai/keenable-cli)](https://github.com/keenableai/keenable-cli/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Web search, page fetch and monitors for AI agents, from your terminal or over MCP.
+
+[Keenable](https://keenable.ai) is a web search engine built for AI agents: fresh results with URLs to cite, and any page as clean markdown. The CLI lets you and your agents:
+
+- **search** the web and **fetch** pages, with no account needed to start,
+- add Keenable search to Claude Code, Cursor, Codex and other clients with one command (`configure-mcp`),
+- run **monitors** that watch the web for news about a topic.
+
+Output is YAML by default, so agents and scripts can read it, and readable with `-p`. Full reference: **[docs.keenable.ai/cli](https://docs.keenable.ai/cli)**.
+
+**Contributions welcome.** Found a bug or missing a flag? [Open an issue](https://github.com/keenableai/keenable-cli/issues/new/choose). Want to fix it yourself? Pull requests are welcome; [good first issues](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22good+first+issue%22) are a place to start, and [CONTRIBUTING.md](CONTRIBUTING.md) has the setup. Follow [@KeenableAI on X](https://x.com/KeenableAI) for releases and news.
 
 ## Installation
 
@@ -41,6 +54,25 @@ keenable login
 keenable configure-mcp --all
 ```
 
+What a search returns (YAML, the default):
+
+```console
+$ keenable search "rust async patterns" --max-results 2
+query: rust async patterns
+mode: pro
+results:
+- title: Applying Concurrency with Async - The Rust Programming Language
+  url: https://doc.rust-lang.org/book/ch17-02-concurrency-with-async.html
+  acquired_at: 2026-11-25T00:07:20Z
+  snippet: |-
+    The first operation we tackled in the "Creating a New Thread with spawn" section in Chapter 16 was counting up …
+- title: async/await - Asynchronous Programming in Rust
+  url: https://rust-lang.github.io/async-book/03_async_await/01_chapter.html
+  …
+```
+
+> This README follows `main`. Flags marked *(next release)* are merged but not released yet; `keenable <command> --help` always shows what your installed version takes.
+
 ## Usage
 
 ### Search
@@ -48,6 +80,8 @@ keenable configure-mcp --all
 ```bash
 keenable search "query"                                    # YAML output (for agents)
 keenable search "query" -p                                 # Pretty output (for humans)
+keenable search "query" --mode realtime                    # Fastest response (default: pro, deeper retrieval)
+keenable search "query" --max-results 25                   # More results (1-50, default 10)
 keenable search "AI news" --site techcrunch.com            # Restrict to site
 keenable search "query" --exclude-domain spam.com          # Never these domains
 keenable search "query" --published-after 2026-01-01       # Date filter
@@ -56,13 +90,13 @@ keenable search "query" --snippet-max-length 2000          # Longer snippets (18
 keenable search "query" --query-time 2026-01-01T00:00:00Z  # Point-in-time search
 keenable search "query" --session-id agent-run-42          # Group related calls in a session
 keenable search "query" --objective "Find the tokio docs page on spawn_blocking"   # Say what the search is for (used in ranking)
-keenable search "query" --moderation strict                # Remove unsafe results (moderate or strict)
-keenable search "query" --api-key KEY                      # Use a specific API key
+keenable search "query" --moderation strict                # Remove unsafe results, moderate or strict (next release)
+KEENABLE_API_KEY="$KEY" keenable search "query"            # Use a specific API key (or --api-key)
 ```
 
 Works without login (free tier). Log in for higher rate limits.
 
-`--moderation moderate` or `--moderation strict` removes results a safety model
+*(next release)* `--moderation moderate` or `--moderation strict` removes results a safety model
 judges unsafe at that level; results are removed, never replaced, so a search
 can return fewer results or none. An empty value (`--moderation ""`) is the same
 as leaving the flag out. It works in the `pro` and `realtime` modes; the API
@@ -114,7 +148,7 @@ keenable fetch https://example.com -p   # Pretty output
 keenable fetch https://a.com https://b.com   # Several pages in one call (1 to 20 URLs, each once)
 keenable fetch https://example.com --max-age-hours 0    # Read the live page
 keenable fetch https://example.com --max-age-hours 24   # Re-read the page if the stored copy is older (0 to 720, fractions allowed)
-keenable fetch https://example.com --max-age-hours -1   # Stored copy only, of any age, never the live page
+keenable fetch https://example.com --max-age-hours -1   # Stored copy only, of any age, never the live page (next release)
 keenable fetch https://example.com --prompt "List all pricing tiers"   # LLM extraction instead of the full page
 keenable fetch https://example.com --schema @plans.json   # Typed answer in `structured` (JSON Schema inline or @file, root type object)
 keenable fetch https://example.com --links 50 --images 5  # Links (1 to 1000) and images (0 to 25) found on the page
@@ -122,7 +156,7 @@ keenable fetch https://example.com --max-chars 200000   # Raise the 50000-char c
 keenable fetch https://example.com --session-id agent-run-42   # Group with related calls in a session
 ```
 
-With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch sends one `POST /v1/fetch/public` for one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours`; several URLs, `--schema`, `--links` or `--images` stop before any request with `API key required` and exit code 2.
+With a key (`keenable login`, `--api-key` or `KEENABLE_API_KEY`), fetch sends one `POST /v1/fetch` for all URLs. The call counts as one request toward the rate limit, and each page is billed at the fetch price. Without a key, fetch sends one `POST /v1/fetch/public` for one URL through the free tier and takes only `--max-chars`, `--prompt` and `--max-age-hours` (0.6.1 and older: only `--max-age-hours 0`); several URLs, `--schema`, `--links` or `--images` stop before any request with `API key required` and exit code 2.
 
 One URL prints the page as before. Several URLs print `results`: one page or `{url, error}` per URL, in the order given; `-p` shows each in turn. A page can also carry `image`, `favicon`, `images`, `links`, `structured`, `answer_error` (why `structured` is missing) and `stale` (an older stored copy, because a fresh read failed). The command fails only when the call fails as a whole or every URL failed; then it exits with the code of the most common page error.
 
@@ -216,6 +250,18 @@ keenable reset --all                    # Remove Keenable from all clients
 
 Supported clients: Claude Code, Cursor, Devin Desktop (`--devin`, writes `~/.config/devin/mcp_config.json`), Windsurf (`--windsurf`, writes the legacy `~/.codeium/windsurf/mcp_config.json`), Codex, OpenCode.
 
+### Settings
+
+```bash
+keenable config                                   # Show all settings
+keenable config set default_search_mode realtime  # Mode when --mode isn't given
+keenable config set forced_search_mode pro        # Mode for every search, even with --mode
+keenable config get default_search_mode
+keenable config unset default_search_mode
+```
+
+Settings live in `~/.keenable/config.json`. An unknown key or a value that isn't allowed is a usage error, exit code 2 (next release; 0.6.1 and older exit 1).
+
 ### Behind a proxy
 
 The CLI honors `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`. It trusts its bundled Mozilla roots plus the OS certificate store; when `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, those replace the OS store. A TLS-intercepting proxy works once its CA is in that bundle:
@@ -239,21 +285,26 @@ keenable update                                        # Installer-script instal
 brew update && brew upgrade keenable-cli               # Homebrew
 ```
 
-## Building from source
+What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
-```bash
-cargo build --release
-```
+## Help and feedback
 
-## Testing
-
-End-to-end suite (real binary, live API — see `tests/e2e/`):
-
-```bash
-export KEENABLE_API_KEY=keen_...
-uv run --project tests/e2e pytest tests/e2e -v
-```
+- Docs: [docs.keenable.ai/cli](https://docs.keenable.ai/cli), and `keenable <command> --help`
+- Bugs and feature requests: [GitHub issues](https://github.com/keenableai/keenable-cli/issues/new/choose)
+- Account, billing or API questions: support@keenable.ai
+- Security: see [SECURITY.md](SECURITY.md)
+- News and releases: [@KeenableAI on X](https://x.com/KeenableAI)
 
 ## Contributing
 
-See [CLAUDE.md](CLAUDE.md) for project conventions and architecture.
+Issues and pull requests from anyone are welcome, from a typo fix to a new flag.
+
+1. Look for an open issue, or [open one](https://github.com/keenableai/keenable-cli/issues/new/choose) to talk through a bigger change first.
+2. Fork the repo, make the change on a branch, and run `cargo test`.
+3. Open a pull request. A maintainer reviews it and runs the live-API tests.
+
+Issues labelled [good first issue](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22good+first+issue%22) or [help wanted](https://github.com/keenableai/keenable-cli/issues?q=is%3Aopen+label%3A%22help+wanted%22) are ready to pick up. Setup and conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE)

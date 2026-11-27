@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://docs.keenable.ai/cli
+    about: Commands, flags, exit codes and setup for proxies and CI.
+  - name: Account, billing or API questions
+    url: mailto:support@keenable.ai
+    about: Email support@keenable.ai for anything about your account or the API itself.
+  - name: Security vulnerability
+    url: https://github.com/keenableai/keenable-cli/security/advisories/new
+    about: Report it privately, not in a public issue.
+  - name: News and releases
+    url: https://x.com/KeenableAI
+    about: Follow @KeenableAI on X.

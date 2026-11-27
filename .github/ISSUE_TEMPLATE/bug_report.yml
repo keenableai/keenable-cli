@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in the CLI doesn't work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Never paste an API key (`keen_...`) or a webhook signing secret (`whsec_...`, the `webhook.secret` in `monitors create` output): replace them with `***`. For a security problem, email security@keenable.ai instead.
+  - type: input
+    id: version
+    attributes:
+      label: CLI version
+      description: Output of `keenable --version`
+      placeholder: keenable 0.6.1
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew
+        - Shell installer
+        - PowerShell installer
+        - cargo install / built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.2 (arm64)
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What happened
+      description: The output and exit code (`echo $?`). Add `-v` for the full error chain. Include the `request_id` if the error shows one. Replace any API key or `webhook.secret` (`whsec_...`) with `***`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
