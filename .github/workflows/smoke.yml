@@ -1,0 +1,108 @@
+# Smoke checks every 30 minutes: does Keenable work for users right now?
+#
+# tests/smoke/smoke.py makes a few basic calls through what users have: the
+# latest released CLI (installed with its own installer), the latest Python
+# SDK from PyPI, and the hosted MCP server, keyed and keyless. Unlike the
+# nightly e2e (every flag and error path of main's CLI), it checks only that
+# the basics work, so it can run often and stay quiet.
+#
+# Slack hears about changes, not every run: one message when the checks start
+# failing, one when they pass again. A failed check is retried once inside the
+# run, so a single blip doesn't alert. Needs KEENABLE_API_KEY and
+# SLACK_WEBHOOK_URL (both already used by e2e.yml).
+#
+# GitHub may start a scheduled run late or drop one under load; this is a
+# safety net for the clients, not an uptime monitor with an SLA.
+
+name: Smoke
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_alert:
+        description: "Post the result to Slack even if it did not change (to test the alert)."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# Never two at once (shared key); a run that's still going finishes.
+concurrency:
+  group: smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      failed: ${{ steps.run.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install the latest released CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 3 \
+            https://github.com/keenableai/keenable-cli/releases/latest/download/keenable-cli-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: keenable --version
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Run smoke checks
+        id: run
+        env:
+          KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          # Tags the traffic as first-party CI in the API logs (see e2e.yml).
+          KEENABLE_APP_TITLE: keenable-smoke
+        run: uv run --no-project tests/smoke/smoke.py
+
+  notify:
+    needs: smoke
+    if: always() && (github.event_name == 'schedule' || inputs.test_alert)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # A failed Slack post must not mark the run failed: the next run would
+    # read that as a smoke failure and announce a recovery that never was.
+    continue-on-error: true
+    permissions:
+      actions: read  # read the previous run's result
+    steps:
+      - name: Post to Slack when the result changed
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NOW: ${{ needs.smoke.result }}
+          FAILED: ${{ needs.smoke.outputs.failed }}
+          FORCE: ${{ inputs.test_alert }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL not set — skipping"
+            exit 0
+          fi
+          # The last finished scheduled run before this one. Unknown (first run,
+          # API error) counts as passing, so a failure always alerts.
+          prev=$(gh api "repos/$REPO/actions/workflows/smoke.yml/runs?event=schedule&status=completed&per_page=10" \
+            --jq "[.workflow_runs[] | select(.id != $RUN_ID)][0].conclusion // \"success\"" || echo success)
+          now=success; [ "$NOW" = success ] || now=failure
+          was=success; [ "$prev" = success ] || was=failure
+          echo "previous: $prev, now: $NOW"
+          if [ "$now" = "$was" ] && [ "$FORCE" != true ]; then
+            echo "No change; no message."
+            exit 0
+          fi
+          if [ "$now" = failure ]; then
+            text="🔴 Keenable smoke checks are failing: ${FAILED:-the run did not finish ($NOW)}"$'\n'"These are basic calls through the released CLI, the Python SDK and the hosted MCP server; users are likely affected."
+          else
+            text="✅ Keenable smoke checks pass again."
+          fi
+          payload=$(jq -n --arg t "$text" --arg u "$RUN_URL" '{text: ($t + "\n<" + $u + "|View run>")}')
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 -X POST \
+            -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL"
