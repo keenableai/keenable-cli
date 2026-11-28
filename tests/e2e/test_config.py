@@ -36,11 +36,19 @@ def test_invalid_value(kn_fresh):
 
 def test_forced_mode_overrides_flag(kn_fresh):
     assert kn_fresh("config", "set", "forced_search_mode", "realtime", key=False).code == 0
-    data = kn_fresh("search", "x", "--mode", "pro").yaml()
+    res = kn_fresh("search", "x", "--mode", "pro")
+    # Check the exit first: an API error body has no "mode", and a bare
+    # KeyError hid the cause (macOS nightly, 2026-11-27).
+    assert res.code == 0, res.err
+    data = res.yaml()
     assert data["mode"] == "realtime"
 
 
 def test_default_search_mode_applies_without_flag(kn_fresh):
     assert kn_fresh("config", "set", "default_search_mode", "realtime", key=False).code == 0
-    data = kn_fresh("search", "x").yaml()
+    res = kn_fresh("search", "x")
+    # Check the exit first: an API error body has no "mode", and a bare
+    # KeyError hid the cause (macOS nightly, 2026-11-27).
+    assert res.code == 0, res.err
+    data = res.yaml()
     assert data["mode"] == "realtime"
