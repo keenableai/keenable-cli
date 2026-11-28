@@ -1,7 +1,8 @@
 # Fast per-PR gate: format, lint, build, unit tests, and a dependency CVE
 # scan on every push/PR. Complements the slow nightly e2e (which runs main and
 # recent releases against the live API) by validating the *source under
-# review* before it merges. Kept fast — no network/API, no live index.
+# review* before it merges. The lint job is fast and offline; the e2e job runs
+# the fast part of the live-API suite (see its comment).
 #
 # Uses only first-party actions/* plus the Rust toolchain preinstalled on
 # GitHub runners (the repo's Actions policy allowlists actions/* and a few
@@ -57,6 +58,59 @@ jobs:
         run: command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
       - name: audit
         run: cargo audit
+
+  # The e2e suite against the live API, before merge. The nightly (e2e.yml)
+  # runs the same suite on every OS plus releases, but only after merge: a
+  # regression used to land on main and be found the next morning (#111).
+  # This leg is the fast part only, on Linux: no semantic/latency checks
+  # (they measure the backend, not the change) and no installer download.
+  # test_monitors.py is left to the nightly: it deletes leftover e2e monitors
+  # before creating one, so two PRs running at once could delete each other's.
+  # Fork PRs get no secrets, so the job says so and passes rather than failing
+  # on something the author can't fix.
+  e2e:
+    name: e2e (linux, fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check API key secret
+        id: key
+        env:
+          HAS_KEY: ${{ secrets.KEENABLE_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" != true ]; then
+            echo "::notice::KEENABLE_API_KEY is not available (fork PR?); e2e skipped, the nightly covers it after merge."
+          fi
+          echo "has_key=$HAS_KEY" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        if: steps.key.outputs.has_key == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-e2e-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-e2e-${{ runner.os }}-
+      - name: Build
+        if: steps.key.outputs.has_key == 'true'
+        run: |
+          cargo build --locked
+          echo "KEENABLE_BIN=$GITHUB_WORKSPACE/target/debug/keenable" >> "$GITHUB_ENV"
+      - name: Install uv
+        if: steps.key.outputs.has_key == 'true'
+        uses: astral-sh/setup-uv@v10.3.3
+      - name: Run e2e suite (fast part)
+        if: steps.key.outputs.has_key == 'true'
+        env:
+          KEENABLE_API_KEY: ${{ secrets.KEENABLE_API_KEY }}
+          KEENABLE_APP_TITLE: keenable-cli-e2e
+        run: >-
+          uv run --project tests/e2e pytest tests/e2e -v -ra --color=yes
+          -m "not semantic and not latency and not install"
+          --ignore=tests/e2e/test_monitors.py
 
   # Windows is the only target with its own cfg branch (the daemon stub lives
   # under #[cfg(not(unix))]); macOS shares the unix path with Linux above, and

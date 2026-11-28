@@ -69,9 +69,12 @@ def test_site_flag_vs_inline_operator_parity(kn):
     flag_urls, inline_urls = {r["url"] for r in flag_results}, {r["url"] for r in inline_results}
     jaccard = len(flag_urls & inline_urls) / len(flag_urls | inline_urls)
     print(f"\nFlag/inline Jaccard: {jaccard:.2f}")
-    # Live overlap fluctuates (0.43 observed 2026-06-06); the host assertions
-    # above are the hard gate — this bound only catches total path divergence.
-    assert jaccard >= 0.3, f"flag and inline site: paths diverged (Jaccard {jaccard:.2f})"
+    # The host assertions above are the hard gate. Ranking overlap between the
+    # two paths is live-index noise (0.43 on 2026-06-06, 0.11 and 0.25 on
+    # 2026-11-27/28), so a fixed Jaccard bound failed the nightly on noise and
+    # taught everyone to ignore it. Only total divergence (no shared URL at
+    # all) means the two paths stopped being the same search.
+    assert flag_urls & inline_urls, f"flag and inline site: share no result (Jaccard {jaccard:.2f})"
 
 
 def test_entity_navigational(kn):

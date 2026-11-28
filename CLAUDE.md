@@ -20,13 +20,17 @@ uv run --project tests/e2e pytest tests/e2e -v
 
 Markers: `-m "not latency"` / `-m "not semantic"` / `-m "not install"` to skip the slow/live-index/download groups. Requires the `KEENABLE_API_KEY` repo secret in CI.
 
-CI (`.github/workflows/e2e.yml`, nightly + manual dispatch) always runs a binary with the tests written for it:
+Every PR and push to main also runs the fast part of the suite on Linux (`e2e` job in `.github/workflows/ci.yml`: a debug build, `-m "not semantic and not latency and not install"`, without `test_monitors.py`), so a CLI regression fails its PR instead of the next nightly. Fork PRs get no `KEENABLE_API_KEY` and skip it with a notice.
+
+The nightly (`.github/workflows/e2e.yml`, nightly + manual dispatch) always runs a binary with the tests written for it:
 - **source legs**: the CLI built from the checked-out commit (`main` on the nightly) with that commit's tests, on **Linux, macOS, and Windows**. The live backend is tested with the newest CLI before it is released.
 - **release legs**: the latest patch of each of the last 3 minor releases (`COMPAT_MINORS`), installed via its own installer, with the tests checked out from its own tag, on Linux. The live backend must not break CLIs people already have.
 - A manual dispatch with a `version` runs only that release, on all three OSes, with its tag's tests (use it after a release). A dispatch on a branch builds that branch.
 - Semantic/latency checks run once, on the primary Linux leg. Legs run one at a time (shared key, rate limit).
 - A failed nightly posts to Slack (`SLACK_WEBHOOK_URL`) with the failed legs and what a failed source vs release leg means. `.github/workflows/release-reminder.yml` posts there too when a Release run has waited over an hour for approval in the `release` environment (weekdays 07:00 and 13:00 UTC).
 - `test_monitors.py` creates one monitor per run (name prefix `keenable-cli-e2e-`, no schedule, no webhook) and deletes it; leftovers from an interrupted run are deleted before the next create.
+
+Smoke checks (`.github/workflows/smoke.yml`, every 30 minutes + manual dispatch) run `tests/smoke/smoke.py` against what users have: the latest released CLI from its installer, the latest Python SDK from PyPI, and the hosted MCP server (`/mcp` with a key, `/mcp-public` without). Each check is one basic call (search, fetch of example.com) that must hold across releases; a failed check is retried once. Slack (`SLACK_WEBHOOK_URL`) gets a message only when the result changes: failing, then passing again. A keyless rate limit passes with a note (the runner IP is shared with other GitHub users). Run it locally with `KEENABLE_API_KEY=keen_... uv run --no-project tests/smoke/smoke.py`. Keep it small: a new check belongs here only if it's a basic path users rely on; everything else goes in the e2e suite.
 
 So main's tests describe main's binary: never add a "skip on a binary that predates X" gate for a merged but unreleased feature.
 
